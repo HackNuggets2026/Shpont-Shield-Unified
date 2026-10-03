@@ -174,17 +174,20 @@ menu:
   classify_unlabeled: true
   workflows:
     chat_assist:
+      title: Quick questions
       description: quick questions, explanations, writing help
       tier: light
       models: ["llama3.2:*", "gpt-4o-mini", "mock-*"]
       per_run: { tokens: 20000 }
       keywords: ["explain", "summari[sz]e", "rewrite", "translate"]
     pr_review:
+      title: PR review
       description: reviewing a code change or pull request
       tools: ["read_*", "search_*", "run_tests", Read, Glob, Grep, Bash, Task, TodoWrite]   # reviews do not edit
       per_run: { tokens: 150000, usd: 1.0 }
       keywords: ["review (this|the|my) (pr|pull request|diff|change)", "code review"]
     bugfix:
+      title: Bug fixing
       description: debugging and fixing a defect
       tools: ["read_*", "search_*", "run_tests", "http_get", "create_vm", "destroy_vm",
               Read, Glob, Grep, Edit, MultiEdit, Write, Bash, WebFetch, Task, TodoWrite]
@@ -192,6 +195,7 @@ menu:
       per_run: { usd: 3.0 }
       keywords: ["bug", "stack ?trace", "exception", "fix (the|this)"]
     ui_qa:
+      title: UI QA on simulators
       description: driving a mobile simulator through a user flow
       tier: heavy
       teams: [engineering, mobile, web, qa-automation, interns]
@@ -200,6 +204,7 @@ menu:
       per_run: { usd: 5.0 }
       keywords: ["simulator", "tap", "ui test", "screen"]
     data_analysis:
+      title: Data analysis
       description: analysing spreadsheets, reports or business data
       teams: [finance, treasury, risk, accounting, tax, engineering, analytics, ml, bi, data-governance, research]
       tools: ["read_*", "search_*"]
@@ -207,6 +212,7 @@ menu:
       per_run: { tokens: 100000 }
       keywords: ["revenue", "spreadsheet", "forecast", "quarter"]
     load_test:
+      title: Load tests
       description: large automated test runs on dedicated VMs
       tier: heavy
       teams: [engineering, platform, sre, qa-automation, payments, core-banking]

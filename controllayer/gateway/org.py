@@ -23,10 +23,12 @@ from fastapi.responses import JSONResponse
 
 from ..config import Policy, PolicyStore
 from ..engine import ControlLayer
-from ..usage import UNASSIGNED
+from ..usage import day_of
 
 DAY = 86400.0
-TEAM_SORTS = ("usd", "usd_per_active", "adherence", "risk", "headcount")
+TEAM_SORTS = ("usd", "usd_prev", "usd_per_active", "adherence", "adherence_prev", "risk", "people_at_risk",
+              "incidents_open", "headcount", "active", "tokens", "checks", "interventions", "claude_code_users",
+              "claude_code_usd", "name")  # fmt: skip
 PEOPLE_SORTS = ("risk", "usd", "tokens", "name")
 STATUSES = ("active", "quarantined", "revoked", "limited")
 
@@ -109,14 +111,15 @@ class OrgView:
     # ---- per person ----------------------------------------------------------------------
 
     def person_totals(self, since: float, prev: float) -> dict[str, dict[str, Any]]:
+        d, p = day_of(since), day_of(prev)
         rows = self.usage._q(
             "SELECT principal, MAX(team) team,"
-            " SUM(CASE WHEN ts>=? THEN usd ELSE 0 END) usd,"
-            " SUM(CASE WHEN ts<? THEN usd ELSE 0 END) usd_prev,"
-            " SUM(CASE WHEN ts>=? THEN input_tokens+output_tokens ELSE 0 END) tokens,"
-            " SUM(CASE WHEN ts>=? AND source='claude_code' THEN usd ELSE 0 END) cc_usd"
-            " FROM usage WHERE metered=1 AND ts>=? GROUP BY principal",
-            (since, since, since, since, prev),
+            " SUM(CASE WHEN day>=? THEN usd ELSE 0 END) usd,"
+            " SUM(CASE WHEN day<? THEN usd ELSE 0 END) usd_prev,"
+            " SUM(CASE WHEN day>=? THEN tokens ELSE 0 END) tokens,"
+            " SUM(CASE WHEN day>=? THEN cc_usd ELSE 0 END) cc_usd"
+            " FROM person_day WHERE day>=? GROUP BY principal",
+            (d, d, d, d, p),
         )
         return {r["principal"]: r for r in rows}
 
@@ -158,50 +161,43 @@ class OrgView:
         }
 
     def risk(self, policy: Policy) -> tuple[dict[str, float], dict[str, int], set[str]]:
-        """Scores, open incidents per person (all time), and the people at risk: an open or acknowledged
-        incident, or a score at or above the alert threshold."""
+        """Scores, open incidents per person (all time), and the people at risk: a risk score at or above the
+        alert threshold (the same definition as the overview's `at_risk`)."""
         scores = self.layer.risk.scores(policy)
         open_: dict[str, int] = defaultdict(int)
-        live = set()
-        for r in self.usage._q(
-            "SELECT principal, status, COUNT(*) n FROM incidents WHERE status IN ('open', 'acknowledged')"
-            " GROUP BY principal, status"
-        ):
-            live.add(r["principal"])
-            if r["status"] == "open":
-                open_[r["principal"]] = r["n"]
+        for r in self.usage._q("SELECT principal, COUNT(*) n FROM incidents WHERE status='open' GROUP BY principal"):
+            open_[r["principal"]] = r["n"]
         alert = policy.detections.response.alert
-        at_risk = {p for p, s in scores.items() if s >= alert} | live
+        at_risk = {p for p, s in scores.items() if s >= alert}
         return scores, open_, at_risk
 
     # ---- per unit ---------------------------------------------------------------------------
 
-    def unit_events(self, since: float, until: float | None = None) -> dict[tuple[str, str], dict[str, int]]:
-        """Checks and interventions per (department, team)."""
-        where, args = "ts>=? AND kind LIKE 'check.%'", [since]
-        if until is not None:
-            where += " AND ts<?"
-            args.append(until)
-        out: dict[tuple[str, str], dict[str, int]] = defaultdict(lambda: {"checks": 0, "interventions": 0})
+    def unit_events(self, since: float, prev: float) -> dict[tuple[str, str], dict[str, int]]:
+        """Checks and interventions per (department, team), in the window and in the one before it."""
+        out: dict[tuple[str, str], dict[str, int]] = defaultdict(
+            lambda: {"checks": 0, "interventions": 0, "checks_prev": 0, "interventions_prev": 0}
+        )
+        d = day_of(since)
         for r in self.usage._q(
-            "SELECT COALESCE(department, ?) d, COALESCE(team, 'unattributed') t, decision,"
-            f" SUM(COALESCE(n, 1)) n FROM events WHERE {where} GROUP BY d, t, decision",
-            (UNASSIGNED, *args),
+            "SELECT department d, team t, day>=? cur, decision IN ('warn', 'redact', 'block') iv, SUM(n) n"
+            " FROM event_day WHERE day>=? AND kind LIKE 'check.%' GROUP BY d, t, cur, iv",
+            (d, day_of(prev)),
         ):
-            o = out[(r["d"], r["t"])]
-            o["checks"] += r["n"]
-            if r["decision"] not in ("allow", "log", None):
-                o["interventions"] += r["n"]
+            o = out[(r["d"], _team(r["t"]))]
+            suffix = "" if r["cur"] else "_prev"
+            o["checks" + suffix] += r["n"]
+            if r["iv"]:
+                o["interventions" + suffix] += r["n"]
         return out
 
     def unit_workflows(self, since: float) -> dict[tuple[str, str], dict[str, float]]:
         out: dict[tuple[str, str], dict[str, float]] = defaultdict(dict)
         for r in self.usage._q(
-            "SELECT COALESCE(department, ?) d, COALESCE(team, 'unattributed') t, COALESCE(workflow, '(none)') w,"
-            " SUM(usd) usd FROM usage WHERE metered=1 AND ts>=? GROUP BY d, t, w",
-            (UNASSIGNED, since),
+            "SELECT department d, team t, workflow w, SUM(usd) usd FROM unit_day WHERE day>=? GROUP BY d, t, w",
+            (day_of(since),),
         ):
-            out[(r["d"], r["t"])][r["w"]] = r["usd"] or 0.0
+            out[(r["d"], _team(r["t"]))][r["w"]] = r["usd"] or 0.0
         return out
 
     def snapshot(self, days: int, now: float | None = None) -> dict[str, Any]:
@@ -211,7 +207,7 @@ class OrgView:
         policy = self.store.policy
         people = self.people(since, prev)
         scores, open_, at_risk = self.risk(policy)
-        events = self.unit_events(since)
+        events = self.unit_events(since, prev)
         wfs = self.unit_workflows(since)
         for r in people:
             r["risk"] = scores.get(r["principal"], 0.0)
@@ -226,6 +222,8 @@ class OrgView:
         usd = sum(m["usd"] for m in members)
         checks = sum(e["checks"] for e in events)
         interventions = sum(e["interventions"] for e in events)
+        checks_prev = sum(e["checks_prev"] for e in events)
+        interventions_prev = sum(e["interventions_prev"] for e in events)
         top = max(wf.items(), key=lambda kv: kv[1])[0] if wf else None
         return {
             "headcount": sum(1 for m in members if m["in_directory"]),
@@ -237,6 +235,7 @@ class OrgView:
             "checks": checks,
             "interventions": interventions,
             "adherence": round((checks - interventions) / checks, 4) if checks else None,
+            "adherence_prev": round((checks_prev - interventions_prev) / checks_prev, 4) if checks_prev else None,
             "incidents_open": sum(m["open_incidents"] for m in members),
             "people_at_risk": sum(1 for m in members if m["at_risk"]),
             "claude_code_users": sum(1 for m in members if m["cc_usd"] > 0),
@@ -330,6 +329,10 @@ class OrgView:
         return cache(("org-snapshot", d), lambda: self.snapshot(d))
 
 
+def _team(t: str | None) -> str:
+    return "unattributed" if t in (None, "(none)") else t
+
+
 def _who(m: dict) -> dict[str, Any]:
     return {"principal": m["principal"], "name": m["name"], "team": m["team"], "department": m["department"]}
 
@@ -375,6 +378,8 @@ def register(app: FastAPI, store: PolicyStore, layer: ControlLayer, cached, prin
         def key(r: dict) -> Any:
             if sort == "risk":
                 return (r["people_at_risk"], r["incidents_open"])
+            if sort == "name":
+                return r["name"].lower()
             v = r.get(sort)
             return -1.0 if v is None else v
 
@@ -383,17 +388,27 @@ def register(app: FastAPI, store: PolicyStore, layer: ControlLayer, cached, prin
     @app.get("/admin/org/teams")
     async def admin_org_teams(
         department: str | None = None,
+        q: str = "",
         days: int = 30,
         sort: str = "usd",
-        order: str = "desc",
+        order: str | None = None,
         limit: int = 100,
         offset: int = 0,
     ):
         if sort not in TEAM_SORTS:
             return err(f"sort by one of {list(TEAM_SORTS)}")
-        rows = sort_rows(view.teams(snap(days), department or None), sort, order)
+        rows = view.teams(snap(days), department or None)
+        if q.strip():
+            rows = [r for r in rows if q.strip().lower() in r["name"].lower()]
+        rows = sort_rows(rows, sort, order or ("asc" if sort == "name" else "desc"))
         limit, offset = max(1, min(limit, 500)), max(0, offset)
         return {"total": len(rows), "rows": rows[offset : offset + limit]}
+
+    def with_prev(rows: list[dict], since: float, days: int, flt: dict) -> list[dict]:
+        """Each workflow row with its spend in the window before."""
+        prev = {r["workflow"]: r["usd"] or 0.0
+                for r in usage.breakdown(["workflow"], since - days * DAY, until=since, **flt)}  # fmt: skip
+        return [{**r, "usd_prev": round(prev.get(r["workflow"], 0.0), 2)} for r in rows]
 
     @app.get("/admin/org/unit")
     async def admin_org_unit(kind: str = "department", name: str = "", days: int = 30):
@@ -418,7 +433,7 @@ def register(app: FastAPI, store: PolicyStore, layer: ControlLayer, cached, prin
             return {
                 "spend": pivot(spend, labels),
                 "adherence_trend": {"days": labels, "values": [by_day.get(d) for d in labels]},
-                "by_workflow": usage.workflow_runs(since, **flt),
+                "by_workflow": with_prev(usage.workflow_runs(since, **flt), since, days_, flt),
                 "by_resource": [
                     {
                         "resource": r["resource"],

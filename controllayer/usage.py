@@ -8,6 +8,7 @@ by workflow, task, team, resource or model is a GROUP BY over the `usage` table.
 from __future__ import annotations
 
 import json
+import math
 import sqlite3
 import statistics
 import threading
@@ -64,6 +65,106 @@ CREATE INDEX IF NOT EXISTS people_unit ON people(department, team);
 CREATE INDEX IF NOT EXISTS usage_dept ON usage(department, day);
 CREATE INDEX IF NOT EXISTS events_dept ON events(department, ts);
 """
+# Pre-aggregated rollups, kept in step on every write (and rebuilt in one pass after bulk loads), so the
+# console's aggregates over thousands of people read days, not rows. Keys use '(none)' for a missing value.
+ROLLUP_VERSION = 1
+ROLLUPS = """
+CREATE TABLE IF NOT EXISTS unit_day (
+    day TEXT, department TEXT, team TEXT, workflow TEXT, resource TEXT, source TEXT, model TEXT,
+    requests INTEGER, tokens INTEGER, usd REAL, minutes REAL, guard_tokens INTEGER,
+    PRIMARY KEY (day, department, team, workflow, resource, source, model)
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS unit_day_dept ON unit_day(department, day);
+CREATE INDEX IF NOT EXISTS unit_day_team ON unit_day(team, day);
+CREATE TABLE IF NOT EXISTS person_day (
+    principal TEXT, day TEXT, team TEXT, department TEXT, requests INTEGER, tokens INTEGER, usd REAL, cc_usd REAL,
+    PRIMARY KEY (principal, day)
+) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS event_day (
+    day TEXT, department TEXT, team TEXT, workflow TEXT, source TEXT, kind TEXT, decision TEXT,
+    n INTEGER, value REAL, usd REAL, tokens INTEGER,
+    PRIMARY KEY (day, department, team, workflow, source, kind, decision)
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS event_day_dept ON event_day(department, day);
+CREATE INDEX IF NOT EXISTS event_day_team ON event_day(team, day);
+CREATE TABLE IF NOT EXISTS runs (
+    principal TEXT, workflow TEXT, run TEXT, ts REAL, day TEXT, department TEXT, team TEXT,
+    usd REAL, tokens INTEGER, minutes REAL,
+    PRIMARY KEY (principal, workflow, run)
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS runs_by_wf ON runs(workflow, ts, usd, tokens, minutes);
+CREATE INDEX IF NOT EXISTS runs_dept ON runs(department, ts, workflow, usd);
+CREATE INDEX IF NOT EXISTS runs_team ON runs(team, ts, workflow, usd);
+CREATE INDEX IF NOT EXISTS leases_started ON leases(started);
+CREATE INDEX IF NOT EXISTS incidents_ts ON incidents(ts);
+CREATE INDEX IF NOT EXISTS requests_ts ON requests(status, ts);
+"""
+UNIT_KEYS = ("department", "team", "workflow", "resource", "source", "model")  # unit_day, besides day
+EVENT_KEYS = ("department", "team", "workflow", "source", "kind", "decision")  # event_day, besides day
+REBUILD = """
+DELETE FROM unit_day;
+INSERT INTO unit_day SELECT day, COALESCE(department, 'Unassigned'), COALESCE(team, '(none)'),
+    COALESCE(workflow, '(none)'), COALESCE(resource, '(none)'), COALESCE(source, '(none)'), COALESCE(model, '(none)'),
+    SUM(requests), SUM(CASE WHEN metered=1 THEN input_tokens+output_tokens ELSE 0 END),
+    SUM(CASE WHEN metered=1 THEN usd ELSE 0 END), SUM(CASE WHEN unit='minute' THEN quantity ELSE 0 END),
+    SUM(CASE WHEN metered=0 THEN input_tokens ELSE 0 END)
+    FROM usage GROUP BY 1, 2, 3, 4, 5, 6, 7;
+DELETE FROM person_day;
+INSERT INTO person_day SELECT principal, day, MAX(team), MAX(COALESCE(department, 'Unassigned')), SUM(requests),
+    SUM(input_tokens+output_tokens), SUM(usd), SUM(CASE WHEN source='claude_code' THEN usd ELSE 0 END)
+    FROM usage WHERE metered=1 GROUP BY principal, day;
+DELETE FROM runs;
+INSERT INTO runs SELECT principal, COALESCE(workflow, '(none)'), COALESCE(task, session, request_id, ''), MIN(ts),
+    MIN(day), MAX(COALESCE(department, 'Unassigned')), MAX(team), SUM(usd), SUM(input_tokens+output_tokens),
+    SUM(CASE WHEN unit='minute' THEN quantity ELSE 0 END)
+    FROM usage WHERE metered=1 GROUP BY 1, 2, 3;
+DELETE FROM event_day;
+INSERT INTO event_day SELECT strftime('%Y-%m-%d', ts, 'unixepoch'), COALESCE(department, 'Unassigned'),
+    COALESCE(team, '(none)'), COALESCE(workflow, '(none)'), COALESCE(source, '(none)'), COALESCE(kind, '(none)'),
+    COALESCE(decision, '(none)'), SUM(COALESCE(n, 1)),
+    SUM(CASE WHEN kind LIKE 'metric.%' AND json_valid(detail) THEN COALESCE(json_extract(detail, '$.value'), 0)
+        ELSE 0 END), SUM(COALESCE(usd, 0)), SUM(COALESCE(tokens, 0))
+    FROM events GROUP BY 1, 2, 3, 4, 5, 6, 7;
+"""
+UPSERT_UNIT = (
+    "INSERT INTO unit_day VALUES (?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT DO UPDATE SET"
+    " requests=requests+excluded.requests,"
+    " tokens=tokens+excluded.tokens, usd=usd+excluded.usd, minutes=minutes+excluded.minutes,"
+    " guard_tokens=guard_tokens+excluded.guard_tokens"
+)
+UPSERT_PERSON = (
+    "INSERT INTO person_day VALUES (?,?,?,?,?,?,?,?) ON CONFLICT DO UPDATE SET team=excluded.team,"
+    " department=excluded.department, requests=requests+excluded.requests, tokens=tokens+excluded.tokens,"
+    " usd=usd+excluded.usd, cc_usd=cc_usd+excluded.cc_usd"
+)
+UPSERT_RUN = (
+    "INSERT INTO runs VALUES (?,?,?,?,?,?,?,?,?,?) ON CONFLICT DO UPDATE SET usd=usd+excluded.usd,"
+    " tokens=tokens+excluded.tokens, minutes=minutes+excluded.minutes"
+)
+UPSERT_EVENT = (
+    "INSERT INTO event_day VALUES (?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT DO UPDATE SET n=n+excluded.n,"
+    " value=value+excluded.value, usd=usd+excluded.usd, tokens=tokens+excluded.tokens"
+)
+
+
+def _days(since: float, until: float | None) -> tuple[list[str], list[Any]]:
+    """The rollup tables' `day` condition for a whole-day window."""
+    conds, args = ["day>=?"], [day_of(since)]
+    if until is not None:
+        conds.append("day<?")
+        args.append(day_of(until))
+    return conds, args
+
+
+def _k(v: Any) -> Any:
+    return "(none)" if v is None else v
+
+
+def whole_days(since: float, until: float | None = None) -> bool:
+    """A window the daily rollups answer exactly: it starts (and ends) at midnight UTC."""
+    return since % 86400 == 0 and (until is None or until % 86400 == 0)
+
+
 PEOPLE_COLUMNS = ("principal", "name", "email", "team", "department", "role", "title", "location", "cost_center")
 UNASSIGNED = "Unassigned"
 
@@ -88,6 +189,7 @@ MIGRATIONS = [
     ("leases", "flagged_at", "REAL"),
     ("usage", "department", "TEXT"),
     ("events", "department", "TEXT"),
+    ("incidents", "workflow", "TEXT"),
     ("events", "n", "INTEGER"),  # a rollup row: n checks with the same day, person, kind, workflow, decision
 ]
 
@@ -105,14 +207,20 @@ def unit_filter(where: list[str], args: list[Any], department: str | None, team:
         args.append(team)
 
 
+def day_window(days: float, now: float | None = None, cap: int = 400) -> float:
+    """The start of a window of `days` whole UTC days, today included (what the daily rollups answer)."""
+    now = time.time() if now is None else now
+    return (now // 86400) * 86400 - (max(1, min(math.ceil(days), cap)) - 1) * 86400
+
+
 def day_of(ts: float) -> str:
     return time.strftime("%Y-%m-%d", time.gmtime(ts))
 
 
-def percentile(xs: list[float], q: float) -> float:
+def percentile(xs: list[float], q: float, presorted: bool = False) -> float:
     if not xs:
         return 0.0
-    s = sorted(xs)
+    s = xs if presorted else sorted(xs)
     return s[min(len(s) - 1, int(round(q * (len(s) - 1))))]
 
 
@@ -130,13 +238,80 @@ class UsageStore:
             if col not in cols:
                 self.db.execute(f"ALTER TABLE {table} ADD COLUMN {col} {typ}")
         self.db.executescript(INDEXES)
+        self.db.executescript(ROLLUPS)
         self.lock = threading.Lock()
+        if self.db.execute("PRAGMA user_version").fetchone()[0] < ROLLUP_VERSION:
+            self.rebuild_rollups()
         # The directory, cached: every write looks a person's department up here (O(1), no query).
         self.people: dict[str, dict[str, Any]] = {}
         self.emails: dict[str, str] = {}
         self.team_departments: dict[str, str] = {}  # from the policy's `org:` section
         self.org_name = ""
         self._load_people()
+
+    def rebuild_rollups(self) -> None:
+        """Recompute every rollup from the raw tables (after a bulk load, or a database from before them)."""
+        with self.lock:
+            own = not self.db.in_transaction
+            if own:
+                self.db.execute("BEGIN")
+            for stmt in REBUILD.split(";"):
+                if stmt.strip():
+                    self.db.execute(stmt)
+            self.db.execute(f"PRAGMA user_version={ROLLUP_VERSION}")
+            if own:
+                self.db.execute("COMMIT")
+
+    def _roll_usage(self, r: dict[str, Any]) -> list[tuple[str, tuple]]:
+        metered = bool(r["metered"])
+        tokens = (r["input_tokens"] or 0) + (r["output_tokens"] or 0)
+        usd = r["usd"] or 0.0
+        minutes = (r["quantity"] or 0.0) if r["unit"] == "minute" else 0.0
+        dept = r["department"] or UNASSIGNED
+        out = [
+            (
+                UPSERT_UNIT,
+                (r["day"], dept, _k(r["team"]), _k(r["workflow"]), _k(r["resource"]), _k(r["source"]),
+                 _k(r["model"]), r["requests"] or 0, tokens if metered else 0, usd if metered else 0.0, minutes,
+                 0 if metered else r["input_tokens"] or 0),
+            )
+        ]  # fmt: skip
+        if metered:
+            cc = usd if r["source"] == "claude_code" else 0.0
+            person = (r["principal"], r["day"], r["team"], dept, r["requests"] or 0, tokens, usd, cc)
+            out.append((UPSERT_PERSON, person))
+            run = r["task"] or r["session"] or r["request_id"] or ""
+            out.append((UPSERT_RUN, (r["principal"], _k(r["workflow"]), run, r["ts"], r["day"], dept, r["team"], usd,
+                                     tokens, minutes)))  # fmt: skip
+        return out
+
+    @staticmethod
+    def _roll_event(e: dict[str, Any], detail: Any) -> tuple[str, tuple]:
+        value = 0.0
+        if str(e.get("kind") or "").startswith("metric.") and isinstance(detail, dict):
+            v = detail.get("value")
+            value = float(v) if isinstance(v, int | float) and not isinstance(v, bool) else 0.0
+        return (
+            UPSERT_EVENT,
+            (day_of(e["ts"]), e["department"] or UNASSIGNED, _k(e["team"]), _k(e["workflow"]), _k(e["source"]),
+             _k(e["kind"]), _k(e["decision"]), e.get("n") or 1, value, e.get("usd") or 0.0, e.get("tokens") or 0),
+        )  # fmt: skip
+
+    def _write(self, stmts: list[tuple[str, tuple]]) -> None:
+        """Several statements as one transaction (or inside the caller's, e.g. the seeder's)."""
+        with self.lock:
+            own = not self.db.in_transaction
+            if own:
+                self.db.execute("BEGIN")
+            try:
+                for sql, args in stmts:
+                    self.db.execute(sql, args)
+            except BaseException:
+                if own:
+                    self.db.execute("ROLLBACK")
+                raise
+            if own:
+                self.db.execute("COMMIT")
 
     # ---- the directory ------------------------------------------------------------
 
@@ -242,7 +417,8 @@ class UsageStore:
             "client": client,
             "department": self.department_of(principal, team),
         }
-        self._x(f"INSERT INTO usage ({', '.join(row)}) VALUES ({', '.join('?' * len(row))})", tuple(row.values()))
+        insert = f"INSERT INTO usage ({', '.join(row)}) VALUES ({', '.join('?' * len(row))})"
+        self._write([(insert, tuple(row.values())), *self._roll_usage(row)])
 
     def add_many(self, rows: list[dict[str, Any]]) -> None:
         """Bulk usage rows (the seeder): `day` and `department` are filled in when missing."""
@@ -318,6 +494,16 @@ class UsageStore:
         cols = [c for c in by if c in GROUPS]
         if not cols:
             raise ValueError(f"group by one of {sorted(GROUPS)}")
+        if principal is None and whole_days(since, until) and set(cols) <= {"day", *UNIT_KEYS}:
+            conds, args = _days(since, until)
+            unit_filter(conds, args, department, team)
+            sel = ", ".join(f"{c} {c}" for c in cols)
+            return self._q(
+                f"SELECT {sel}, SUM(requests) requests, SUM(tokens) tokens, SUM(usd) usd, SUM(minutes) minutes,"
+                f" SUM(guard_tokens) guard_tokens FROM unit_day WHERE {' AND '.join(conds)}"
+                f" GROUP BY {', '.join(cols)} ORDER BY usd DESC, tokens DESC",
+                tuple(args),
+            )
         conds, args = ["ts>=?"], [since]
         if until is not None:
             conds.append("ts<?")
@@ -353,6 +539,11 @@ class UsageStore:
         )
 
     def spend(self, since: float, until: float | None = None, team: str | None = None) -> float:
+        if whole_days(since, until):
+            conds, args = _days(since, until)
+            unit_filter(conds, args, None, team)
+            q = f"SELECT COALESCE(SUM(usd),0) s FROM unit_day WHERE {' AND '.join(conds)}"
+            return float(self._q(q, tuple(args))[0]["s"])
         where, args = "ts>=? AND metered=1", [since]
         if until is not None:
             where += " AND ts<?"
@@ -364,22 +555,20 @@ class UsageStore:
 
     def run_stats(self, workflow: str, since: float) -> dict[str, Any]:
         """The measured price of one run of a workflow. A run is one task id (else session, else call)."""
-        rows = self._q(
-            "SELECT principal, COALESCE(task, session, request_id) run, SUM(input_tokens+output_tokens) tokens,"
-            " SUM(usd) usd, SUM(CASE WHEN unit='minute' THEN quantity ELSE 0 END) minutes"
-            " FROM usage WHERE workflow=? AND ts>=? AND metered=1 GROUP BY principal, run",
-            (workflow, since),
-        )
-        usd = [r["usd"] for r in rows]
-        tokens = [r["tokens"] for r in rows]
-        minutes = [r["minutes"] for r in rows]
+        with self.lock:  # plain tuples: a popular workflow has 100k+ runs a month
+            rows = self.db.execute(
+                "SELECT usd, tokens, minutes FROM runs WHERE workflow=? AND ts>=?", (workflow, since)
+            ).fetchall()
+        usd = sorted(r[0] or 0.0 for r in rows)
+        tokens = sorted(r[1] or 0 for r in rows)
+        minutes = sorted(r[2] or 0.0 for r in rows)
         return {
             "runs": len(rows),
-            "usd_p50": round(percentile(usd, 0.5), 6),
-            "usd_p90": round(percentile(usd, 0.9), 6),
-            "tokens_p50": int(percentile(tokens, 0.5)),
-            "tokens_p90": int(percentile(tokens, 0.9)),
-            "minutes_p50": round(percentile(minutes, 0.5), 1),
+            "usd_p50": round(percentile(usd, 0.5, True), 6),
+            "usd_p90": round(percentile(usd, 0.9, True), 6),
+            "tokens_p50": int(percentile(tokens, 0.5, True)),
+            "tokens_p90": int(percentile(tokens, 0.9, True)),
+            "minutes_p50": round(percentile(minutes, 0.5, True), 1),
             "usd_mean": round(statistics.fmean(usd), 6) if usd else 0.0,
         }
 
@@ -387,19 +576,16 @@ class UsageStore:
         self, since: float, principal: str | None = None, department: str | None = None, team: str | None = None
     ) -> list[dict[str, Any]]:
         """Per workflow: spend, runs, and the median and 90th percentile cost of one run."""
-        conds, args = ["ts>=?", "metered=1"], [since]
+        conds, args = ["ts>=?"], [since]
         if principal:
             conds.append("principal=?")
             args.append(principal)
         unit_filter(conds, args, department, team)
-        rows = self._q(
-            "SELECT COALESCE(workflow, '(none)') workflow, principal, COALESCE(task, session, request_id) run,"
-            f" SUM(usd) usd FROM usage WHERE {' AND '.join(conds)} GROUP BY workflow, principal, run",
-            tuple(args),
-        )
+        with self.lock:
+            rows = self.db.execute(f"SELECT workflow, usd FROM runs WHERE {' AND '.join(conds)}", args).fetchall()
         runs: dict[str, list[float]] = {}
-        for r in rows:
-            runs.setdefault(r["workflow"], []).append(r["usd"] or 0.0)
+        for wf, usd in rows:
+            runs.setdefault(wf, []).append(usd or 0.0)
         out = [
             {"workflow": wf, "usd": round(sum(v), 2), "runs": len(v), "p50": round(percentile(v, 0.5), 4),
              "p90": round(percentile(v, 0.9), 4)}
@@ -433,7 +619,8 @@ class UsageStore:
 
     def add_incident(self, inc: dict[str, Any]) -> None:
         self._x(
-            "INSERT INTO incidents VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO incidents (id, ts, principal, rule, severity, weight, detail, evidence, status, updated, note,"
+            " workflow) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 inc["id"],
                 inc["ts"],
@@ -446,6 +633,7 @@ class UsageStore:
                 inc.get("status", "open"),
                 inc["ts"],
                 inc.get("note", ""),
+                inc.get("workflow"),
             ),
         )
 
@@ -507,11 +695,14 @@ class UsageStore:
         principals: list[str] | None = None,
         limit: int = 200,
         offset: int = 0,
+        oldest_first: bool = False,
     ) -> list[dict]:
-        """Newest first. `principals` narrows to a set of people (a department)."""
+        """Newest first (or oldest). `principals` narrows to a set of people (a department); `status` may be
+        "decided" (approved or denied)."""
         where, args = self._request_filter(principal, status, kind, principals)
         sql = "SELECT * FROM requests" + (" WHERE " + " AND ".join(where) if where else "")
-        rows = self._q(sql + " ORDER BY ts DESC LIMIT ? OFFSET ?", (*args, limit, offset))
+        order = "ASC" if oldest_first else "DESC"
+        rows = self._q(sql + f" ORDER BY ts {order} LIMIT ? OFFSET ?", (*args, limit, offset))
         for r in rows:
             r["detail"] = json.loads(r["detail"]) if r.get("detail") else None
         return rows
@@ -521,6 +712,9 @@ class UsageStore:
         principal: str | None, status: str | None, kind: str | None, principals: list[str] | None
     ) -> tuple[list[str], list[Any]]:
         where, args = [], []
+        if status == "decided":
+            where.append("status IN ('approved', 'denied')")
+            status = None
         for col, v in (("principal", principal), ("status", status), ("kind", kind)):
             if v:
                 where.append(f"{col}=?")
@@ -541,6 +735,12 @@ class UsageStore:
         """Everyone the directory places in a department."""
         return [pid for pid in self.people if self.department_of(pid) == department]
 
+    def request(self, rid: str) -> dict | None:
+        rows = self._q("SELECT * FROM requests WHERE id=?", (rid,))
+        for r in rows:
+            r["detail"] = json.loads(r["detail"]) if r.get("detail") else None
+        return rows[0] if rows else None
+
     def decide_request(self, rid: str, status: str, actor: str, note: str, ts: float | None = None) -> dict | None:
         self._x(
             "UPDATE requests SET status=?, decided_by=?, decided_at=?, note=? WHERE id=? AND status='pending'",
@@ -560,8 +760,8 @@ class UsageStore:
         row["id"] = row["id"] or uuid.uuid4().hex[:16]
         detail = row["detail"]
         row["detail"] = json.dumps(detail) if detail is not None and not isinstance(detail, str) else detail
-        self._x(f"INSERT INTO events ({', '.join(EVENT_COLUMNS)}) VALUES ({', '.join('?' * len(EVENT_COLUMNS))})",
-                tuple(row.values()))  # fmt: skip
+        insert = f"INSERT INTO events ({', '.join(EVENT_COLUMNS)}) VALUES ({', '.join('?' * len(EVENT_COLUMNS))})"
+        self._write([(insert, tuple(row.values())), self._roll_event(row, detail)])
         return {**row, "detail": detail}
 
     def has_event(self, eid: str, source: str, principal: str, client: str | None) -> bool:
@@ -646,6 +846,18 @@ class UsageStore:
         team: str | None = None,
     ) -> list[dict[str, Any]]:
         """Daily totals of usd | tokens (usage ledger) or events (activity stream), split by one column."""
+        keys = UNIT_KEYS if metric in ("usd", "tokens") else EVENT_KEYS
+        if principal is None and not exclude_sources and whole_days(since) and (by is None or by in keys):
+            if metric not in ("usd", "tokens", "events"):
+                raise ValueError("metric must be usd, tokens or events")
+            conds, args = _days(since, None)
+            unit_filter(conds, args, department, team)
+            table, val = ("event_day", "SUM(n)") if metric == "events" else ("unit_day", f"SUM({metric})")
+            return self._q(
+                f"SELECT day, {by or repr('total')} key, COALESCE({val}, 0) value FROM {table}"
+                f" WHERE {' AND '.join(conds)} GROUP BY day, key ORDER BY day",
+                tuple(args),
+            )
         if metric in ("usd", "tokens"):
             if by is not None and by not in GROUPS - {"day"}:
                 raise ValueError(f"split usage by one of {sorted(GROUPS - {'day'})}")
@@ -686,6 +898,16 @@ class UsageStore:
         """Policy checks (gateway, MCP, Claude Code hooks) per decision: allow/log adhere; warn/redact/block do not."""
         if by is not None and by not in EVENT_FILTERS | {"day"}:
             raise ValueError(f"group by one of {sorted(EVENT_FILTERS | {'day'})}")
+        if principal is None and whole_days(since, until) and (by is None or by in {"day", *EVENT_KEYS}):
+            conds, args = _days(since, until)
+            conds.append("kind LIKE 'check.%'")
+            unit_filter(conds, args, department, team)
+            rows = self._q(
+                f"SELECT {by or repr('all')} key, decision, SUM(n) n FROM event_day WHERE {' AND '.join(conds)}"
+                " GROUP BY key, decision",
+                tuple(args),
+            )
+            return self._adherence_rows(rows)
         col = "strftime('%Y-%m-%d', ts, 'unixepoch')" if by == "day" else f"COALESCE({by}, '(none)')" if by else "'all'"
         conds, args = ["ts>=?", "kind LIKE 'check.%'"], [since]
         if until is not None:
@@ -699,6 +921,10 @@ class UsageStore:
             f"SELECT {col} key, decision, {COUNT} n FROM events WHERE {' AND '.join(conds)} GROUP BY key, decision",
             tuple(args),
         )
+        return self._adherence_rows(rows)
+
+    @staticmethod
+    def _adherence_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         out: dict[str, dict[str, Any]] = {}
         for r in rows:
             o = out.setdefault(r["key"], {"key": r["key"], "total": 0, "allow": 0, "log": 0, "warn": 0,
@@ -725,12 +951,18 @@ class UsageStore:
         counts lines added."""
         if by not in self.VALUE_GROUPS:
             raise ValueError(f"group by one of {list(self.VALUE_GROUPS)}")
-        conds, args = [], [since]
+        rolled = principal is None and by != "principal" and whole_days(since)
+        conds, args = [], [day_of(since) if rolled else since]
         if principal is not None:
             conds.append("principal=?")
             args.append(principal)
         unit_filter(conds, args, department, team)
         who = "".join(f" AND {c}" for c in conds)
+        usage_from, events_from, value = (
+            ("unit_day WHERE day>=?", "event_day WHERE day>=?", "SUM(value)")
+            if rolled
+            else ("usage WHERE ts>=? AND metered=1", "events WHERE ts>=?", "SUM(json_extract(detail, '$.value'))")
+        )
         out: dict[str, dict[str, Any]] = {}
 
         counts = ("commits", "pull_requests", "lines_added", "lines_removed", "sessions")
@@ -741,7 +973,7 @@ class UsageStore:
         for r in self._q(
             f"SELECT COALESCE({by}, '(none)') key, COALESCE(SUM(usd), 0) usd,"
             " COALESCE(SUM(CASE WHEN source='claude_code' THEN usd ELSE 0 END), 0) cc"
-            f" FROM usage WHERE ts>=? AND metered=1{who} GROUP BY key",
+            f" FROM {usage_from}{who} GROUP BY key",
             tuple(args),
         ):
             o = row(r["key"])
@@ -749,7 +981,7 @@ class UsageStore:
         metrics = {"metric.commit": "commits", "metric.pull_request": "pull_requests", "metric.session": "sessions"}
         for r in self._q(
             f"SELECT COALESCE({by}, '(none)') key, kind, decision,"
-            " COALESCE(SUM(json_extract(detail, '$.value')), 0) v FROM events WHERE ts>=?"
+            f" COALESCE({value}, 0) v FROM {events_from}"
             " AND kind IN ('metric.commit', 'metric.pull_request', 'metric.session', 'metric.lines_of_code')"
             f"{who} GROUP BY key, kind, decision",
             tuple(args),

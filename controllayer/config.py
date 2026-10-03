@@ -197,6 +197,7 @@ class RunLimits(_Strict):
 class Workflow(_Strict):
     """One item on the menu: what a kind of work may use, and what one run of it may cost."""
 
+    title: str = ""  # the display name ("Bug fixing"); the key is the id
     description: str = ""
     enabled: bool = True
     tier: Literal["light", "standard", "heavy"] = "standard"
