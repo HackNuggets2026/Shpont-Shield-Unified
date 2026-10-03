@@ -34,6 +34,14 @@ def entitled(policy: Policy, principal: Principal) -> dict[str, Resource]:
     return {rid: r for rid, r in policy.resources.items() if r.entitled.allows(who.principal, who.team, who.role)}
 
 
+def entitled_scopes(policy: Policy, principal: Principal) -> dict[str, list[str]]:
+    """Resource id -> the scopes a human may use and delegate (agents: those of their owner)."""
+    who = _human(policy, principal.owner) if principal.kind == "agent" else _human(policy, principal.id)
+    if who is None:
+        return {}
+    return {rid: r.scopes_for(who.principal, who.team, who.role) for rid, r in entitled(policy, principal).items()}
+
+
 def agents_of(policy: Policy, owner: str) -> list[dict[str, str]]:
     return [
         {"principal": k.principal, "team": k.team, "role": k.role}
@@ -49,14 +57,14 @@ def grant(
         raise GrantError("only employees can grant resources")
     if agent not in {a["principal"] for a in agents_of(policy, owner.id)}:
         raise GrantError(f"{agent!r} is not one of your agents")
-    res = entitled(policy, owner).get(rid)
-    if res is None:
+    allowed = entitled_scopes(policy, owner).get(rid)
+    if allowed is None:
         raise GrantError(f"you are not entitled to {rid!r}")
     if suspended(policy, state, rid):
         raise GrantError(f"{rid!r} is suspended by security")
-    bad = set(scopes) - set(res.scopes)
-    if not scopes or bad:
-        raise GrantError(f"scopes must be a non-empty subset of {res.scopes}")
+    if not scopes or set(scopes) - set(allowed):
+        raise GrantError(f"scopes must be a non-empty subset of {allowed}")
+    res = policy.resources[rid]
     if hours is not None and not (math.isfinite(hours) and 0 < hours <= MAX_GRANT_HOURS):
         raise GrantError(f"hours must be between 0 and {MAX_GRANT_HOURS}")
     if res.max_grant_hours is not None and (hours is None or hours > res.max_grant_hours):
@@ -85,7 +93,7 @@ def set_scopes(policy: Policy, state: StateStore, owner: Principal, agent: str, 
     g = active_grant(policy, state, Principal(agent, "", "", kind="agent", owner=owner.id), rid)
     if g is None:
         raise GrantError(f"{agent!r} has no active grant for {rid!r}")
-    allowed = policy.resources[rid].scopes
+    allowed = entitled_scopes(policy, owner)[rid]
     if not scopes or set(scopes) - set(allowed):
         raise GrantError(f"scopes must be a non-empty subset of {allowed}")
     g["scopes"] = sorted(set(scopes))
@@ -112,12 +120,15 @@ def active_grant(policy: Policy, state: StateStore, agent: Principal, rid: str) 
 
 
 def usable(policy: Policy, state: StateStore, principal: Principal) -> dict[str, list[str]]:
-    """resource id -> scopes this principal can use now (humans: entitlement; agents: grants)."""
+    """resource id -> scopes this principal can use now (humans: entitlement; agents: the grant's scopes
+    their owner is still entitled to)."""
+    allowed = entitled_scopes(policy, principal)
     if principal.kind == "agent":
         out = {}
         for rid in state.grants.get(principal.id, {}):
             g = active_grant(policy, state, principal, rid)
-            if g:
-                out[rid] = g["scopes"]
+            scopes = [s for s in g["scopes"] if s in allowed[rid]] if g else []
+            if scopes:
+                out[rid] = scopes
         return out
-    return {rid: r.scopes for rid, r in entitled(policy, principal).items() if not suspended(policy, state, rid)}
+    return {rid: scopes for rid, scopes in allowed.items() if scopes and not suspended(policy, state, rid)}

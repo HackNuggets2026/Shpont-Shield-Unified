@@ -640,8 +640,9 @@ def create_app(
         policy = store.policy
         agents = [a["principal"] for a in resources.agents_of(policy, p.id)]
         out = []
+        allowed = resources.entitled_scopes(policy, p)
         for rid, r in resources.entitled(policy, p).items():
-            view = resource_view(rid, r)
+            view = resource_view(rid, r) | {"scopes": allowed[rid]}
             view["grants"] = {
                 a: layer.state.grants.get(a, {}).get(rid)
                 | {"active": bool(resources.active_grant(policy, layer.state, authenticate_principal(policy, a), rid))}
@@ -1066,7 +1067,12 @@ def create_app(
         return {
             "grants": rows,
             "resources": [
-                resource_view(rid, r) | {"entitled": r.entitled.model_dump()} for rid, r in policy.resources.items()
+                resource_view(rid, r)
+                | {
+                    "entitled": r.entitled.model_dump(),
+                    "scope_entitlements": {s: e.model_dump() for s, e in r.scope_entitlements.items()},
+                }
+                for rid, r in policy.resources.items()
             ],
         }
 

@@ -145,15 +145,28 @@ class Resource(_Strict):
     sensitivity: Literal["low", "medium", "high"] = "medium"
     scopes: list[str] = Field(default_factory=lambda: ["read"])
     entitled: Entitlement = Field(default_factory=Entitlement)
+    # Scopes only some of the entitled may use and delegate, e.g. {admin: {teams: [platform]}}.
+    scope_entitlements: dict[str, Entitlement] = Field(default_factory=dict)
     max_grant_hours: float | None = Field(None, gt=0)
     suspended: bool = False
     # service: service (a controllayer.services key), secret_env; mcp_server: server (upstream.mcp_servers key)
     connection: dict[str, Any] = Field(default_factory=dict)
 
+    def scopes_for(self, principal: str, team: str, role: str) -> list[str]:
+        """The scopes an entitled person may use and delegate."""
+        return [
+            s
+            for s in self.scopes
+            if s not in self.scope_entitlements or self.scope_entitlements[s].allows(principal, team, role)
+        ]
+
     @model_validator(mode="after")
     def _connection(self) -> Resource:
         from .services import SERVICES
 
+        stray = set(self.scope_entitlements) - set(self.scopes)
+        if stray:
+            raise ValueError(f"scope_entitlements name scopes {sorted(stray)} that are not in scopes {self.scopes}")
         conn = self.connection
         if self.type == "mcp_server":
             return self

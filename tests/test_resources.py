@@ -254,3 +254,51 @@ def test_scope_edit_checks_owner_and_scopes(client):
     assert scopes(client, []).status_code == 400
     assert scopes(client, ["admin"]).status_code == 400
     assert stored(client)["scopes"] == ["read"]
+
+
+CAROL = {"x-api-key": "intern-key"}
+
+
+def tools_of(client, headers):
+    r = client.post("/mcp/company", headers=headers, json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
+    return {t["name"] for t in r.json()["result"]["tools"]}
+
+
+def test_interns_may_read_but_not_share_or_write(client):
+    mine = {r["id"]: r["scopes"] for r in client.get("/me/api/resources", headers=CAROL).json()["resources"]}
+    assert mine == {"slack": ["read", "write"], "notion": ["read"], "google-drive": ["read"], "demo-tools": ["use"]}
+    assert {"gdrive_read_file", "notion_get_page"} <= tools_of(client, CAROL)
+    assert not tools_of(client, CAROL) & {"gdrive_share_file", "notion_create_page"}
+    share = {"file_id": "1sb3Zx", "email": "me@gmail.com", "role": "reader"}
+    assert "resource_access/scope_denied" in call(client, "gdrive_share_file", share, CAROL)["error"]["message"]
+    catalog = {r["id"]: r for r in client.get("/admin/grants").json()["resources"]}
+    assert catalog["google-drive"]["scope_entitlements"]["admin"]["teams"] == ["engineering", "finance", "platform"]
+
+
+def test_a_scope_with_its_own_entitlement_cannot_be_delegated_by_others(client, policy_dir):
+    edit_policy(
+        policy_dir, lambda p: p["resources"]["heroku"].update(scope_entitlements={"admin": {"teams": ["platform"]}})
+    )
+    client.post("/admin/policy/reload")
+    r = grant(client, resource="heroku", scopes=("read", "admin"))
+    assert r.status_code == 400 and "subset of ['read', 'exec']" in r.json()["error"]
+
+
+def test_owner_losing_a_scope_entitlement_narrows_the_live_grant(client, policy_dir):
+    assert grant(client, resource="heroku", scopes=("read", "admin")).status_code == 200
+    scale = {"app": "acme-api", "process_type": "web", "quantity": 3}
+    assert "error" not in call(client, "heroku_scale_formation", scale)
+    edit_policy(
+        policy_dir, lambda p: p["resources"]["heroku"].update(scope_entitlements={"admin": {"teams": ["platform"]}})
+    )
+    client.post("/admin/policy/reload")
+    assert "resource_access/scope_denied" in call(client, "heroku_scale_formation", scale)["error"]["message"]
+    assert "error" not in call(client, "heroku_list_apps", {})
+    assert "heroku_scale_formation" not in tools_of(client, AGENT)
+    r = client.patch("/me/api/grants/alice-coder/heroku", headers=ALICE, json={"scopes": ["read", "admin"]})
+    assert r.status_code == 400
+
+
+def test_scope_entitlements_must_name_granted_scopes(make_client):
+    with pytest.raises(ValueError, match=r"scope_entitlements name scopes \['exec'\] that are not in scopes"):
+        make_client(mutate=lambda p: p["resources"]["slack"].update(scope_entitlements={"exec": {"teams": ["x"]}}))

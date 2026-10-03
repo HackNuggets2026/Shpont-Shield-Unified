@@ -180,6 +180,7 @@ semantic_controls:
 # call through the `company` MCP server and injects the secret from its own environment.
 # A service's tools each need one scope (read, write, admin or exec); `scopes` lists the ones
 # security allows to be granted, so leaving one out keeps its tools away from every agent.
+# `entitled` says who may use a resource; `scope_entitlements` narrows single scopes further.
 
 resources:
   github-acme:
@@ -311,6 +312,7 @@ resources:
     sensitivity: low
     scopes: [read, write]
     entitled: { teams: [engineering, finance, platform, interns] }
+    scope_entitlements: { write: { teams: [engineering, finance, platform] } }
     connection: { service: notion, secret_env: NOTION_TOKEN }
   google-drive:
     type: service
@@ -319,6 +321,7 @@ resources:
     sensitivity: medium
     scopes: [read, admin]
     entitled: { teams: [engineering, finance, platform, interns] }
+    scope_entitlements: { admin: { teams: [engineering, finance, platform] } }   # sharing: not interns
     max_grant_hours: 24
     connection: { service: gdrive, secret_env: GOOGLE_SERVICE_ACCOUNT_KEY }
   datadog:
