@@ -394,3 +394,7 @@ def test_catalog_lists_workflows_that_use_a_resource_by_models_or_tools(client):
     assert "pr_review" not in rows["gpt-4o-mini"]["workflows"]  # no model limit is not "uses every model"
     assert rows["simulator"]["workflows_via"]["ui_qa"] == "resources"
     assert set(rows["vm"]["workflows"]) == set(rows["vm"]["workflows_via"])
+
+
+def test_every_catalog_entry_has_an_owner(client):
+    assert all(r.owner for r in client.app.state.store.policy.catalog.values())
