@@ -501,6 +501,19 @@ def register(
             "admin_actions": usage.admin_actions(pid),
         }
 
+    def value(by: str, days: float, principal: str | None):
+        since = time.time() - max(1, min(days, 400)) * DAY
+        try:
+            rows = usage.value(by, since, principal)
+        except ValueError as e:
+            return err(str(e))
+        return {"by": by, "days": days, "rows": rows}
+
+    @app.get("/admin/value")
+    async def admin_value(by: str = "workflow", days: float = 30):
+        """Spend against Claude Code's value metrics (commits, PRs, lines, sessions) per workflow/person/team."""
+        return value(by, days, None)
+
     @app.get("/admin/activity")
     async def admin_activity(
         limit: int = 50,
@@ -654,6 +667,13 @@ def register(
         return usage.events(principal=who.id, limit=max(1, min(limit, 2000)), before=before,
                             exclude_sources=hidden_from(who.id), source=source, kind=kind, severity=severity,
                             decision=decision)  # fmt: skip
+
+    @app.get("/me/value")
+    async def me_value(request: Request, by: str = "workflow", days: float = 30):
+        who = me(request)
+        if who is None:
+            return err("your API key is required", 401)
+        return value(by, days, who.id)
 
     @app.post("/me/requests")
     async def me_request(request: Request):

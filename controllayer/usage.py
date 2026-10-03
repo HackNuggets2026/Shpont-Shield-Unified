@@ -505,6 +505,53 @@ class UsageStore:
             o["adherence"] = round((o["allow"] + o["log"]) / o["total"], 4) if o["total"] else None
         return sorted(out.values(), key=lambda o: o["key"])
 
+    VALUE_GROUPS = ("workflow", "principal", "team")
+
+    def value(self, by: str, since: float, principal: str | None = None) -> list[dict[str, Any]]:
+        """Spend next to what Claude Code reports it produced (commits, PRs, lines, sessions), per `by`.
+
+        usd is all metered spend; claude_code_usd the part Claude Code's telemetry reported. lines_per_usd
+        counts lines added."""
+        if by not in self.VALUE_GROUPS:
+            raise ValueError(f"group by one of {list(self.VALUE_GROUPS)}")
+        who, args = ("", [since]) if principal is None else (" AND principal=?", [since, principal])
+        out: dict[str, dict[str, Any]] = {}
+
+        counts = ("commits", "pull_requests", "lines_added", "lines_removed", "sessions")
+
+        def row(key: str) -> dict[str, Any]:
+            return out.setdefault(key, {"key": key, "usd": 0.0, "claude_code_usd": 0.0, **dict.fromkeys(counts, 0)})
+
+        for r in self._q(
+            f"SELECT COALESCE({by}, '(none)') key, COALESCE(SUM(usd), 0) usd,"
+            " COALESCE(SUM(CASE WHEN source='claude_code' THEN usd ELSE 0 END), 0) cc"
+            f" FROM usage WHERE ts>=? AND metered=1{who} GROUP BY key",
+            tuple(args),
+        ):
+            o = row(r["key"])
+            o["usd"], o["claude_code_usd"] = round(r["usd"], 6), round(r["cc"], 6)
+        metrics = {"metric.commit": "commits", "metric.pull_request": "pull_requests", "metric.session": "sessions"}
+        for r in self._q(
+            f"SELECT COALESCE({by}, '(none)') key, kind, decision,"
+            " COALESCE(SUM(json_extract(detail, '$.value')), 0) v FROM events WHERE ts>=?"
+            " AND kind IN ('metric.commit', 'metric.pull_request', 'metric.session', 'metric.lines_of_code')"
+            f"{who} GROUP BY key, kind, decision",
+            tuple(args),
+        ):
+            o, v = row(r["key"]), r["v"] or 0
+            if r["kind"] == "metric.lines_of_code":
+                field = {"added": "lines_added", "removed": "lines_removed"}.get(r["decision"] or "")
+                if field:
+                    o[field] += v
+            else:
+                o[metrics[r["kind"]]] += v
+        for o in out.values():
+            for k in counts:
+                o[k] = int(o[k]) if float(o[k]).is_integer() else round(o[k], 2)
+            o["usd_per_commit"] = round(o["usd"] / o["commits"], 4) if o["commits"] else None
+            o["lines_per_usd"] = round(o["lines_added"] / o["usd"], 2) if o["usd"] else None
+        return sorted(out.values(), key=lambda o: (-o["usd"], o["key"]))
+
     # ---- cumulative telemetry baselines (OTLP cumulative sums are differenced against these) ----
 
     def baseline(self, key: str) -> float | None:

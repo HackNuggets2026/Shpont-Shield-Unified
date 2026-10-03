@@ -301,3 +301,19 @@ def test_activity_feeds_filter_by_source_kind_severity_and_decision(client):
     assert len(me(limit=5000)) <= 2000
     adm = client.get("/admin/activity", params={"decision": "allow", "principal": "carol"}).json()
     assert adm and all(e["decision"] == "allow" for e in adm)
+
+
+def test_value_aggregate_puts_spend_next_to_claude_code_output(client):
+    from .test_claude_code import LOGS, METRICS
+
+    central = {"x-admin-token": ADMIN, "Authorization": ""}
+    client.post("/v1/logs", json=LOGS, headers=central)
+    client.post("/v1/metrics", json=METRICS, headers=central)
+    rows = {r["key"]: r for r in client.get("/admin/value", params={"by": "principal", "days": 400}).json()["rows"]}
+    a = rows["alice"]
+    assert a["claude_code_usd"] == pytest.approx(0.0123) and a["usd"] >= a["claude_code_usd"]
+    assert (a["commits"], a["lines_added"], a["lines_removed"]) == (1, 120, 30)
+    assert a["usd_per_commit"] == pytest.approx(a["usd"] / 1, rel=1e-3) and a["lines_per_usd"] > 0
+    mine = client.get("/me/value", params={"by": "team", "days": 400}, headers=KEYS["alice"]).json()["rows"]
+    assert [r["key"] for r in mine] == ["engineering"] and mine[0]["commits"] == 1
+    assert client.get("/admin/value", params={"by": "model"}).status_code == 400
