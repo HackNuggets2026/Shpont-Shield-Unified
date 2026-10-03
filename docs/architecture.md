@@ -27,7 +27,7 @@ A broker call has a resource and a scope. It passes the gate only if all of thes
 - the owner is still entitled;
 - the resource is not suspended.
 
-Such decisions are never cached, because expiry depends on time. Reaching a catalogued MCP server needs a grant too, but per-tool RBAC and the irreversible-tool rule still apply on that server. Agents cannot reach uncatalogued servers at all.
+Such decisions are never cached, because expiry depends on time. A grant's expiry is set once, when it is created or when an expired grant is renewed. Changing its scopes (`PATCH /me/api/grants/{agent}/{resource}`) keeps the expiry and works only on an active grant. A new grant over a live one is refused. Reaching a catalogued MCP server needs a grant too, but per-tool RBAC and the irreversible-tool rule still apply on that server. Agents cannot reach uncatalogued servers at all.
 
 ## Insider risk
 

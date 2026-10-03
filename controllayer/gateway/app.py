@@ -667,6 +667,28 @@ def create_app(
         layer.audit.note("grant", p.id, agent=body.get("agent"), resource=body.get("resource"), grant=g)
         return g
 
+    @app.patch("/me/api/grants/{agent}/{rid}")
+    async def me_grant_scopes(agent: str, rid: str, request: Request):
+        p = employee(request)
+        body = await _json_object(request)
+        before = set((layer.state.grants.get(agent, {}).get(rid) or {}).get("scopes", []))
+        try:
+            g = resources.set_scopes(
+                store.policy, layer.state, p, agent, rid, [str(x) for x in body.get("scopes") or []]
+            )
+        except resources.GrantError as e:
+            return JSONResponse({"error": str(e)}, status_code=400)
+        layer.audit.note(
+            "grant_scopes",
+            p.id,
+            agent=agent,
+            resource=rid,
+            scopes=g["scopes"],
+            added=sorted(set(g["scopes"]) - before),
+            removed=sorted(before - set(g["scopes"])),
+        )
+        return g
+
     @app.delete("/me/api/grants/{agent}/{rid}")
     async def me_revoke(agent: str, rid: str, request: Request):
         p = employee(request)

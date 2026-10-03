@@ -190,3 +190,59 @@ def test_without_demo_mode_a_key_is_required(make_client):
     c = make_client(mutate=lambda p: p["identity"].update(panel_demo=False))
     assert c.get("/me/api/profile", headers={"x-acl-as": "bob"}).status_code == 401
     assert c.get("/me/api/people", headers=ALICE).json()["people"] == [{"principal": "alice", "team": "engineering"}]
+
+
+def scopes(client, scopes, agent="alice-coder", resource="github-acme", who=ALICE):
+    return client.patch(f"/me/api/grants/{agent}/{resource}", headers=who, json={"scopes": list(scopes)})
+
+
+def stored(client, agent="alice-coder", resource="github-acme"):
+    return client.app.state.layer.state.grants[agent][resource]
+
+
+def test_scope_edit_keeps_the_grant_expiry(client):
+    grant(client, hours=0.25)
+    expires = stored(client)["expires_at"]
+    r = scopes(client, ["read", "write"])
+    assert r.status_code == 200 and r.json()["scopes"] == ["read", "write"]
+    assert stored(client)["expires_at"] == expires
+    assert scopes(client, ["write"]).json()["expires_at"] == expires
+    notes = [n for n in client.app.state.layer.audit.notes if n["kind"] == "grant_scopes"]
+    assert [(n["added"], n["removed"]) for n in notes] == [(["write"], []), ([], ["read"])]
+
+
+def test_scope_edit_keeps_no_expiry(client):
+    grant(client, resource="build-server", scopes=("exec",), hours=None)
+    assert scopes(client, ["exec"], resource="build-server").json()["expires_at"] is None
+
+
+def test_scope_edit_never_revives_an_expired_grant(client):
+    grant(client)
+    stored(client)["expires_at"] = time.time() - 1
+    r = scopes(client, ["read", "write"])
+    assert r.status_code == 400 and "no active grant" in r.json()["error"]
+    assert stored(client)["scopes"] == ["read"] and stored(client)["expires_at"] < time.time()
+    assert "not_granted" in call(client, "call_api", GET_ISSUES)["error"]["message"]
+
+
+def test_live_grant_is_not_rewritten_by_a_new_grant(client):
+    grant(client, hours=0.25)
+    expires = stored(client)["expires_at"]
+    r = grant(client, scopes=("read", "write"), hours=8)
+    assert r.status_code == 400 and "already holds" in r.json()["error"]
+    assert stored(client)["expires_at"] == expires and stored(client)["scopes"] == ["read"]
+
+
+def test_expired_grant_is_renewed_explicitly(client):
+    grant(client)
+    stored(client)["expires_at"] = time.time() - 1
+    assert grant(client, hours=8).status_code == 200
+    assert stored(client)["expires_at"] > time.time() + 7 * 3600
+
+
+def test_scope_edit_checks_owner_and_scopes(client):
+    grant(client)
+    assert scopes(client, ["read"], who=BOB).status_code == 400
+    assert scopes(client, []).status_code == 400
+    assert scopes(client, ["admin"]).status_code == 400
+    assert stored(client)["scopes"] == ["read"]

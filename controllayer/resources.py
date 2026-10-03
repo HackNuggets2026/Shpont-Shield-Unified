@@ -62,6 +62,10 @@ def grant(
     if res.max_grant_hours is not None and (hours is None or hours > res.max_grant_hours):
         raise GrantError(f"{rid!r} can be granted for at most {res.max_grant_hours} hours")
     now = time.time()
+    current = state.grants.get(agent, {}).get(rid)
+    if current and (current["expires_at"] is None or current["expires_at"] >= now):
+        # Renewing is for expired grants only, so a scope edit can never stretch or shorten a live one.
+        raise GrantError(f"{agent!r} already holds {rid!r}: change its scopes, or revoke it first")
     g = {
         "scopes": sorted(set(scopes)),
         "granted_by": owner.id,
@@ -69,6 +73,22 @@ def grant(
         "expires_at": now + hours * 3600 if hours is not None else None,
     }
     state.grants.setdefault(agent, {})[rid] = g
+    state.save()
+    return g
+
+
+def set_scopes(policy: Policy, state: StateStore, owner: Principal, agent: str, rid: str, scopes: list[str]) -> dict:
+    """Change the scopes of an active grant. Its expiry stays as it is, and an inactive grant is
+    never brought back this way."""
+    if agent not in {a["principal"] for a in agents_of(policy, owner.id)}:
+        raise GrantError(f"{agent!r} is not one of your agents")
+    g = active_grant(policy, state, Principal(agent, "", "", kind="agent", owner=owner.id), rid)
+    if g is None:
+        raise GrantError(f"{agent!r} has no active grant for {rid!r}")
+    allowed = policy.resources[rid].scopes
+    if not scopes or set(scopes) - set(allowed):
+        raise GrantError(f"scopes must be a non-empty subset of {allowed}")
+    g["scopes"] = sorted(set(scopes))
     state.save()
     return g
 

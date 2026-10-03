@@ -275,10 +275,18 @@ def ocsf_note(n: dict[str, Any]) -> dict[str, Any]:
         **_risk(n.get("level")),
         "metadata": _metadata(n, "audit", ["security_control"] if n.get("level") in _RISK else []),
     }
-    if kind in _ACCESS:
-        out |= _base(n, 3007, "User Management", (3, "Identity & Access Management"), _ACCESS[kind]) | {
+    if kind in ("grant", "revoke", "grant_scopes"):
+        if kind != "grant_scopes":
+            activity, privileges = _ACCESS[kind], (n.get("grant") or {}).get("scopes")
+        elif n["added"] and not n["removed"]:
+            activity, privileges = _ACCESS["grant"], n["added"]
+        elif n["removed"] and not n["added"]:
+            activity, privileges = _ACCESS["revoke"], n["removed"]
+        else:
+            activity, privileges = (2, "Update"), n["scopes"]
+        out |= _base(n, 3007, "User Management", (3, "Identity & Access Management"), activity) | {
             "user": _user(n["agent"], agent=True),
-            "privileges": (n.get("grant") or {}).get("scopes"),
+            "privileges": privileges,
             "resources": [{"uid": n["resource"], "name": n["resource"], "type": "company_resource"}],
             "unmapped": details,
         }

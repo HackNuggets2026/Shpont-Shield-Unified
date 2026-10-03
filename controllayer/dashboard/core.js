@@ -235,13 +235,18 @@
     ]);
 
     // Each scope is one click: add it to the agent's grant, or take it away (the last one revokes).
+    // Scope edits keep the grant's expiry; an inactive grant is only renewed or revoked, explicitly.
     const cell = (r, agent) => {
       const g = r.grants[agent];
+      const at = `data-agent="${esc(agent)}" data-rid="${esc(r.id)}"`;
       if (!g && r.suspended) return muted("suspended by security");
+      if (g && !g.active) return `${g.scopes.map((sc) => badge("neutral", sc)).join(" ")}
+        <div class="f6 mt-1">${badge("bad", "inactive")} ${muted(r.suspended ? "suspended by security" : g.expires_at ? "expired " + ago(g.expires_at) : "")}
+        ${r.suspended ? "" : button("Renew " + dur(hoursFor(r)), `data-act="renew" ${at}`, "invisible")}${button("Revoke", `data-act="revoke" ${at}`, "invisible")}</div>`;
       const has = new Set(g ? g.scopes : []);
       const scopes = segmented(r.scopes.map((sc) => ({ label: sc, active: has.has(sc),
-        attrs: `data-act="scope" data-agent="${esc(agent)}" data-rid="${esc(r.id)}" data-v="${esc(sc)}" title="${has.has(sc) ? "remove " + esc(sc) : "grant " + esc(sc) + " for " + dur(hoursFor(r))}"` })));
-      return scopes + (g ? `<div class="f6 mt-1">${g.active ? "" : badge("bad", "inactive") + " "}${muted(g.expires_at ? "expires " + ago(g.expires_at) : "no expiry")}</div>` : "");
+        attrs: `data-act="scope" ${at} data-v="${esc(sc)}" title="${has.has(sc) ? "remove " + esc(sc) : g ? "add " + esc(sc) : "grant " + esc(sc) + " for " + dur(hoursFor(r))}"` })));
+      return scopes + (g ? `<div class="f6 mt-1">${muted(g.expires_at ? "expires " + ago(g.expires_at) : "no expiry")}</div>` : "");
     };
     const resources = d.res.resources.length ? table(["Resource", ...d.res.agents], d.res.resources.map((r) => [
       `<b>${esc(r.name)}</b> ${badge(tone(r.sensitivity), r.sensitivity)}<br>${muted(esc(r.type) + " · " + esc(r.description) + (r.max_grant_hours ? ` · max ${dur(r.max_grant_hours)}` : ""))}`,
@@ -303,12 +308,20 @@
         case "hours": state.hours = Number(d.v); break;
         case "scope": {
           const r = last.res.resources.find((x) => x.id === d.rid), g = r.grants[d.agent];
-          const scopes = new Set(g ? g.scopes : []);
+          const path = `/me/api/grants/${encodeURIComponent(d.agent)}/${encodeURIComponent(d.rid)}`;
+          if (!g) { await send("/me/api/grants", "POST", { agent: d.agent, resource: d.rid, scopes: [d.v], hours: hoursFor(r) }); break; }
+          const scopes = new Set(g.scopes);
           if (scopes.has(d.v)) scopes.delete(d.v); else scopes.add(d.v);
-          if (scopes.size) await send("/me/api/grants", "POST", { agent: d.agent, resource: d.rid, scopes: [...scopes], hours: hoursFor(r) });
-          else await send(`/me/api/grants/${encodeURIComponent(d.agent)}/${encodeURIComponent(d.rid)}`, "DELETE");
+          if (scopes.size) await send(path, "PATCH", { scopes: [...scopes] });
+          else await send(path, "DELETE");
           break;
         }
+        case "renew": {
+          const r = last.res.resources.find((x) => x.id === d.rid);
+          await send("/me/api/grants", "POST", { agent: d.agent, resource: d.rid, scopes: r.grants[d.agent].scopes, hours: hoursFor(r) });
+          break;
+        }
+        case "revoke": await send(`/me/api/grants/${encodeURIComponent(d.agent)}/${encodeURIComponent(d.rid)}`, "DELETE"); break;
         default: return;
       }
     } catch (e) { state.error = e.message; }
