@@ -218,3 +218,61 @@ export const IconTrendUp = (p: P) => (
     <path d="M4 17l6-6 4 4 6-7M20 8h-5M20 8v5" />
   </I>
 );
+export const IconBug = (p: P) => (
+  <I {...p}>
+    <rect x="7" y="8" width="10" height="12" rx="5" />
+    <path d="M9 8V6.5a3 3 0 0 1 6 0V8M12 12v8M3.5 13H7M17 13h3.5M4.5 7.5 7.5 9.5M19.5 7.5l-3 2M4.5 19l3-2M19.5 19l-3-2" />
+  </I>
+);
+export const IconPullRequest = (p: P) => (
+  <I {...p}>
+    <circle cx="6" cy="5.5" r="2.25" />
+    <circle cx="6" cy="18.5" r="2.25" />
+    <circle cx="18" cy="18.5" r="2.25" />
+    <path d="M6 7.75v8.5M18 16.25V9.5a3 3 0 0 0-3-3h-4M13 4.5l-2 2 2 2" />
+  </I>
+);
+export const IconPhone = (p: P) => (
+  <I {...p}>
+    <rect x="6.5" y="2.5" width="11" height="19" rx="2.5" />
+    <path d="M10.5 18.5h3" />
+  </I>
+);
+export const IconChart = (p: P) => (
+  <I {...p}>
+    <path d="M4 4v16h16" />
+    <path d="M8 16v-4M12 16V8M16 16v-6" />
+  </I>
+);
+export const IconChat = (p: P) => (
+  <I {...p}>
+    <path d="M4.5 5.5h15a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H10l-4.5 3.5v-3.5h-1a1 1 0 0 1-1-1v-9a1 1 0 0 1 1-1z" />
+    <path d="M8 10h8M8 13h5" />
+  </I>
+);
+export const IconBolt = (p: P) => (
+  <I {...p}>
+    <path d="M13 2.5 4.5 13.5H11l-1 8 8.5-11H12l1-8z" />
+  </I>
+);
+export const IconQuestion = (p: P) => (
+  <I {...p}>
+    <circle cx="12" cy="12" r="9" />
+    <path d="M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.6.3-1 .8-1 1.5v.7M12 17v.01" />
+  </I>
+);
+export const IconGrid = (p: P) => (
+  <I {...p}>
+    <rect x="3.5" y="3.5" width="7" height="7" rx="1.5" />
+    <rect x="13.5" y="3.5" width="7" height="7" rx="1.5" />
+    <rect x="3.5" y="13.5" width="7" height="7" rx="1.5" />
+    <rect x="13.5" y="13.5" width="7" height="7" rx="1.5" />
+  </I>
+);
+export const IconServer = (p: P) => (
+  <I {...p}>
+    <rect x="3.5" y="4" width="17" height="7" rx="1.5" />
+    <rect x="3.5" y="13" width="17" height="7" rx="1.5" />
+    <path d="M7 7.5h.01M7 16.5h.01" />
+  </I>
+);

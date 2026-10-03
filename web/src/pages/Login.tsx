@@ -41,14 +41,14 @@ export function Login() {
     <div className="flex min-h-screen items-center justify-center bg-page px-4 py-10">
       <div className="w-full max-w-sm">
         <div className="mb-6 flex flex-col items-center text-center">
-          <div className="mb-3 flex h-11 w-11 items-center justify-center rounded-xl bg-accent text-white shadow-lg shadow-accent/20">
+          <div className="mb-3 flex h-11 w-11 items-center justify-center bg-brand rounded-2xl text-white shadow-lg shadow-cc/25">
             <IconShield size={24} />
           </div>
           <h1 className="text-lg font-semibold text-ink">Shpont Shield</h1>
           <p className="mt-1 text-sm text-muted">One control plane for your company's AI usage.</p>
         </div>
         <form
-          className="space-y-4 rounded-2xl border border-line bg-panel p-5 shadow-sm"
+          className="soft-card space-y-4 rounded-2xl p-5"
           onSubmit={(e) => {
             e.preventDefault();
             void submit();

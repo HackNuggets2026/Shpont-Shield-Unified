@@ -27,7 +27,7 @@ function DepartmentTiles({ rows, colors }: { rows: UnitRow[]; colors: Record<str
         <Link
           key={d.name}
           to={orgPath.department(d.name)}
-          className="group rounded-xl border border-line bg-panel p-3.5 shadow-sm transition-colors hover:border-accent/40"
+          className="group soft-card rounded-2xl p-3.5 transition hover:-translate-y-0.5 hover:shadow-lg"
         >
           <div className="flex items-center gap-2">
             <DeptDot color={colors[d.name]} />
@@ -130,7 +130,7 @@ export function Organization() {
       />
       <div className="space-y-4">
         <form
-          className="flex flex-wrap items-center gap-2 rounded-xl border border-line bg-panel p-3 shadow-sm"
+          className="flex flex-wrap items-center gap-2 soft-card rounded-2xl p-3"
           onSubmit={(e) => {
             e.preventDefault();
             nav(orgPath.people({ q: text.trim() || undefined, department: department || undefined }));

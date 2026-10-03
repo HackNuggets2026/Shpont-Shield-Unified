@@ -4,6 +4,7 @@ import { Login } from "./pages/Login";
 import { ConsoleLayout } from "./pages/console/ConsoleLayout";
 import { Overview } from "./pages/console/Overview";
 import { Workflows } from "./pages/console/Workflows";
+import { WorkflowPage } from "./pages/console/WorkflowPage";
 import { People } from "./pages/console/People";
 import { PersonPage } from "./pages/console/Person";
 import { Organization } from "./pages/console/Organization";
@@ -50,6 +51,7 @@ export function App() {
       >
         <Route index element={<Overview />} />
         <Route path="workflows" element={<Workflows />} />
+        <Route path="workflows/:name" element={<WorkflowPage />} />
         <Route path="org" element={<Organization />} />
         <Route path="org/department/:name" element={<OrgUnitPage key="department" kind="department" />} />
         <Route path="org/team/:name" element={<OrgUnitPage key="team" kind="team" />} />

@@ -282,7 +282,7 @@ export function IncidentPage() {
       />
 
       {/* The story at a glance: detected, what the system did, where it stands now. */}
-      <section className="overflow-hidden rounded-xl border border-line bg-panel shadow-sm">
+      <section className="overflow-hidden soft-card rounded-2xl">
         <div className={cx("border-b border-line px-4 py-3", inc.severity === "high" && live ? "bg-bad/[0.06]" : "bg-raised/40")}>
           <p className="break-words text-[15px] font-medium leading-snug text-ink">{inc.detail}</p>
           {ruleWhat(inc.rule) && <p className="mt-0.5 text-xs text-muted">{ruleLabel(inc.rule)}: {ruleWhat(inc.rule)}.</p>}

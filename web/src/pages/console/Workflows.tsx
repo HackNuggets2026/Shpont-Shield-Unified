@@ -1,13 +1,17 @@
 import { useMemo, useState } from "react";
+import { Link, useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { admin, type Workflow } from "../../api";
 import { ReasonDialog } from "../../components/Dialog";
 import { TierPill } from "../../components/pills";
-import { Card, Empty, PageHeader, Pill, Q, Stat, TableWrap, Toggle } from "../../components/ui";
+import { Card, Empty, ErrorBox, PageHeader, Pill, Q, Stat, TableWrap, Toggle } from "../../components/ui";
 import { count, money, share, tokens, unitMoney, usd } from "../../lib/format";
 import { org } from "../../orgApi";
-import { DeptDot, useDeptColors } from "../../components/org";
-import { useWorkflowColors, WfName } from "../../lib/workflows";
+import { useDeptColors } from "../../components/org";
+import { DeptLegend, WfBadge, wfPath } from "../../components/wf/bits";
+import { TileSkeleton, WorkflowTile } from "../../components/wf/MenuTiles";
+import { useIncidentTags, useWorkflowBoard } from "../../lib/wfData";
+import { useWorkflowColors, wfLabel } from "../../lib/workflows";
 
 interface Pending {
   wf: Workflow;
@@ -37,29 +41,6 @@ export function limits(w: Workflow) {
   return parts;
 }
 
-/** One labelled line of chips that never wraps; the full list is in the tooltip. */
-function ScopeLine({ label, items, empty }: { label: string; items: string[]; empty: string }) {
-  return (
-    <div className="flex items-center gap-2 py-px text-[11px]" title={items.join(", ") || empty}>
-      <span className="w-11 shrink-0 text-muted">{label}</span>
-      <span className="flex min-w-0 items-center gap-1 overflow-hidden">
-        {items.length === 0 ? (
-          <span className="text-muted">{empty}</span>
-        ) : (
-          <>
-            {items.slice(0, 2).map((t) => (
-              <span key={t} className="truncate whitespace-nowrap rounded bg-ink/[0.06] px-1.5 font-mono text-ink2">
-                {t}
-              </span>
-            ))}
-            {items.length > 2 && <span className="shrink-0 text-muted">+{items.length - 2}</span>}
-          </>
-        )}
-      </span>
-    </div>
-  );
-}
-
 /** A 100% bar of a workflow's spend: its top three departments, the rest folded into gray; top three named underneath. */
 function DeptSplit({ rows: all, colors }: { rows: { department: string; usd: number }[]; colors: Record<string, string> }) {
   const total = all.reduce((a, r) => a + r.usd, 0);
@@ -84,6 +65,46 @@ function DeptSplit({ rows: all, colors }: { rows: { department: string; usd: num
   );
 }
 
+/** One card per workflow, biggest spend first, with the work done outside the menu underneath. */
+function MenuGrid() {
+  const b = useWorkflowBoard();
+  const deptColors = useDeptColors();
+  const open = useQuery({ queryKey: ["admin", "incidents", "open"], queryFn: () => admin.incidents("open"), refetchInterval: 10_000 });
+  const tags = useIncidentTags();
+  const openByWf = useMemo(() => {
+    const m: Record<string, number> = {};
+    for (const i of open.data?.incidents ?? []) {
+      const w = tags.data?.[i.id]?.workflow;
+      if (w) m[w] = (m[w] ?? 0) + 1;
+    }
+    return m;
+  }, [open.data, tags.data]);
+  const total = b.rows.reduce((a, r) => a + r.usd, 0);
+  const off = b.offMenu.reduce((a, r) => a + r.usd, 0);
+  if (b.error) return <ErrorBox error={b.error} retry={b.refetch} />;
+  return (
+    <section className="space-y-4">
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+        {b.isPending
+          ? Array.from({ length: 6 }, (_, i) => <TileSkeleton key={i} />)
+          : b.menuRows.map((r) => <WorkflowTile key={r.name} r={r} deptColors={deptColors} openIncidents={openByWf[r.name]} />)}
+      </div>
+      {off > 0 && (
+        <div className="rounded-2xl border border-dashed border-line bg-panel/60 px-5 py-4 text-sm">
+          <span className="font-semibold text-ink">{money(off)} isn’t on the menu</span>
+          <span className="text-ink2"> · {share(off / (total || 1))} of spend</span>
+          <p className="mt-0.5 text-xs text-muted">
+            {[...b.offMenu]
+              .sort((x, y) => y.usd - x.usd)
+              .map((r) => `${r.name === "unlabeled" ? "Unlabeled requests (auto-classified when possible)" : "Not attributed to any workflow (imported cloud bill, untagged CI)"}: ${money(r.usd)}`)
+              .join(" · ")}
+          </p>
+        </div>
+      )}
+    </section>
+  );
+}
+
 export function Workflows() {
   const qc = useQueryClient();
   const menu = useQuery({ queryKey: ["admin", "menu"], queryFn: admin.menu, refetchInterval: 30_000 });
@@ -92,6 +113,7 @@ export function Workflows() {
   const value = useQuery({ queryKey: ["admin", "value", "workflow", 30], queryFn: () => org.value("workflow", 30) });
   const colors = useDeptColors();
   const wfColors = useWorkflowColors();
+  const navigate = useNavigate();
   const [pending, setPending] = useState<Pending | null>(null);
   const edit = useMutation({
     mutationFn: ({ wf, patch, reason }: Pending & { reason: string }) => admin.editWorkflow(wf.name, patch, reason),
@@ -116,15 +138,15 @@ export function Workflows() {
   const commitCoverage = totalCommits ? labelledCommits / totalCommits : 0;
 
   return (
-    <div>
+    <div className="space-y-6">
       <PageHeader
         title="Workflows"
-        subtitle="The priced menu of AI work: what each kind of task is allowed to use and what a run really costs."
+        subtitle="The priced menu of AI work: what each kind of task may use, what one run really costs, and who orders it. Last 30 days; open a card for the details."
       />
       <Q q={menu} rows={8}>
         {(m) => (
-          <div className="space-y-4">
-            <div className="grid grid-cols-2 gap-3 rounded-xl border border-line bg-panel p-4 sm:grid-cols-3 xl:grid-cols-6">
+          <div className="space-y-6">
+            <div className="soft-card grid grid-cols-2 gap-4 rounded-2xl px-5 py-4 sm:grid-cols-3 xl:grid-cols-6">
               <Stat label="Workflows" value={`${m.workflows.filter((w) => w.enabled).length} enabled / ${m.workflows.length}`} />
               <Stat label="Need approval" value={m.workflows.filter((w) => w.approval !== "none").length} />
               <Stat label="Runs, 30 days" value={count(totalRuns)} />
@@ -135,32 +157,23 @@ export function Workflows() {
                 value={`${m.require_label ? "required" : "optional"} · ${m.classify_unlabeled ? "unlabeled auto-classified" : "unlabeled kept"}`}
               />
             </div>
+
+            <MenuGrid />
+
             <Card
               flush
-              title="Menu"
-              subtitle={`Last 30 days · cost per run p50 – p90 · top departments by spend${totalCommits && commitCoverage < 0.5 ? ` · ${share(1 - commitCoverage)} of Claude Code commits carry no workflow label` : ""}`}
-              actions={
-                <div className="flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-muted">
-                  {Object.entries(colors)
-                    .filter(([k]) => k !== "(none)" && k !== "Unassigned")
-                    .map(([k, c]) => (
-                      <span key={k} className="flex items-center gap-1">
-                        <DeptDot color={c} />
-                        {k}
-                      </span>
-                    ))}
-                </div>
-              }
+              title="Compare and switch"
+              subtitle={`Cost per run p50 – p90 · top departments by spend · approval and on/off for each workflow${totalCommits && commitCoverage < 0.5 ? ` · ${share(1 - commitCoverage)} of Claude Code commits carry no workflow label` : ""}`}
+              actions={<DeptLegend colors={colors} />}
             >
               {m.workflows.length === 0 ? (
                 <Empty title="No workflows on the menu" hint="Add workflows under menu.workflows in policy.yaml." />
               ) : (
                 <TableWrap>
-                  <table className="tbl min-w-[1180px]">
+                  <table className="tbl min-w-[920px]">
                     <thead>
                       <tr>
                         <th>Workflow</th>
-                        <th>Tier</th>
                         <th className="text-right">Cost / run</th>
                         <th className="text-right">Runs</th>
                         <th className="text-right">Spend 30d</th>
@@ -168,25 +181,26 @@ export function Workflows() {
                         <th className="text-right" title="Claude Code spend in the workflow over 30 days, divided by the commits Claude Code reported in it">
                           CC $ / commit
                         </th>
-                        <th>Scope</th>
                         <th className="text-center">Approval</th>
                         <th className="text-center">Enabled</th>
                       </tr>
                     </thead>
                     <tbody>
                       {m.workflows.map((w) => (
-                        <tr key={w.name} className={w.enabled ? "" : "opacity-60"}>
-                          <td className="max-w-[240px]">
-                            <div className="flex items-center gap-2">
-                              <DeptDot color={wfColors[w.name]} />
-                              <WfName id={w.name} />
-                            </div>
-                            <div className="truncate text-xs text-muted" title={w.description}>
-                              {w.description || "—"}
-                            </div>
-                          </td>
-                          <td>
-                            <TierPill tier={w.tier} />
+                        <tr key={w.name} className={w.enabled ? "row-link" : "row-link opacity-60"} onClick={() => navigate(wfPath(w.name))}>
+                          <td className="max-w-[260px]">
+                            <Link to={wfPath(w.name)} className="flex items-center gap-2.5" onClick={(e) => e.stopPropagation()}>
+                              <WfBadge id={w.name} color={wfColors[w.name] ?? "var(--s-other)"} size="sm" />
+                              <span className="min-w-0">
+                                <span className="flex items-center gap-1.5">
+                                  <span className="truncate font-medium text-ink hover:text-accent">{wfLabel(w.name)}</span>
+                                  <TierPill tier={w.tier} />
+                                </span>
+                                <span className="block truncate text-xs text-muted" title={limits(w).join(" · ")}>
+                                  {limits(w).join(" · ") || "no limits"}
+                                </span>
+                              </span>
+                            </Link>
                           </td>
                           <td className="text-right">{costRange(w.measured)}</td>
                           <td className="tnum text-right">{count(w.measured.runs)}</td>
@@ -194,7 +208,7 @@ export function Workflows() {
                             <div className="font-medium text-ink">{money(spend30[w.name] ?? 0)}</div>
                             <div className="text-[11px] text-muted">{share(totalSpend ? (spend30[w.name] ?? 0) / totalSpend : 0)} of all</div>
                           </td>
-                          <td className="min-w-[150px]">
+                          <td className="min-w-[170px] max-w-[260px]">
                             <DeptSplit rows={depts[w.name] ?? []} colors={colors} />
                           </td>
                           <td className="tnum text-right">
@@ -215,13 +229,7 @@ export function Workflows() {
                               );
                             })()}
                           </td>
-                          <td className="min-w-[260px] max-w-[320px]">
-                            <ScopeLine label="limits" items={limits(w)} empty="none" />
-                            <ScopeLine label="who" items={[...w.teams, ...w.roles.map((r) => `role:${r}`)]} empty="everyone" />
-                            <ScopeLine label="models" items={w.models} empty="any" />
-                            <ScopeLine label="tools" items={w.tools} empty="any" />
-                          </td>
-                          <td>
+                          <td onClick={(e) => e.stopPropagation()}>
                             <div className="flex items-center justify-center gap-2">
                               <Toggle
                                 label={`${w.name} requires admin approval`}
@@ -233,7 +241,7 @@ export function Workflows() {
                               <span className="w-9 text-xs text-muted">{w.approval === "admin" ? "admin" : "none"}</span>
                             </div>
                           </td>
-                          <td className="text-center">
+                          <td className="text-center" onClick={(e) => e.stopPropagation()}>
                             <Toggle
                               label={`${w.name} enabled`}
                               checked={w.enabled}

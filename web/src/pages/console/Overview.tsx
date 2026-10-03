@@ -3,10 +3,10 @@ import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { admin } from "../../api";
 import { org, orgPath, type CostOutlier, type OrgIncident } from "../../orgApi";
-import { StackedChart } from "../../components/charts";
+import { Sparkline, StackedChart } from "../../components/charts";
 import { Delta, UnitTable, useDeptColors, useOrg } from "../../components/org";
 import { SeverityPill } from "../../components/pills";
-import { Card, Empty, ErrorBox, Meter, PageHeader, Q, Segmented, Skeleton, cx } from "../../components/ui";
+import { Card, Empty, ErrorBox, Meter, PageHeader, Q, Segmented, Skeleton, TONE_COLOR, Wash, cx } from "../../components/ui";
 import { useWorkflowColors, wfLabel } from "../../lib/workflows";
 import { ago, count, money, pctAuto, share, times, unitMoney } from "../../lib/format";
 
@@ -40,16 +40,36 @@ export function useCcValue(days: number, f: { department?: string; team?: string
 }
 
 /** A big number with one line of context. Four of these are the whole story. */
-function Tile({ label, value, children, to, tone }: { label: string; value: ReactNode; children?: ReactNode; to?: string; tone?: "bad" | "warn" }) {
+function Tile({
+  label,
+  value,
+  children,
+  to,
+  tone,
+  wash = "accent",
+  aside,
+}: {
+  label: string;
+  value: ReactNode;
+  children?: ReactNode;
+  to?: string;
+  tone?: "bad" | "warn";
+  wash?: "accent" | "cc" | "good" | "warn" | "bad";
+  aside?: ReactNode;
+}) {
   const body = (
-    <div className={cx("h-full rounded-xl border border-line bg-panel p-3.5 shadow-sm sm:p-5", to && "transition-colors hover:border-accent/40")}>
-      <div className="text-xs font-medium text-muted">{label}</div>
-      <div className={cx("tnum mt-2 text-2xl font-semibold tracking-tight sm:text-3xl", tone === "bad" ? "text-bad" : tone === "warn" ? "text-warn" : "text-ink")}>{value}</div>
-      {children && <div className="mt-2 space-y-1.5 text-xs text-muted">{children}</div>}
+    <div className={cx("soft-card relative h-full overflow-hidden rounded-2xl p-3.5 sm:p-5", to && "transition hover:-translate-y-0.5 hover:shadow-lg")}>
+      <Wash color={TONE_COLOR[wash]} height="7rem" opacity={0.09} />
+      <div className="relative text-xs font-medium text-muted">{label}</div>
+      <div className="relative mt-2 flex items-end justify-between gap-3">
+        <div className={cx("tnum text-2xl font-semibold tracking-tight sm:text-3xl", tone === "bad" ? "text-bad" : tone === "warn" ? "text-warn" : "text-ink")}>{value}</div>
+        {aside && <div className="hidden w-[42%] max-w-[140px] sm:block">{aside}</div>}
+      </div>
+      {children && <div className="relative mt-2 space-y-1.5 text-xs text-muted">{children}</div>}
     </div>
   );
   return to ? (
-    <Link to={to} className="block rounded-xl focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/50">
+    <Link to={to} className="block rounded-2xl focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/50">
       {body}
     </Link>
   ) : (
@@ -60,12 +80,13 @@ function Tile({ label, value, children, to, tone }: { label: string; value: Reac
 function Tiles() {
   const ov = useQuery({ queryKey: ["admin", "overview"], queryFn: admin.overview, refetchInterval: 10_000 });
   const o = useOrg(DAYS);
+  const ts = useQuery({ queryKey: ["admin", "timeseries", "workflow", DAYS], queryFn: () => org.timeseries("workflow", DAYS), refetchInterval: 60_000 });
   if (o.isError) return <ErrorBox error={o.error} retry={() => o.refetch()} />;
   if (!o.data || !ov.data)
     return (
       <div className="grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-4">
         {Array.from({ length: 4 }, (_, i) => (
-          <Skeleton key={i} className="h-[136px] rounded-xl" />
+          <Skeleton key={i} className="h-[136px] rounded-2xl" />
         ))}
       </div>
     );
@@ -75,7 +96,13 @@ function Tiles() {
   const over = budget ? v.spend.month_forecast > budget : false;
   return (
     <div className="grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-4">
-      <Tile label="AI spend, month to date" value={money(v.spend.month_to_date)}>
+      <Tile
+        label="AI spend, month to date"
+        value={money(v.spend.month_to_date)}
+        tone={over ? "bad" : undefined}
+        wash={over ? "bad" : "accent"}
+        aside={ts.data && <Sparkline values={ts.data.totals.slice(0, -1)} color="rgb(var(--accent))" height={36} min={0} />}
+      >
         {budget ? <Meter value={v.spend.month_forecast} max={budget} /> : null}
         <div>
           Forecast <span className={over ? "font-semibold text-bad" : "font-medium text-ink2"}>{money(v.spend.month_forecast)}</span>
@@ -85,7 +112,7 @@ function Tiles() {
           Last {DAYS} days {money(t.usd)} <Delta cur={t.usd} prev={t.usd_prev} />
         </div>
       </Tile>
-      <Tile label="Policy adherence" value={pctAuto(t.adherence)} tone={(t.adherence ?? 1) < 0.95 ? "warn" : undefined} to="/console/security">
+      <Tile label="Policy adherence" value={pctAuto(t.adherence)} tone={(t.adherence ?? 1) < 0.95 ? "warn" : undefined} wash={(t.adherence ?? 1) < 0.95 ? "warn" : "good"} to="/console/security">
         <div>
           {count(t.interventions)} interventions in {count(t.checks)} checks
         </div>
@@ -94,13 +121,14 @@ function Tiles() {
         label="People at risk"
         value={count(t.people_at_risk)}
         tone={t.people_at_risk ? "warn" : undefined}
+        wash={t.incidents_open ? "bad" : "good"}
         to={orgPath.people({ sort: "risk" })}
       >
         <div className={t.incidents_open ? "font-medium text-bad" : undefined}>
           {count(t.incidents_open)} open incident{t.incidents_open === 1 ? "" : "s"}
         </div>
       </Tile>
-      <Tile label="Spend per active person" value={unitMoney(t.usd_per_active)} to={orgPath.root}>
+      <Tile label="Spend per active person" value={unitMoney(t.usd_per_active)} wash="cc" to={orgPath.root}>
         <div>
           {count(o.data.active)} of {count(o.data.headcount)} people used AI ({share(o.data.active / Math.max(o.data.headcount, 1))})
         </div>
@@ -181,7 +209,13 @@ function NeedsAttention() {
           {items.map((it) =>
             it.kind === "incident" ? (
               <li key={it.i.id}>
-                <Link to={`/console/incidents/${encodeURIComponent(it.i.id)}`} className="flex items-start gap-3 px-4 py-3 hover:bg-raised/60">
+                <Link
+                  to={`/console/incidents/${encodeURIComponent(it.i.id)}`}
+                  className={cx(
+                    "flex items-start gap-3 border-l-[3px] px-4 py-3 transition-colors",
+                    it.i.severity === "high" ? "border-bad bg-bad/[0.06] hover:bg-bad/10" : it.i.severity === "medium" ? "border-serious/70 hover:bg-raised/60" : "border-warn/60 hover:bg-raised/60",
+                  )}
+                >
                   <SeverityPill severity={it.i.severity} />
                   <div className="min-w-0 flex-1">
                     <div className="truncate text-sm font-medium text-ink">{it.i.rule.replace(/_/g, " ")}</div>
@@ -194,7 +228,7 @@ function NeedsAttention() {
               </li>
             ) : (
               <li key={`c:${it.c.principal}`}>
-                <Link to={orgPath.person(it.c.principal)} className="flex items-start gap-3 px-4 py-3 hover:bg-raised/60">
+                <Link to={orgPath.person(it.c.principal)} className="flex items-start gap-3 border-l-[3px] border-transparent px-4 py-3 hover:bg-raised/60">
                   <span className="tnum inline-flex shrink-0 items-center rounded-full bg-serious/10 px-2 py-0.5 text-[11px] font-medium text-serious ring-1 ring-inset ring-serious/30">
                     {times(it.c.ratio)} cost
                   </span>
@@ -212,7 +246,7 @@ function NeedsAttention() {
           )}
         </ul>
       )}
-      <div className="flex flex-wrap justify-between gap-2 border-t border-line px-4 py-2.5 text-xs">
+      <div className="flex flex-wrap justify-between gap-2 border-t border-line/60 px-5 py-3 text-xs">
         <Link to="/console/security" className="font-medium text-accent hover:underline">
           {openTotal ? `All ${count(openTotal)} open incidents` : "Security"} →
         </Link>

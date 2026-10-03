@@ -6,10 +6,13 @@
    unless the viewer pinned a theme (data-theme on <html>). */
 :root {
   color-scheme: light;
-  --page: 246 247 249;
+  --page: 244 245 249;
   --panel: 255 255 255;
-  --raised: 241 243 246;
-  --line: 226 229 234;
+  --raised: 241 243 248;
+  --line: 224 227 235;
+  --glow-a: 42 120 214;
+  --glow-b: 74 58 167;
+  --glow-alpha: 0.07;
   --ink: 13 16 20;
   --ink2: 61 67 76;
   --muted: 107 114 128;
@@ -56,6 +59,8 @@
     --bad: 240 100 100;
     --info: 86 160 240;
     --cc: 160 150 240;
+  --glow-alpha: 0.12;
+    --glow-alpha: 0.12;
 
     --s1: #3987e5;
     --s2: #d95926;
@@ -91,6 +96,7 @@
   --bad: 240 100 100;
   --info: 86 160 240;
   --cc: 160 150 240;
+  --glow-alpha: 0.12;
 
   --s1: #3987e5;
   --s2: #d95926;
@@ -115,6 +121,30 @@ body {
   color: rgb(var(--ink));
 }
 
+/* A faint wash of the brand gradient behind the top of every page. */
+body {
+  background-image: radial-gradient(60rem 26rem at 18% -6rem, rgb(var(--glow-a) / var(--glow-alpha)), transparent 70%),
+    radial-gradient(50rem 24rem at 92% -8rem, rgb(var(--glow-b) / var(--glow-alpha)), transparent 70%);
+  background-repeat: no-repeat;
+  background-attachment: fixed;
+}
+
+/* The brand gradient: logo, primary buttons, the active nav item marker. */
+.bg-brand {
+  background-image: linear-gradient(135deg, rgb(var(--accent)), rgb(var(--cc)));
+}
+.text-brand {
+  background-image: linear-gradient(90deg, rgb(var(--accent)), rgb(var(--cc)));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+.soft-card {
+  border: 1px solid rgb(var(--line) / 0.7);
+  background: rgb(var(--panel));
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.04), 0 8px 24px -16px rgb(var(--glow-b) / 0.18);
+}
+
 body {
   font-feature-settings: "cv11", "ss01";
   -webkit-font-smoothing: antialiased;
@@ -131,7 +161,7 @@ body {
   border-spacing: 0;
 }
 .tbl th {
-  @apply sticky top-0 z-[1] bg-panel px-3 py-2 text-left text-[11px] font-medium uppercase tracking-wide text-muted;
+  @apply sticky top-0 z-[1] bg-panel px-3 py-2.5 text-left text-[11px] font-medium uppercase tracking-wide text-muted;
   border-bottom: 1px solid rgb(var(--line));
 }
 .tbl th.text-right {
@@ -141,8 +171,8 @@ body {
   justify-content: flex-end;
 }
 .tbl td {
-  @apply px-3 py-2 align-middle;
-  border-bottom: 1px solid rgb(var(--line) / 0.6);
+  @apply px-3 py-2.5 align-middle;
+  border-bottom: 1px solid rgb(var(--line) / 0.5);
 }
 .tbl tbody tr:last-child td {
   border-bottom: 0;
@@ -153,9 +183,17 @@ body {
 .tbl tbody tr.row-link:hover td {
   background: rgb(var(--raised) / 0.7);
 }
+.tbl th:first-child,
+.tbl td:first-child {
+  padding-left: 1.25rem;
+}
+.tbl th:last-child,
+.tbl td:last-child {
+  padding-right: 1.25rem;
+}
 
 .input {
-  @apply w-full rounded-md border border-line bg-page px-3 py-2 text-sm text-ink placeholder:text-muted focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30;
+  @apply w-full rounded-lg border border-line bg-page px-3 py-2 text-sm text-ink placeholder:text-muted focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30;
 }
 
 .recharts-cartesian-axis-tick-value {

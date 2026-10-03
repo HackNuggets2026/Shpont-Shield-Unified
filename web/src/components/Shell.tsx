@@ -19,7 +19,7 @@ export interface NavItem {
 function Brand({ area }: { area: string }) {
   return (
     <div className="flex items-center gap-2.5 px-1">
-      <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-accent text-white shadow-sm">
+      <div className="bg-brand flex h-8 w-8 items-center justify-center rounded-xl text-white shadow-sm">
         <IconShield size={18} />
       </div>
       <div className="leading-tight">
@@ -42,9 +42,9 @@ function Nav({ items, onNavigate }: { items: NavItem[]; onNavigate?: () => void 
           onClick={onNavigate}
           className={({ isActive }) =>
             cx(
-              "flex items-center gap-2.5 rounded-md px-2.5 py-2 text-sm font-medium transition-colors",
+              "flex items-center gap-2.5 rounded-xl px-3 py-2 text-sm font-medium transition-colors",
               isActive || it.also?.some((p) => pathname === p || pathname.startsWith(p + "/"))
-                ? "bg-accent/10 text-accent"
+                ? "bg-ink text-page shadow-sm"
                 : "text-ink2 hover:bg-raised hover:text-ink",
             )
           }
@@ -89,8 +89,8 @@ function UserBox() {
   const name = session.role === "admin" ? creds?.adminUser || session.name : session.principal;
   const sub = session.role === "admin" ? "Administrator" : `${session.team} · ${session.job_role}`;
   return (
-    <div className="flex items-center gap-2 rounded-lg border border-line bg-raised/50 p-2">
-      <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-ink/10 text-xs font-semibold uppercase text-ink">
+    <div className="flex items-center gap-2 rounded-xl border border-line/70 bg-raised/50 p-2">
+      <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-accent/15 text-xs font-semibold uppercase text-accent">
         {name.slice(0, 2)}
       </div>
       <div className="min-w-0 flex-1 leading-tight">
@@ -125,9 +125,9 @@ export function Shell({ area, items, search }: { area: string; items: NavItem[];
 
   return (
     <div className="min-h-screen bg-page">
-      <aside className="fixed inset-y-0 left-0 z-30 hidden w-60 border-r border-line bg-panel lg:block">{side}</aside>
+      <aside className="fixed inset-y-0 left-0 z-30 hidden w-60 border-r border-line/70 bg-panel/80 backdrop-blur-xl lg:block">{side}</aside>
 
-      <header className="sticky top-0 z-30 flex items-center justify-between border-b border-line bg-panel/95 px-4 py-2.5 backdrop-blur lg:hidden">
+      <header className="sticky top-0 z-30 flex items-center justify-between border-b border-line/70 bg-panel/85 px-4 py-2.5 backdrop-blur-xl lg:hidden">
         <Brand area={area} />
         <button type="button" onClick={() => setOpen(true)} className="rounded-md p-2 text-ink2 hover:bg-raised" aria-label="Open menu">
           <IconBars size={18} />
@@ -146,7 +146,7 @@ export function Shell({ area, items, search }: { area: string; items: NavItem[];
       )}
 
       <main className="lg:pl-60">
-        <div className="mx-auto max-w-[1400px] px-4 py-5 sm:px-6 lg:py-7">
+        <div className="mx-auto max-w-[1400px] px-4 py-5 sm:px-8 lg:py-8">
           <Outlet />
         </div>
       </main>

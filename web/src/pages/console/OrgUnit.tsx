@@ -12,7 +12,7 @@ import { WINDOWS } from "./Overview";
 
 function Tile({ label, value, children, tone }: { label: string; value: ReactNode; children?: ReactNode; tone?: "bad" | "warn" }) {
   return (
-    <div className="h-full rounded-xl border border-line bg-panel p-4 shadow-sm">
+    <div className="h-full soft-card rounded-2xl p-4">
       <div className="text-xs font-medium text-muted">{label}</div>
       <div className={cx("tnum mt-1.5 text-2xl font-semibold tracking-tight", tone === "bad" ? "text-bad" : tone === "warn" ? "text-warn" : "text-ink")}>{value}</div>
       {children && <div className="mt-1.5 space-y-1 text-xs text-muted">{children}</div>}

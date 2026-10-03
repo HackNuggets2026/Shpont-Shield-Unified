@@ -22,11 +22,11 @@ export function PageHeader({
   back?: ReactNode;
 }) {
   return (
-    <div className="mb-5 flex flex-wrap items-end justify-between gap-3">
+    <div className="mb-6 flex flex-wrap items-end justify-between gap-3">
       <div className="min-w-0">
-        {back && <div className="mb-1 text-xs text-muted">{back}</div>}
-        <h1 className="truncate text-xl font-semibold tracking-tight text-ink">{title}</h1>
-        {subtitle && <p className="mt-0.5 text-sm text-muted">{subtitle}</p>}
+        {back && <div className="mb-1.5 text-xs text-muted">{back}</div>}
+        <h1 className="truncate text-2xl font-semibold tracking-tight text-ink">{title}</h1>
+        {subtitle && <p className="mt-1 max-w-3xl text-sm text-ink2">{subtitle}</p>}
       </div>
       {actions && <div className="flex flex-wrap items-center gap-2">{actions}</div>}
     </div>
@@ -41,6 +41,7 @@ export function Card({
   className,
   bodyClass,
   flush,
+  tint,
 }: {
   title?: ReactNode;
   subtitle?: ReactNode;
@@ -49,22 +50,41 @@ export function Card({
   className?: string;
   bodyClass?: string;
   flush?: boolean;
+  /** A CSS color washed softly over the top of the card. */
+  tint?: string;
 }) {
   return (
-    <section className={cx("min-w-0 rounded-xl border border-line bg-panel shadow-sm", className)}>
+    <section className={cx("soft-card relative min-w-0 overflow-hidden rounded-2xl", className)}>
+      {tint && <Wash color={tint} />}
       {(title || actions) && (
-        <header className="flex flex-wrap items-center justify-between gap-2 border-b border-line px-4 py-3">
+        <header className={cx("relative flex flex-wrap items-start justify-between gap-2 px-5 pt-4", flush ? "border-b border-line/60 pb-3" : "pb-1")}>
           <div className="min-w-0">
-            {title && <h2 className="text-sm font-semibold text-ink">{title}</h2>}
-            {subtitle && <p className="text-xs text-muted">{subtitle}</p>}
+            {title && <h2 className="text-[15px] font-semibold text-ink">{title}</h2>}
+            {subtitle && <p className="mt-0.5 text-xs text-muted">{subtitle}</p>}
           </div>
           {actions && <div className="flex flex-wrap items-center gap-2">{actions}</div>}
         </header>
       )}
-      <div className={cx(flush ? "" : "p-4", bodyClass)}>{children}</div>
+      <div className={cx("relative", flush ? "" : "px-5 pb-5 pt-3", !flush && !(title || actions) && "pt-5", bodyClass)}>{children}</div>
     </section>
   );
 }
+
+/** A soft color wash fading down from the top edge of a card. */
+export function Wash({ color, height = "6rem", opacity = 0.1 }: { color: string; height?: string; opacity?: number }) {
+  return <span aria-hidden className="pointer-events-none absolute inset-x-0 top-0" style={{ height, background: `linear-gradient(to bottom, ${color}, transparent)`, opacity }} />;
+}
+
+export const TONE_COLOR: Record<Tone, string> = {
+  neutral: "rgb(var(--muted))",
+  good: "rgb(var(--good))",
+  warn: "rgb(var(--warn))",
+  serious: "rgb(var(--serious))",
+  bad: "rgb(var(--bad))",
+  info: "rgb(var(--info))",
+  accent: "rgb(var(--accent))",
+  cc: "rgb(var(--cc))",
+};
 
 /** Horizontal scroll wrapper so wide tables never break the page width. */
 export function TableWrap({ children, maxH }: { children: ReactNode; maxH?: string }) {
@@ -123,7 +143,7 @@ export function Dot({ tone }: { tone: Tone }) {
 
 type BtnVariant = "primary" | "secondary" | "ghost" | "danger" | "good";
 const BTN: Record<BtnVariant, string> = {
-  primary: "bg-accent text-white hover:bg-accent/90 shadow-sm",
+  primary: "bg-brand text-white shadow-sm hover:brightness-110",
   secondary: "bg-panel text-ink ring-1 ring-inset ring-line hover:bg-raised",
   ghost: "text-ink2 hover:bg-raised hover:text-ink",
   danger: "bg-bad text-white hover:bg-bad/90 shadow-sm",
@@ -141,7 +161,7 @@ export function Button({
     <button
       type="button"
       className={cx(
-        "inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-md font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 disabled:cursor-not-allowed disabled:opacity-50",
+        "inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-lg font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 disabled:cursor-not-allowed disabled:opacity-50",
         size === "sm" ? "h-7 px-2.5 text-xs" : "h-9 px-3.5 text-sm",
         BTN[variant],
         className,
@@ -165,7 +185,7 @@ export function Segmented<T extends string>({
   size?: "sm" | "md";
 }) {
   return (
-    <div className="inline-flex rounded-md bg-raised p-0.5 ring-1 ring-inset ring-line" role="tablist">
+    <div className="inline-flex rounded-full bg-raised p-0.5 ring-1 ring-inset ring-line/70" role="tablist">
       {options.map((o) => (
         <button
           key={o.value}
@@ -174,9 +194,9 @@ export function Segmented<T extends string>({
           aria-selected={o.value === value}
           onClick={() => onChange(o.value)}
           className={cx(
-            "rounded px-2.5 font-medium transition-colors",
+            "rounded-full px-3 font-medium transition-colors",
             size === "sm" ? "h-6 text-xs" : "h-8 text-sm",
-            o.value === value ? "bg-panel text-ink shadow-sm ring-1 ring-line" : "text-muted hover:text-ink",
+            o.value === value ? "bg-ink text-page shadow-sm" : "text-muted hover:text-ink",
           )}
         >
           {o.label}
@@ -253,17 +273,18 @@ export function Kpi({
   to?: string;
 }) {
   const body = (
-    <div className={cx("h-full rounded-xl border border-line bg-panel p-4 shadow-sm", to && "transition-colors hover:border-accent/40")}>
-      <div className="flex items-center justify-between gap-2 text-xs font-medium text-muted">
+    <div className={cx("soft-card relative h-full overflow-hidden rounded-2xl p-4", to && "transition hover:-translate-y-0.5 hover:shadow-lg")}>
+      {tone && tone !== "neutral" && <Wash color={TONE_COLOR[tone]} opacity={0.08} />}
+      <div className="relative flex items-center justify-between gap-2 text-xs font-medium text-muted">
         <span className="min-w-0 leading-tight">{label}</span>
         {icon && <span className={cx("shrink-0", tone && tone !== "neutral" ? TONE[tone].split(" ")[1] : "text-muted")}>{icon}</span>}
       </div>
-      <div className="mt-2 text-2xl font-semibold tracking-tight text-ink">{value}</div>
-      {sub && <div className="mt-1 text-xs text-muted">{sub}</div>}
+      <div className="relative mt-2 text-2xl font-semibold tracking-tight text-ink">{value}</div>
+      {sub && <div className="relative mt-1 text-xs text-muted">{sub}</div>}
     </div>
   );
   return to ? (
-    <Link to={to} className="block focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 rounded-xl">
+    <Link to={to} className="block focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 rounded-2xl">
       {body}
     </Link>
   ) : (
