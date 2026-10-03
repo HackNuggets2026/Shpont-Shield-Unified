@@ -1,5 +1,7 @@
 """Regression tests for review findings: each test names the input that used to misbehave."""
 
+import gzip
+import json
 import time
 
 import pytest
@@ -65,3 +67,34 @@ def test_authorize_refuses_new_leases_to_a_quarantined_principal(client):
     client.post("/admin/principals/alice", json={"status": "quarantined", "reason": "test"})
     d = _authorize(client, "alice", "start", "vm", "bugfix")
     assert d["decision"] == "Deny" and d["category"] == "quarantined"
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"resourceLogs": ["x"]},
+        {"resourceLogs": {"a": 1}},
+        {
+            "resourceLogs": [
+                {"scopeLogs": [{"logRecords": [{"attributes": [{"key": "a", "value": {"intValue": "z"}}]}]}]}
+            ]
+        },
+    ],
+)
+def test_malformed_otlp_logs_are_a_400_not_a_500(client, body):
+    assert client.post("/v1/logs", json=body, headers=KEYS["carol"]).status_code == 400
+
+
+def test_malformed_otlp_metrics_are_a_400_not_a_500(client):
+    m = {"name": "claude_code.commit.count", "sum": {"dataPoints": "x"}}
+    body = {"resourceMetrics": [{"scopeMetrics": [{"metrics": [m]}]}]}
+    assert client.post("/v1/metrics", json=body, headers=KEYS["carol"]).status_code == 400
+
+
+def test_otlp_gzip_bomb_and_broken_gzip_are_refused(client):
+    bomb = gzip.compress(b"{" + b" " * (40 << 20) + b"}")  # 40 MB of JSON whitespace, ~40 KB on the wire
+    r = client.post("/v1/logs", content=bomb, headers={**KEYS["carol"], "content-encoding": "gzip"})
+    assert r.status_code == 413
+    assert client.post("/v1/logs", content=b"\x1f\x8bnot gzip", headers=KEYS["carol"]).status_code == 400
+    ok = gzip.compress(json.dumps({"resourceLogs": []}).encode())
+    assert client.post("/v1/logs", content=ok, headers={**KEYS["carol"], "content-encoding": "gzip"}).status_code == 200

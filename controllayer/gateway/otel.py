@@ -11,10 +11,10 @@ people are matched by `user.email` against `identity.api_keys.*.email`.
 
 from __future__ import annotations
 
-import gzip
 import hmac
 import json
 import logging
+import zlib
 from collections.abc import Callable
 from typing import Any
 
@@ -27,6 +27,28 @@ from ..controls.access import authenticate
 from ..engine import ControlLayer
 
 log = logging.getLogger(__name__)
+
+MAX_BODY = 8 << 20  # bytes, on the wire and after gunzip: an export batch is far smaller
+
+
+class _TooLarge(Exception):
+    pass
+
+
+async def _body(request: Request) -> bytes:
+    """The request body, gunzipped, refusing anything over MAX_BODY (a gzip bomb included)."""
+    raw = bytearray()
+    async for chunk in request.stream():
+        raw += chunk
+        if len(raw) > MAX_BODY:
+            raise _TooLarge
+    if request.headers.get("content-encoding", "").lower() == "gzip" or raw[:2] == b"\x1f\x8b":
+        d = zlib.decompressobj(16 + zlib.MAX_WBITS)
+        out = d.decompress(bytes(raw), MAX_BODY + 1)
+        if len(out) > MAX_BODY or d.unconsumed_tail:
+            raise _TooLarge
+        return out
+    return bytes(raw)
 
 
 def register(app: FastAPI, store: PolicyStore, layer: ControlLayer, api_key: Callable[[Request], str | None]) -> None:
@@ -42,9 +64,12 @@ def register(app: FastAPI, store: PolicyStore, layer: ControlLayer, api_key: Cal
         if "protobuf" in request.headers.get("content-type", ""):
             msg = "send OTLP as JSON: OTEL_EXPORTER_OTLP_PROTOCOL=http/json"
             return None, JSONResponse({"error": msg}, status_code=415), None
-        raw = await request.body()
-        if request.headers.get("content-encoding", "").lower() == "gzip" or raw[:2] == b"\x1f\x8b":
-            raw = gzip.decompress(raw)
+        try:
+            raw = await _body(request)
+        except _TooLarge:
+            return None, JSONResponse({"error": f"body over {MAX_BODY} bytes"}, status_code=413), None
+        except zlib.error:
+            return None, JSONResponse({"error": "body is not valid gzip"}, status_code=400), None
         try:
             body = json.loads(raw or b"{}")
         except ValueError:
@@ -71,7 +96,11 @@ def register(app: FastAPI, store: PolicyStore, layer: ControlLayer, api_key: Cal
         body, error, who = await receive(request)
         if error:
             return error
-        ingest(claude_code.log_events(body), who)
+        try:
+            events = claude_code.log_events(body)
+        except (AttributeError, TypeError, ValueError, KeyError) as e:
+            return JSONResponse({"error": f"not OTLP logs JSON: {type(e).__name__}"}, status_code=400)
+        ingest(events, who)
         return {"partialSuccess": {}}
 
     @app.post("/v1/metrics")
@@ -79,5 +108,9 @@ def register(app: FastAPI, store: PolicyStore, layer: ControlLayer, api_key: Cal
         body, error, who = await receive(request)
         if error:
             return error
-        ingest(claude_code.metric_events(body, cumulative), who)
+        try:
+            events = claude_code.metric_events(body, cumulative)
+        except (AttributeError, TypeError, ValueError, KeyError) as e:
+            return JSONResponse({"error": f"not OTLP metrics JSON: {type(e).__name__}"}, status_code=400)
+        ingest(events, who)
         return {"partialSuccess": {}}
