@@ -849,3 +849,70 @@ def test_base64_images_are_allowed_by_default_and_can_be_blocked(policy_dir, mon
     r = ask(c, tool_turn([image]))
     assert r.status_code == 400 and "upstream.anthropic.opaque_images" in r.json()["error"]["message"]
     assert len(sent) == 2
+
+
+# --- unusual upstream streams -----------------------------------------------------------------
+
+
+def raw_upstream(policy_dir, monkeypatch, body):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", ORG_KEY)
+    edit_policy(policy_dir, lambda p: p["upstream"]["anthropic"].update(backend="anthropic"))
+    transport = httpx.MockTransport(lambda r: httpx.Response(200, text=body))
+    return TestClient(
+        create_app(policy_dir / "policy.yaml", watch=False, upstream_client=httpx.AsyncClient(transport=transport))
+    )
+
+
+def one_block_stream(*deltas):
+    return [
+        ("message_start", {"type": "message_start", "message": {**message(), "content": [], "stop_reason": None}}),
+        ("content_block_start", {"type": "content_block_start", "index": 0, "content_block": text("")}),
+        *[("content_block_delta", {"type": "content_block_delta", "index": 0, "delta": d}) for d in deltas],
+        ("content_block_stop", {"type": "content_block_stop", "index": 0}),
+        (
+            "message_delta",
+            {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 3}},
+        ),
+        ("message_stop", {"type": "message_stop"}),
+    ]
+
+
+def test_unknown_delta_types_are_relayed_unchanged(policy_dir, monkeypatch):
+    split = one_block_stream(
+        {"type": "text_delta", "text": "Hi"},
+        {"type": "future_delta", "note": "more"},
+        {"type": "text_delta", "text": " there"},
+    )
+    c = raw_upstream(policy_dir, monkeypatch, sse_text(split))
+    r = ask(c, "hi", stream=True)
+    assert [(n, d) for n, d in events(r)] == split  # event for event
+    assert "_deltas" not in r.text
+
+
+def test_unknown_delta_types_survive_restoring_placeholders(policy_dir, monkeypatch):
+    future = {"type": "future_delta", "note": "more"}
+    split = one_block_stream({"type": "text_delta", "text": "Hi <PRIVATE_PERSON_1>"}, future)
+    c = raw_upstream(policy_dir, monkeypatch, sse_text(split))
+    r = ask(c, "customer Jan Kowalski", stream=True)
+    evs = events(r)
+    assert assemble(evs)["content"] == [text("Hi Jan Kowalski")]
+    assert future in [d["delta"] for n, d in evs if n == "content_block_delta"]
+    assert "_deltas" not in r.text
+
+
+def test_unknown_delta_types_are_inspected(policy_dir, monkeypatch):
+    split = one_block_stream({"type": "text_delta", "text": "Hi"}, {"type": "future_delta", "note": KEY})
+    c = raw_upstream(policy_dir, monkeypatch, sse_text(split))
+    r = ask(c, "hi", stream=True)
+    msg = assemble(events(r))
+    assert msg["content"][0]["type"] == "text" and "Withheld by policy" in msg["content"][0]["text"]
+    assert "AKIA" not in r.text and "_deltas" not in r.text
+
+
+@pytest.mark.parametrize("data", ["[1, 2]", '"text"', "7", "null"])
+def test_upstream_event_data_that_is_not_an_object_ends_the_stream_with_an_error(policy_dir, monkeypatch, data):
+    start = anthropic.message_events(message(text("x")))[0]
+    c = raw_upstream(policy_dir, monkeypatch, sse_text([start]) + f"event: content_block_start\ndata: {data}\n\n")
+    r = ask(c, "hi", stream=True)
+    assert r.status_code == 200
+    assert r.text.rstrip().endswith('"message": "upstream stream failed"}}')

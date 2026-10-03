@@ -231,6 +231,8 @@ def _sse(event: str, data: dict[str, Any]) -> str:
 
 def block_events(index: int, block: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
     """A complete content block as the start / delta / stop events of a stream."""
+    block = dict(block)
+    unknown = block.pop("_deltas", [])  # delta types this gateway does not know, as received
     t = block.get("type")
     deltas: list[dict[str, Any]] = []
     if t == "text":
@@ -251,6 +253,7 @@ def block_events(index: int, block: dict[str, Any]) -> list[tuple[str, dict[str,
             deltas.append({"type": "signature_delta", "signature": block["signature"]})
     else:  # redacted thinking, server tool results: complete in their start event
         start = block
+    deltas += unknown
     return [
         ("content_block_start", {"type": "content_block_start", "index": index, "content_block": start}),
         *(("content_block_delta", {"type": "content_block_delta", "index": index, "delta": d}) for d in deltas),
@@ -271,19 +274,27 @@ def message_events(msg: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
     return events
 
 
+def _event_data(lines: list[str]) -> dict[str, Any]:
+    data = json.loads("\n".join(lines))
+    if not isinstance(data, dict):
+        raise ValueError("event data is not a JSON object")
+    return data
+
+
 async def sse_events(lines: AsyncIterator[str]) -> AsyncIterator[tuple[str, dict[str, Any]]]:
+    """Raises ValueError on data that is not a JSON object."""
     event, data = "", []
     async for line in lines:
         if line == "":
             if data:
-                yield event or "message", json.loads("\n".join(data))
+                yield event or "message", _event_data(data)
             event, data = "", []
         elif line.startswith("event:"):
             event = line[6:].strip()
         elif line.startswith("data:"):
             data.append(line[5:].lstrip())
     if data:
-        yield event or "message", json.loads("\n".join(data))
+        yield event or "message", _event_data(data)
 
 
 class _Block:
@@ -746,7 +757,7 @@ def mount(app: FastAPI, layer: ControlLayer, store: PolicyStore, http: httpx.Asy
             nonlocal index
             assembled = dict(block.block)
             released = await reply.check(assembled, extra)
-            if released == assembled and "_deltas" not in assembled:
+            if released == assembled:
                 events = [(e, {**d, "index": index}) for e, d in block.raw]  # unchanged: byte-faithful replay
             else:
                 events = block_events(index, released)
