@@ -37,3 +37,31 @@ def test_otlp_cost_that_is_not_a_finite_positive_number_is_dropped(client):
     assert client.post("/v1/logs", json=body, headers=KEYS["carol"]).status_code == 200
     assert _spent(client, "carol") == 0
     assert chat(client, "hello", who="carol").status_code == 200
+
+
+def _authorize(c, who: str, action: str, resource: str, workflow: str | None = None) -> dict:
+    body = {"action": action, "resource": resource, "context": {"workflow": workflow} if workflow else {}}
+    return c.post("/v1/authorize", json=body, headers=KEYS[who]).json()
+
+
+def test_authorize_does_not_lend_a_workflow_the_caller_may_not_order(client):
+    # data_analysis (finance, engineering) includes external_email; an intern used to get Allow by naming it.
+    assert _authorize(client, "bob", "send", "external_email", "data_analysis")["decision"] == "Allow"
+    d = _authorize(client, "carol", "send", "external_email", "data_analysis")
+    assert d["decision"] == "Deny" and d["category"] == "workflow_not_available"
+    # load_test needs admin approval per person.
+    assert _authorize(client, "alice", "start", "vm", "load_test")["category"] == "workflow_not_available"
+    # The gateway agrees: the same workflow header is refused there too.
+    r = client.post(
+        "/v1/chat/completions",
+        json={"model": "mock-model", "messages": [{"role": "user", "content": "hello"}]},
+        headers={**KEYS["carol"], "x-acl-workflow": "data_analysis"},
+    )
+    assert r.status_code == 403
+
+
+def test_authorize_refuses_new_leases_to_a_quarantined_principal(client):
+    assert _authorize(client, "alice", "start", "vm", "bugfix")["decision"] == "Allow"
+    client.post("/admin/principals/alice", json={"status": "quarantined", "reason": "test"})
+    d = _authorize(client, "alice", "start", "vm", "bugfix")
+    assert d["decision"] == "Deny" and d["category"] == "quarantined"

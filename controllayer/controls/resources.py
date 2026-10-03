@@ -26,6 +26,7 @@ from ..config import Policy, Resource
 from ..types import Action, Context, Direction, Finding, Principal
 from ..usage import UsageStore
 from .budget import BudgetLedger
+from .workflows import availability
 
 Signal = Callable[[str, str, str, list[str]], None]  # rule, principal, detail, evidence
 
@@ -81,6 +82,11 @@ def authorize(
     if r.actions and action not in r.actions and action != "use":
         return deny("unknown_action", f"{resource} supports {r.actions}, not {action!r}")
     wf = policy.menu.workflows.get(workflow or "")
+    if wf is not None:
+        # A workflow the principal may not order (team, role, approval, disabled) includes nothing for them.
+        why = availability(policy, workflow or "", wf, principal.id, principal.team, principal.role)
+        if why:
+            return deny("workflow_not_available", f"workflow {workflow!r}: {why}")
     in_wf = wf is not None and resource in wf.resources
 
     if r.class_ == "consumable":
@@ -96,6 +102,8 @@ def authorize(
 
     if r.class_ == "leasable":
         if action == "start":
+            if pp.status == "quarantined":
+                return deny("quarantined", f"{principal.id!r} is quarantined; no new {resource} leases")
             if wf is not None and not in_wf:
                 return deny("resource_not_in_workflow", f"workflow {workflow!r} does not lease {resource}")
             caps = [r.lease.max_concurrent_per_principal if r.lease else None]
