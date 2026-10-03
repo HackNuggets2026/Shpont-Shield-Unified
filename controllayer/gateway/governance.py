@@ -334,11 +334,21 @@ def register(
             "totals": [round(sum(v[i] for v in ordered.values()), 6) for i in range(days)],
         }
 
-    def timeseries(metric: str, by: str | None, days: int, principal: str | None):
+    def hidden_from(principal: str | None) -> tuple[str, ...]:
+        """Event sources an employee does not see about themselves: incidents, unless the policy shows risk."""
+        return () if principal is None or store.policy.privacy.show_risk_to_employee else ("detections",)
+
+    def timeseries(metric: str, by: str | None, days: int, principal: str | None, own: bool = False):
         days = max(1, min(int(days), 120))
         now = time.time()
         try:
-            rows = usage.timeseries(metric, by or None, _day_start(now) - (days - 1) * DAY, principal)
+            rows = usage.timeseries(
+                metric,
+                by or None,
+                _day_start(now) - (days - 1) * DAY,
+                principal,
+                exclude_sources=hidden_from(principal) if own else (),
+            )
         except ValueError as e:
             return err(str(e))
         return {"metric": metric, "by": by, **pivot(rows, days, now)}
@@ -552,14 +562,16 @@ def register(
         who = me(request)
         if who is None:
             return err("your API key is required", 401)
-        return timeseries(metric, by, days, who.id)
+        return timeseries(metric, by, days, who.id, own=True)
 
     @app.get("/me/activity")
     async def me_activity(request: Request, limit: int = 50, before: float | None = None):
         who = me(request)
         if who is None:
             return err("your API key is required", 401)
-        return usage.events(principal=who.id, limit=max(1, min(limit, 500)), before=before)
+        return usage.events(
+            principal=who.id, limit=max(1, min(limit, 500)), before=before, exclude_sources=hidden_from(who.id)
+        )
 
     @app.post("/me/requests")
     async def me_request(request: Request):

@@ -176,3 +176,21 @@ def test_a_redelivered_cloudevent_is_not_charged_twice(client):
     # The same id from someone else is their own event, not a duplicate of carol's.
     assert client.post("/v1/events", json=ev, headers=KEYS["bob"]).json()["duplicates"] == 0
     assert _spent(client, "bob") == 2.5
+
+
+def _incident_on_carol(c) -> None:
+    c.app.state.layer.risk.signal("zombie_resource", "carol", "vm idle", ["lease-1"])
+
+
+def test_incident_events_stay_private_when_the_policy_hides_risk(make_client):
+    c = make_client(mutate=lambda d: d["privacy"].update(show_risk_to_employee=False))
+    _incident_on_carol(c)
+    assert any(e["kind"] == "incident" for e in c.get("/admin/activity", params={"principal": "carol"}).json())
+    mine = c.get("/me/activity", headers=KEYS["carol"]).json()
+    assert not any(e["kind"] == "incident" for e in mine)
+    ts = c.get("/me/timeseries", params={"metric": "events", "by": "kind"}, headers=KEYS["carol"]).json()
+    assert "incident" not in ts["series"]
+    # With risk shown to employees, they do see it.
+    c2 = make_client(mutate=lambda d: d["privacy"].update(show_risk_to_employee=True))
+    _incident_on_carol(c2)
+    assert any(e["kind"] == "incident" for e in c2.get("/me/activity", headers=KEYS["carol"]).json())

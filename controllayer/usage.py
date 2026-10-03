@@ -391,10 +391,19 @@ class UsageStore:
         )
 
     def events(
-        self, since: float = 0, until: float | None = None, limit: int = 200, before: float | None = None, **eq: Any
+        self,
+        since: float = 0,
+        until: float | None = None,
+        limit: int = 200,
+        before: float | None = None,
+        exclude_sources: tuple[str, ...] = (),
+        **eq: Any,
     ) -> list[dict[str, Any]]:
         """Newest first. `eq` filters on columns (EVENT_FILTERS); a list value matches any of its items."""
         where, args = ["ts>=?"], [since]
+        if exclude_sources:
+            where.append(f"COALESCE(source, '') NOT IN ({', '.join('?' * len(exclude_sources))})")
+            args.extend(exclude_sources)
         if until is not None:
             where.append("ts<?")
             args.append(until)
@@ -440,7 +449,12 @@ class UsageStore:
         )
 
     def timeseries(
-        self, metric: str, by: str | None, since: float, principal: str | None = None
+        self,
+        metric: str,
+        by: str | None,
+        since: float,
+        principal: str | None = None,
+        exclude_sources: tuple[str, ...] = (),
     ) -> list[dict[str, Any]]:
         """Daily totals of usd | tokens (usage ledger) or events (activity stream), split by one column."""
         if metric in ("usd", "tokens"):
@@ -455,6 +469,9 @@ class UsageStore:
         else:
             raise ValueError("metric must be usd, tokens or events")
         args: list[Any] = [since]
+        if exclude_sources and table == "events":
+            where += f" AND COALESCE(source, '') NOT IN ({', '.join('?' * len(exclude_sources))})"
+            args.extend(exclude_sources)
         if principal:
             where += " AND principal=?"
             args.append(principal)
