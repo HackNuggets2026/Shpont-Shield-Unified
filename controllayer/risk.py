@@ -105,6 +105,10 @@ class RiskEngine:
     def reset(self, pid: str) -> None:
         self._scores.pop(pid, None)
 
+    def restore_score(self, pid: str, score: float, at: float) -> None:
+        """A score as it stood at `at` (seeded history); it decays from then on."""
+        self._scores[pid] = (score, at)
+
     def _add(self, policy: Policy, pid: str, points: float, now: float) -> None:
         self._scores[pid] = (self.score(policy, pid, now) + points, now)
 

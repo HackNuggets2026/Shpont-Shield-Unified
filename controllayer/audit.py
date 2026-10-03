@@ -7,6 +7,7 @@ import json
 import statistics
 import time
 from collections import Counter, deque
+from collections.abc import Callable
 from contextvars import ContextVar
 from pathlib import Path
 from typing import Any
@@ -33,6 +34,7 @@ class AuditLog:
         self.latency: dict[str, deque[float]] = {}
         self.notes: deque[dict[str, Any]] = deque(maxlen=ring_size)
         self.total = 0
+        self.listeners: list[Callable[[Context, Verdict, dict[str, Any]], None]] = []  # after each decision
 
     def record(
         self, ctx: Context, v: Verdict, extra: dict[str, Any] | None = None, raw: bool = False, inspected: bool = True
@@ -89,6 +91,8 @@ class AuditLog:
         if self.path:
             with self.path.open("a") as fh:
                 fh.write(json.dumps(event) + "\n")
+        for listener in self.listeners:
+            listener(ctx, v, event)
         return event
 
     def note(self, kind: str, actor: str, **details: Any) -> dict[str, Any]:

@@ -30,6 +30,9 @@ identity:
   # with "Authorization: Bearer <$token_env>". Disabled while the variable is unset.
   integrations:
     wazuh: { token_env: ACL_WAZUH_TOKEN, max_level: watch, max_ttl_hours: 24 }
+  # More people and agents, with per-person budgets, from a generated file (python -m controllayer.seed
+  # writes a synthetic 2,000-person org there). Read when the policy loads; ignored while it does not exist.
+  directory: data/org.json
 
 models:
   # Glob patterns. Requests naming any other model are refused before reaching it.
@@ -79,6 +82,29 @@ budgets:
     "claude-sonnet-5*": { usd_per_1m_input: 2.0, usd_per_1m_output: 10.0 }
     "claude-sonnet-4*": { usd_per_1m_input: 3.0, usd_per_1m_output: 15.0 }
     "claude-haiku-*": { usd_per_1m_input: 1.0, usd_per_1m_output: 5.0 }
+  # Company services (resources below) are charged per call: an internal chargeback for licences and
+  # compute. `tools` prices single tools that cost more, e.g. per email sent. Unlisted services are free.
+  services:
+    github: { usd_per_call: 0.001 }
+    linear: { usd_per_call: 0.0005 }
+    heroku: { usd_per_call: 0.004, tools: { heroku_scale_formation: 0.05 } }
+    vercel: { usd_per_call: 0.002 }
+    postgres: { usd_per_call: 0.006 }
+    supabase: { usd_per_call: 0.001 }
+    upstash: { usd_per_call: 0.0004 }
+    s3: { usd_per_call: 0.0008 }
+    snowflake: { usd_per_call: 0.04, tools: { snowflake_list_tables: 0.002 } }
+    stripe: { usd_per_call: 0.002 }
+    salesforce: { usd_per_call: 0.008 }
+    hubspot: { usd_per_call: 0.003 }
+    zendesk: { usd_per_call: 0.004 }
+    slack: { usd_per_call: 0.0003 }
+    notion: { usd_per_call: 0.0006 }
+    gdrive: { usd_per_call: 0.0005 }
+    datadog: { usd_per_call: 0.003 }
+    pagerduty: { usd_per_call: 0.002 }
+    zapier: { usd_per_call: 0.002, tools: { zapier_trigger_zap: 0.02 } }
+    sendgrid: { usd_per_call: 0.0005, tools: { sendgrid_send_email: 0.001 } }
   loop_guard: { max_identical_calls: 5, window_seconds: 60 }
 
 # --- Deterministic controls -------------------------------------------------

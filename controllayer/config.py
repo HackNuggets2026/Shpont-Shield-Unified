@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import os
 import re
@@ -30,6 +31,7 @@ class ApiKey(_Strict):
     role: str
     kind: Literal["human", "agent"] = "human"
     owner: str | None = None  # agents: the employee who decides which resources the agent may use
+    name: str | None = None  # display name
 
     @model_validator(mode="after")
     def _owner(self) -> ApiKey:
@@ -58,6 +60,9 @@ class Identity(_Strict):
     demo_mode: bool = False
     demo_principal: str | None = None  # a human principal from api_keys
     integrations: dict[Annotated[str, Field(pattern=r"^[A-Za-z0-9_.-]+$")], Integration] = Field(default_factory=dict)
+    # A generated people file (`api_keys` and per-person `budgets`, JSON) merged in when the policy loads,
+    # relative to the policy file. Skipped while the file does not exist.
+    directory: str | None = None
 
     @model_validator(mode="after")
     def _demo(self) -> Identity:
@@ -301,14 +306,48 @@ class LoopGuard(_Strict):
     window_seconds: float = 60
 
 
+class ServicePrice(_Strict):
+    """What one call to a company service costs."""
+
+    usd_per_call: float = Field(0.0, ge=0)
+    tools: dict[str, Annotated[float, Field(ge=0)]] = Field(default_factory=dict)  # tool -> its own price per call
+
+
 class Budgets(_Strict):
     enabled: bool = True
     shadow: bool = False
     global_: BudgetLimits = Field(default_factory=BudgetLimits, alias="global")
     per_team: dict[str, BudgetLimits] = Field(default_factory=dict)
     per_principal: BudgetLimits = Field(default_factory=BudgetLimits)
+    # principal -> limits replacing per_principal's, field by field (a field left out or null keeps the default)
+    per_person: dict[str, BudgetLimits] = Field(default_factory=dict)
     pricing: dict[str, ModelPrice] = Field(default_factory=dict)
+    services: dict[str, ServicePrice] = Field(default_factory=dict)  # controllayer.services key -> price
     loop_guard: LoopGuard = Field(default_factory=LoopGuard)
+
+    @model_validator(mode="after")
+    def _known_services(self) -> Budgets:
+        from .services import SERVICES
+
+        for name, price in self.services.items():
+            if name not in SERVICES:
+                raise ValueError(f"budgets.services: unknown service {name!r}; known: {sorted(SERVICES)}")
+            unknown = set(price.tools) - {t.name for t in SERVICES[name].tools}
+            if unknown:
+                raise ValueError(f"budgets.services.{name}.tools: unknown {sorted(unknown)}")
+        return self
+
+    def limits_for(self, principal: str) -> BudgetLimits:
+        own = self.per_person.get(principal)
+        if own is None:
+            return self.per_principal
+        return self.per_principal.model_copy(update=own.model_dump(exclude_none=True))
+
+    def call_price(self, service: str, tool: str | None) -> float:
+        price = self.services.get(service)
+        if price is None:
+            return 0.0
+        return price.tools.get(tool or "", price.usd_per_call)
 
 
 class Models(_Strict):
@@ -433,12 +472,34 @@ def _expand_env(text: str) -> str:
     return _ENV.sub(lambda m: os.environ.get(m.group(1)) or (m.group(2) or ""), text)
 
 
-def parse_policy(text: str) -> Policy:
+def _merge_directory(raw: dict, base_dir: Path) -> bytes:
+    """Merge the `identity.directory` file into the raw policy; returns its bytes (b"" when absent)."""
+    identity = raw.get("identity")
+    name = identity.get("directory") if isinstance(identity, dict) else None
+    if not isinstance(name, str) or not (base_dir / name).is_file():
+        return b""
+    data = (base_dir / name).read_bytes()
+    people = json.loads(data)
+    if not isinstance(people, dict) or set(people) - {"api_keys", "budgets"}:
+        raise ValueError(f"directory {name}: expected an object with only api_keys and budgets")
+    raw["budgets"] = raw.get("budgets") or {}
+    for parent, field, section in ((identity, "api_keys", "api_keys"), (raw["budgets"], "per_person", "budgets")):
+        own, extra = parent.get(field) or {}, people.get(section) or {}
+        clash = sorted(set(own) & set(extra))
+        if clash:
+            raise ValueError(f"directory {name}: {section} {clash[:5]} are already in the policy")
+        parent[field] = {**own, **extra}
+    return data
+
+
+def parse_policy(text: str, base_dir: Path | None = None) -> Policy:
+    """`base_dir` (the policy file's folder) enables `identity.directory`."""
     expanded = _expand_env(text)
     raw = yaml.safe_load(expanded) or {}
     raw.pop("version", None)
+    directory = _merge_directory(raw, base_dir) if base_dir is not None else b""
     policy = Policy.model_validate(raw)
-    policy.version = hashlib.sha256(expanded.encode()).hexdigest()[:12]
+    policy.version = hashlib.sha256(expanded.encode() + directory).hexdigest()[:12]
     for team in policy.teams:  # surface bad overrides at load time, not on first request
         policy.for_team(team)
     try:
@@ -465,9 +526,9 @@ class PolicyStore:
 
     def __init__(self, path: str | Path):
         self.path = Path(path)
-        self.policy = parse_policy(self.path.read_text())
-        _warn_demo(self.policy)
         self.base_dir = self.path.parent
+        self.policy = parse_policy(self.path.read_text(), self.base_dir)
+        _warn_demo(self.policy)
         self.last_error: str | None = None
         self.reloads = 0
         self._mtime = self.path.stat().st_mtime_ns
@@ -476,7 +537,7 @@ class PolicyStore:
     def reload(self) -> bool:
         text = self.path.read_text()
         try:
-            new = parse_policy(text)
+            new = parse_policy(text, self.base_dir)
         except Exception as e:  # noqa: BLE001 - any parse/validation error keeps the old policy
             self.last_error = str(e)
             log.error("policy reload rejected: %s", e)

@@ -31,7 +31,7 @@ from ..decision import DecisionBackend
 from ..engine import ControlLayer, flatten
 from ..risk import LEVELS, integration_of
 from ..types import Action, Context, Direction, Verdict
-from . import anthropic, broker, mcp_demo
+from . import anthropic, broker, console_api, mcp_demo
 from .upstream import UpstreamClient
 
 PANELS = Path(__file__).resolve().parent.parent / "dashboard"
@@ -512,6 +512,8 @@ def create_app(
             resp = await forward(req)
         except (httpx.HTTPError, ValueError) as e:
             return rpc(rid, -32002, f"MCP server unavailable: {type(e).__name__}: {e}")
+        if target == "broker" and method == "tools/call" and resource is not None:
+            layer.ledger.record_call(ctx, policy, policy.resources[resource].connection["service"])
         result = resp.get("result")
         if not isinstance(result, dict) or method == "initialize":
             return JSONResponse(resp)
@@ -788,12 +790,16 @@ def create_app(
         }
 
     @app.get("/admin/events")
-    async def events(limit: int = 100, action: str | None = None, control: str | None = None):
+    async def events(
+        limit: int = 100, action: str | None = None, control: str | None = None, principal: str | None = None
+    ):
+        """`principal` matches the actor or, for an agent's events, its owner."""
         out = [
             e
             for e in reversed(layer.audit.events)
             if (not action or e["action"] == action)
             and (not control or any(f["control"] == control for f in e["findings"]))
+            and (not principal or principal in (e["principal"], e.get("owner")))
         ]
         return out[:limit]
 
@@ -1128,6 +1134,7 @@ def create_app(
     async def dashboard():
         return PANEL.read_text()
 
+    console_api.mount(app, layer, store)
     app.mount("/ui", StaticFiles(directory=PANELS), name="ui")
 
     return app

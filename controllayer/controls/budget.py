@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import time
 from collections import defaultdict, deque
+from collections.abc import Callable
 from dataclasses import dataclass
 from fnmatch import fnmatch
 
@@ -38,12 +39,15 @@ class BudgetLedger:
         # (scope, key, day) -> Usage; scope is global | team | principal
         self.usage: dict[tuple[str, str, str], Usage] = defaultdict(Usage)
         self.by_model: dict[tuple[str, str], Usage] = defaultdict(Usage)
+        self.by_service: dict[tuple[str, str], Usage] = defaultdict(Usage)
+        # Called with (ctx, "model:<name>" | "service:<name>", the charge) after every charge.
+        self.listeners: list[Callable[[Context, str, Usage], None]] = []
         self._minute: dict[str, deque[float]] = defaultdict(deque)
         self._calls: dict[str, deque[float]] = defaultdict(deque)
 
     def _scopes(self, ctx: Context, policy: Policy) -> list[tuple[str, str, BudgetLimits]]:
         b = policy.budgets
-        scopes = [("global", "*", b.global_), ("principal", ctx.principal.id, b.per_principal)]
+        scopes = [("global", "*", b.global_), ("principal", ctx.principal.id, b.limits_for(ctx.principal.id))]
         if ctx.principal.team in b.per_team:
             scopes.append(("team", ctx.principal.team, b.per_team[ctx.principal.team]))
         return scopes
@@ -125,16 +129,26 @@ class BudgetLedger:
                 + compute_seconds * price.usd_per_compute_second
             )
         input_tokens += cache_write_tokens + cache_read_tokens
-        day = _day()
-        targets = [self.usage[(scope, key, day)] for scope, key, _ in self._scopes(ctx, policy)]
-        targets.append(self.by_model[(model, day)])
-        for u in targets:
-            u.requests += 1
-            u.input_tokens += input_tokens
-            u.output_tokens += output_tokens
-            u.usd += usd
-            u.compute_seconds += compute_seconds
+        charge = Usage(1, input_tokens, output_tokens, usd, compute_seconds)
+        self._charge(ctx, policy, self.by_model[(model, _day())], f"model:{model}", charge)
         return usd
+
+    def record_call(self, ctx: Context, policy: Policy, service: str) -> float:
+        """Charge one company-service call (ctx.tool) at its `budgets.services` price."""
+        usd = policy.budgets.call_price(service, ctx.tool)
+        self._charge(ctx, policy, self.by_service[(service, _day())], f"service:{service}", Usage(1, usd=usd))
+        return usd
+
+    def _charge(self, ctx: Context, policy: Policy, item: Usage, label: str, charge: Usage) -> None:
+        day = _day()
+        for u in [self.usage[(scope, key, day)] for scope, key, _ in self._scopes(ctx, policy)] + [item]:
+            u.requests += charge.requests
+            u.input_tokens += charge.input_tokens
+            u.output_tokens += charge.output_tokens
+            u.usd += charge.usd
+            u.compute_seconds += charge.compute_seconds
+        for listener in self.listeners:
+            listener(ctx, label, charge)
 
     def snapshot(self, policy: Policy) -> dict:
         day = _day()
@@ -155,7 +169,7 @@ class BudgetLedger:
 
         rows = [row("global", "*", b.global_)]
         rows += [row("team", t, lim) for t, lim in b.per_team.items()]
-        rows += [row("principal", k, b.per_principal) for (s, k, d) in self.usage if s == "principal" and d == day]
+        rows += [row("principal", k, b.limits_for(k)) for (s, k, d) in self.usage if s == "principal" and d == day]
         models = [
             {
                 "model": m,
