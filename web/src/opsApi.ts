@@ -1,6 +1,7 @@
 // Typed client for the enterprise-scale operational endpoints (docs/scale-contract.md): incidents, leases,
 // grants and requests, paginated and filtered server-side, plus their org-level summaries.
 // Lives beside api.ts (which it reuses) so the shared client only ever grows.
+import { severityFirst } from "./lib/security";
 import { get, type AccessRequest, type ActivityEvent, type Breakdown, type Grant, type Incident, type Lease } from "./api";
 
 const A = "/api/admin";
@@ -189,12 +190,41 @@ function rowsOf<T>(r: unknown, ...keys: string[]): T[] {
 // ---- client --------------------------------------------------------------------------------------
 
 export const ops = {
+  /**
+   * Incidents, paged. The server filters by one status, department, rule and principal and pages newest first.
+   * "Needs attention" (two statuses), severity, team, person search and the severity-first order are not on the
+   * server yet (web/API_NOTES_scale_ops.md), so when any of them is in play the matching set is fetched once,
+   * narrowed with the server's filters, and finished here. The unsupported params are sent too, so the server can
+   * take over without a client change.
+   */
   incidents: async (f: IncidentFilters): Promise<IncidentsPage> => {
+    const sort = f.sort ?? "severity";
     const status = f.status === "active" ? "open,acknowledged" : f.status;
+    const local = f.status === "active" || !!f.severity || !!f.team || !!f.q || sort === "severity";
+    if (!local) {
+      const r = await get<{ incidents: OrgIncident[]; total?: number; scores: Record<string, number> }>(`${A}/incidents${qs({ ...f, sort, status })}`);
+      return { ...page(r.incidents ?? [], r.total, f.limit, f.offset), scores: r.scores ?? {} };
+    }
+    const one = f.status && f.status !== "active" ? f.status : undefined;
     const r = await get<{ incidents: OrgIncident[]; total?: number; scores: Record<string, number> }>(
-      `${A}/incidents${qs({ sort: "severity", ...f, status })}`,
+      `${A}/incidents${qs({ ...f, sort, status: one, limit: 5000, offset: 0 })}`,
     );
-    return { ...page(r.incidents ?? [], r.total, f.limit, f.offset), scores: r.scores ?? {} };
+    const q = (f.q ?? "").toLowerCase();
+    const rows = (r.incidents ?? [])
+      .filter(
+        (i) =>
+          (f.status !== "active" || i.status === "open" || i.status === "acknowledged") &&
+          (!one || i.status === one) &&
+          (!f.severity || i.severity === f.severity) &&
+          (!f.team || i.team === f.team) &&
+          (!f.department || i.department === f.department) &&
+          (!f.rule || i.rule === f.rule) &&
+          (!q || i.principal.toLowerCase().includes(q) || (i.name ?? "").toLowerCase().includes(q)),
+      )
+      .sort(sort === "severity" ? severityFirst : (a, b) => b.ts - a.ts);
+    const off = f.offset ?? 0;
+    const lim = f.limit ?? rows.length;
+    return { rows: rows.slice(off, off + lim), total: rows.length, hasMore: off + lim < rows.length, scores: r.scores ?? {} };
   },
   /** Just the count behind a filter (asks for one row). */
   incidentCount: async (f: IncidentFilters): Promise<number | null> => (await ops.incidents({ ...f, limit: 1, offset: 0 })).total,

@@ -39,7 +39,9 @@ export function RunningNow({ catalog, leasable }: { catalog: Record<string, Cata
   const all = useQuery({ queryKey: ["admin", "leases", "summary"], queryFn: () => ops.leases({ limit: 1 }), refetchInterval: 5_000 });
   const list = useQuery({
     queryKey: ["admin", "leases", "page", v, f.page],
-    queryFn: () => ops.leases({ department: v.department, resource: v.resource, zombies, limit: PAGE, offset: f.page * PAGE }),
+    // The server takes `limit` but not `offset` or `zombies` yet: ask for everything up to this page (all of them
+    // for zombies only) and cut the page here. offset/zombies are sent too, for when the server learns them.
+    queryFn: () => ops.leases({ department: v.department, resource: v.resource, zombies, limit: zombies ? 1000 : (f.page + 1) * PAGE, offset: f.page * PAGE }),
     placeholderData: keepPreviousData,
     refetchInterval: 5_000,
   });
@@ -50,10 +52,10 @@ export function RunningNow({ catalog, leasable }: { catalog: Record<string, Cata
   const rows = (d?.open ?? []).filter(
     (l) => (!v.resource || l.resource === v.resource) && (!v.department || !l.department || l.department === v.department) && (!zombies || l.flags.length > 0),
   );
-  // A server that ignores limit/offset sends every open lease: page those here.
-  const legacy = !!d && d.open_total === undefined && d.open.length > PAGE;
-  const total = d?.open_total ?? (legacy ? rows.length : null);
-  const shown = legacy ? rows.slice(f.page * PAGE, (f.page + 1) * PAGE) : rows;
+  // Whatever the server did with offset and zombies, the page is cut from the rows it returned.
+  const serverPaged = !!d && d.open_total !== undefined && !zombies && d.open.length <= PAGE && f.page > 0 && (d.open_total ?? 0) > PAGE;
+  const total = zombies ? rows.length : (d?.open_total ?? (d ? rows.length : null));
+  const shown = serverPaged ? rows : rows.slice(f.page * PAGE, (f.page + 1) * PAGE);
 
   return (
     <div>
