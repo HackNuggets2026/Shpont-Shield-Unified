@@ -87,7 +87,7 @@
         <div class="acl-c4">${h.card("External signals", signalList(d.risk))}<div class="mt-3">${h.card("Silent alerts", alertList(d.alerts), h.muted("not shown to the person"))}</div></div>
       </div>`,
     actions: {
-      dismiss: (el) => ACL.send(`/admin/risk/${enc(el.dataset.p)}/signal/${enc(el.dataset.src)}`, "DELETE"),
+      dismiss: (el) => ACL.send(`/admin/risk/${enc(el.dataset.p)}/signal/${el.dataset.src.split("/").map(enc).join("/")}`, "DELETE"),
     },
   });
 

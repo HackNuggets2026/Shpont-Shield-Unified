@@ -113,12 +113,18 @@ def test_risk_triage_counts_top_people_signals_and_alerts(client):
 
 
 def test_dismissing_a_signal_removes_it(client):
+    # an integration's named source is stored as "<integration>/<source>"
+    r = client.post(
+        "/admin/risk/bob/signal", json={"integration": "wazuh", "source": "usb", "level": "watch", "ttl_seconds": 3600}
+    )
+    pid, src = "bob", r.json()["source"]
+    assert src == "wazuh/usb"
     page = open_tab(client, "risk")
-    pid, src = re.search(r'data-act="dismiss" data-p="([^"]+)" data-src="([^"]+)"', page.html).groups()
+    assert page.html.count('data-act="dismiss"') == 5
     page.act({"act": "dismiss", "p": pid, "src": src})
     assert f"DELETE /admin/risk/{pid}/signal/{src}" in page.requests and not page.errors()
     left = [s for r in client.get("/admin/risk").json()["principals"] if r["principal"] == pid for s in r["signals"]]
-    assert left == [] and page.html.count('data-act="dismiss"') == 3
+    assert left == [] and page.html.count('data-act="dismiss"') == 4
 
 
 def test_resources_catalog_suspend_resume_and_grants(client):
