@@ -35,8 +35,10 @@ class AuditLog:
         self.total = 0
 
     def record(
-        self, ctx: Context, v: Verdict, extra: dict[str, Any] | None = None, raw: bool = False
+        self, ctx: Context, v: Verdict, extra: dict[str, Any] | None = None, raw: bool = False, inspected: bool = True
     ) -> dict[str, Any]:
+        """`inspected=False` (gates and budgets only): no detector ran, so nothing could be masked and
+        no text is stored."""
         event = {
             "ts": v.ts,
             "request_id": v.request_id,
@@ -55,7 +57,7 @@ class AuditLog:
             "policy_version": v.policy_version,
             "latency_ms": {k: round(x, 2) for k, x in v.latency_ms.items()},
             "text_sha256": hashlib.sha256(ctx.text.encode()).hexdigest(),
-            "text": _stored_text(ctx, v),
+            "text": _stored_text(ctx, v) if inspected else None,
             "findings": [
                 {
                     "control": f.control,

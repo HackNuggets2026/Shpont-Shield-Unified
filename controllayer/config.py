@@ -260,6 +260,9 @@ class ModelPrice(_Strict):
     usd_per_1m_output: float = 0.0
     # Locally hosted models: what a second of inference costs us (GPU amortisation, power).
     usd_per_compute_second: float = 0.0
+    # Prompt-cache writes and reads (Anthropic usage); unset: 1.25x and 0.1x the input price.
+    usd_per_1m_cache_write: float | None = None
+    usd_per_1m_cache_read: float | None = None
 
 
 class BudgetLimits(_Strict):
@@ -292,11 +295,22 @@ class TeamOverride(_Strict):
     controls: dict[str, dict[str, Any]] = Field(default_factory=dict)
 
 
+class AnthropicUpstream(_Strict):
+    """Where `/v1/messages` goes: the Anthropic API (or anything speaking it), or canned replies."""
+
+    backend: Literal["anthropic", "mock"] = "mock"
+    url: str = "https://api.anthropic.com"
+    api_key_env: str | None = "ANTHROPIC_API_KEY"  # the gateway's own key, used unless the caller's is passed
+    # Forward the caller's own Authorization / x-api-key (a claude.ai seat) when it names itself with x-acl-key.
+    passthrough_auth: bool = True
+
+
 class Upstream(_Strict):
     backend: Literal["ollama", "openai", "mock"] = "mock"
     url: str = "http://localhost:11434"
     api_key_env: str | None = None
     mcp_servers: dict[str, str] = Field(default_factory=dict)  # name -> URL, "builtin" = demo server
+    anthropic: AnthropicUpstream = Field(default_factory=AnthropicUpstream)
 
 
 class Audit(_Strict):

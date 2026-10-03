@@ -23,6 +23,8 @@ from .state import StateStore
 from .types import Action, Context, Direction, Finding, Principal, Verdict
 
 _STATUS = {"auth": 401, "budget": 429}
+# Model APIs whose reply returns to the caller: OpenAI chat completions and Anthropic messages.
+MODEL_CHANNELS = frozenset({"chat", "messages"})
 
 
 class ControlLayer:
@@ -257,16 +259,16 @@ class ControlLayer:
         if inspect:
             semantic_backend = self.backend(policy) if policy.semantic.backend != "off" else None
             findings = await pii_model.apply_overrides(ctx, policy, findings, semantic_backend)
-        # Masks can only be put back where a reply returns to the same caller: chat input.
+        # Masks can only be put back where a reply returns to the same caller: model-API input.
         reversible = (
             frozenset(policy.pii_model.reversible)
-            if ctx.channel == "chat" and ctx.direction is Direction.INPUT
+            if ctx.channel in MODEL_CHANNELS and ctx.direction is Direction.INPUT
             else frozenset()
         )
         verdict = _decide(ctx, findings, policy.version, latency, reversible)
         raw = level != "normal" and policy.insider_risk.watch_capture_raw
         if audit_allow or verdict.action is not Action.ALLOW:
-            self.audit.record(ctx, verdict, extra, raw=raw)
+            self.audit.record(ctx, verdict, extra, raw=raw, inspected=inspect)
         if ctx.scored:
             self.risk.observe(policy, ctx, verdict, level)
         return verdict

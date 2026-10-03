@@ -25,12 +25,13 @@ from fastapi.staticfiles import StaticFiles
 from .. import audit, export, resources
 from ..config import PolicyStore
 from ..controls.access import authenticate
+from ..controls.patterns import remask, unmask
 from ..controls.pii_model import PII_CONTROLS
 from ..decision import DecisionBackend
 from ..engine import ControlLayer, flatten
 from ..risk import LEVELS, integration_of
 from ..types import Action, Context, Direction, Principal, Verdict
-from . import broker, mcp_demo
+from . import anthropic, broker, mcp_demo
 from .upstream import UpstreamClient
 
 PANELS = Path(__file__).resolve().parent.parent / "dashboard"
@@ -281,9 +282,10 @@ def create_app(
             if v.blocked:
                 return _policy_error(v)
 
+        # A masked value stays masked wherever it recurs, e.g. in an earlier reply restored for the caller.
+        outgoing = remask({**body, "messages": messages}, mask_map)
         # Backstop: every remaining field of the outgoing body (response_format, tool_choice, metadata,
         # roles, anything a future API adds) gets the deterministic detectors before it leaves.
-        outgoing = {**body, "messages": messages}
         sv = await layer.evaluate(
             Context(
                 principal, Direction.INPUT, flatten(outgoing), model=model, channel="chat", metered=False, scored=False
@@ -332,7 +334,7 @@ def create_app(
             # The reason goes in `control`, not the text: clients re-send this text as history.
             content, finish = f"[Response withheld by policy, request {metered_ctx.request_id}]", "content_filter"
         else:
-            content = _unmask(content, mask_map)  # the employee sees their own data again
+            content = unmask(content, mask_map)  # the employee sees their own data again
         if ov.action is Action.WARN:
             warnings.append(ov.reason)
 
@@ -364,7 +366,7 @@ def create_app(
                 tool_calls, finish = None, "content_filter"
                 warnings.append(f"tool calls withheld: {tv.reason}")
             else:
-                tool_calls = _unmask(tool_calls, mask_map)  # the agent acts on the real values
+                tool_calls = unmask(tool_calls, mask_map)  # the agent acts on the real values
                 if finish == "stop":
                     finish = "tool_calls"
         message: dict[str, Any] = {"role": "assistant", "content": content}
@@ -401,6 +403,8 @@ def create_app(
             payload = f"data: {json.dumps(chunk)}\n\ndata: [DONE]\n\n"
             return StreamingResponse(iter([payload]), media_type="text/event-stream", headers=headers)
         return JSONResponse(resp, headers=headers)
+
+    anthropic.mount(app, layer, store, http)
 
     # ---- agent -> MCP tools -------------------------------------------------
 
@@ -1129,18 +1133,6 @@ async def _json_object(request: Request) -> dict[str, Any]:
     if not isinstance(body, dict):
         raise BadRequest("body must be a JSON object")
     return body
-
-
-def _unmask(obj: Any, mask_map: dict[str, str]) -> Any:
-    if isinstance(obj, str):
-        for placeholder, original in mask_map.items():
-            obj = obj.replace(placeholder, original)
-        return obj
-    if isinstance(obj, list):
-        return [_unmask(v, mask_map) for v in obj]
-    if isinstance(obj, dict):
-        return {k: _unmask(v, mask_map) for k, v in obj.items()}
-    return obj
 
 
 def _reply_signature(m: dict[str, Any]) -> str:

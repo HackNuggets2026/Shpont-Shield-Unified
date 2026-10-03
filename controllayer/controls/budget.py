@@ -106,17 +106,25 @@ class BudgetLedger:
         input_tokens: int,
         output_tokens: int,
         compute_seconds: float,
+        cache_write_tokens: int = 0,
+        cache_read_tokens: int = 0,
     ) -> float:
+        """Charge one completion. Cached prompt tokens count toward token budgets like any input."""
         pricing = policy.budgets.pricing
         # Exact name first, then glob keys, so a model admitted by an allowlist glob is still priced.
         price = pricing.get(model) or next((p for pat, p in pricing.items() if fnmatch(model, pat)), None)
         usd = 0.0
         if price:
+            write = price.usd_per_1m_cache_write
+            read = price.usd_per_1m_cache_read
             usd = (
                 input_tokens * price.usd_per_1m_input / 1e6
+                + cache_write_tokens * (price.usd_per_1m_input * 1.25 if write is None else write) / 1e6
+                + cache_read_tokens * (price.usd_per_1m_input * 0.1 if read is None else read) / 1e6
                 + output_tokens * price.usd_per_1m_output / 1e6
                 + compute_seconds * price.usd_per_compute_second
             )
+        input_tokens += cache_write_tokens + cache_read_tokens
         day = _day()
         targets = [self.usage[(scope, key, day)] for scope, key, _ in self._scopes(ctx, policy)]
         targets.append(self.by_model[(model, day)])

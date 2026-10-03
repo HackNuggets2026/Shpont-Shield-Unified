@@ -14,9 +14,30 @@ def reload(client):
     return r
 
 
-def test_shipped_policy_is_valid():
+def test_shipped_policy_is_valid(monkeypatch):
+    for var in ("ACL_ANTHROPIC_UPSTREAM", "ACL_ANTHROPIC_URL"):
+        monkeypatch.delenv(var, raising=False)
     p = parse_policy((ROOT / "policy.yaml").read_text())
     assert p.semantic_controls and p.pii.entities and p.version
+    a = p.upstream.anthropic
+    assert (a.backend, a.url, a.api_key_env, a.passthrough_auth) == (
+        "mock",
+        "https://api.anthropic.com",
+        "ANTHROPIC_API_KEY",
+        True,
+    )
+    assert any(m.startswith("claude-") for m in p.models.allowed)
+
+
+def test_anthropic_upstream_is_validated_and_env_expanded(monkeypatch):
+    text = (ROOT / "policy.yaml").read_text()
+    monkeypatch.setenv("ACL_ANTHROPIC_UPSTREAM", "anthropic")
+    monkeypatch.setenv("ACL_ANTHROPIC_URL", "http://gw.example")
+    a = parse_policy(text).upstream.anthropic
+    assert (a.backend, a.url) == ("anthropic", "http://gw.example")
+    monkeypatch.setenv("ACL_ANTHROPIC_UPSTREAM", "openai")
+    with pytest.raises(ValueError):
+        parse_policy(text)
 
 
 def test_disabling_a_control_takes_effect_live(client, policy_dir):
