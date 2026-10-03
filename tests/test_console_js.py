@@ -2,16 +2,13 @@
 
 import json
 import re
-import time
 
 import pytest
 from fastapi.testclient import TestClient
 
-from controllayer import seed
-from controllayer.config import parse_policy
 from controllayer.gateway.app import create_app
 
-from .conftest import ROOT
+from .conftest import org_copy
 from .jsconsole import Console
 from .layout import BUDGET
 
@@ -19,17 +16,9 @@ MAX_HTML = 250_000  # a view never dumps the whole org into the DOM
 
 
 @pytest.fixture(scope="module")
-def big_org(tmp_path_factory):
-    d = tmp_path_factory.mktemp("org2k")
-    text = (ROOT / "policy.yaml").read_text()
-    (d / "policy.yaml").write_text(text)
-    (d / "feeds").mkdir()
-    (d / "feeds" / "signatures.json").write_text((ROOT / "feeds" / "signatures.json").read_text())
-    out = seed.build(parse_policy(text), 2000, 30, 1, time.time())
-    (d / "data").mkdir()
-    (d / "data" / "org.json").write_text(json.dumps(out["directory"]))
-    (d / "data" / "history.json").write_text(json.dumps(out["history"]))
-    return TestClient(create_app(d / "policy.yaml", watch=False))
+def big_org(seeded_org, tmp_path_factory):
+    d, _ = seeded_org(2000)
+    return TestClient(create_app(org_copy(d, tmp_path_factory.mktemp("org2k")), watch=False))
 
 
 def links(html: str) -> list[str]:
@@ -78,19 +67,10 @@ def test_root_is_the_console_and_me_is_the_employee_panel(big_org):
 
 
 @pytest.fixture(scope="module")
-def org500(tmp_path_factory):
+def org500(seeded_org, tmp_path_factory):
     """500 people with grants, overrides and signals: the size the height budget is set for."""
-    d = tmp_path_factory.mktemp("org500")
-    text = (ROOT / "policy.yaml").read_text()
-    (d / "policy.yaml").write_text(text)
-    (d / "feeds").mkdir()
-    (d / "feeds" / "signatures.json").write_text((ROOT / "feeds" / "signatures.json").read_text())
-    out = seed.build(parse_policy(text), 500, 30, 3, time.time())
-    (d / "data").mkdir()
-    (d / "data" / "org.json").write_text(json.dumps(out["directory"]))
-    (d / "data" / "history.json").write_text(json.dumps(out["history"]))
-    (d / "data" / "state.json").write_text(json.dumps(out["state"]))
-    return TestClient(create_app(d / "policy.yaml", watch=False))
+    d, out = seeded_org(500, 3)
+    return TestClient(create_app(org_copy(d, tmp_path_factory.mktemp("org500"), out["state"]), watch=False))
 
 
 def test_every_page_fits_two_screens_unless_it_is_an_inspection_page(org500):

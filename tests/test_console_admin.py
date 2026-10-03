@@ -1,21 +1,17 @@
 """The admin tabs (views/admin.js) in QuickJS against a seeded 500-person org with grants, overrides,
 external signals and a suspended resource (see jsconsole.py)."""
 
-import json
 import re
 import shutil
-import time
 from urllib.parse import parse_qsl, urlsplit
 
 import pytest
 from fastapi.testclient import TestClient
 
-from controllayer import seed
-from controllayer.config import parse_policy
 from controllayer.gateway.app import create_app
 from controllayer.state import StateStore
 
-from .conftest import ROOT
+from .conftest import org_copy
 from .jsconsole import Console
 
 MAX_HTML = 250_000
@@ -29,15 +25,9 @@ TABS = {
 
 
 @pytest.fixture(scope="module")
-def org_dir(tmp_path_factory):
-    d = tmp_path_factory.mktemp("org500")
-    text = (ROOT / "policy.yaml").read_text()
-    (d / "policy.yaml").write_text(text)
-    shutil.copytree(ROOT / "feeds", d / "feeds")
-    out = seed.build(parse_policy(text), 500, 30, 1, time.time())
-    (d / "data").mkdir()
-    (d / "data" / "org.json").write_text(json.dumps(out["directory"]))
-    (d / "data" / "history.json").write_text(json.dumps(out["history"]))
+def org_dir(seeded_org, tmp_path_factory):
+    seeded, out = seeded_org(500)
+    d = org_copy(seeded, tmp_path_factory.mktemp("org500")).parent
     store = StateStore(d / "data" / "state.json")
     for section, values in out["state"].items():
         store.data[section].update(values)
@@ -49,7 +39,7 @@ def org_dir(tmp_path_factory):
 def client(org_dir, tmp_path):
     """A fresh app per test: actions write state.json, so each test gets its own copy."""
     d = tmp_path / "org"
-    shutil.copytree(org_dir, d)
+    shutil.copytree(org_dir, d, symlinks=True)
     return TestClient(create_app(d / "policy.yaml", watch=False))
 
 

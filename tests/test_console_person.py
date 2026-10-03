@@ -1,53 +1,44 @@
 """The person drill-down (views/person.js) in QuickJS against a seeded 2,000-person org with grants,
 overrides and signals (see jsconsole.py). Every action goes through the real click handler."""
 
+import copy
 import json
 import re
-import shutil
 import time
 
 import pytest
 from fastapi.testclient import TestClient
 
-from controllayer import seed
 from controllayer.config import parse_policy
 from controllayer.gateway.app import create_app
 
-from .conftest import ROOT
+from .conftest import org_copy
 from .jsconsole import Console
 
 MAX_HTML = 250_000
 
 
 @pytest.fixture(scope="module")
-def seeded(tmp_path_factory):
-    """Seed files once; one heavy agent gets an expired grant to renew."""
-    d = tmp_path_factory.mktemp("person2k")
-    text = (ROOT / "policy.yaml").read_text()
-    (d / "policy.yaml").write_text(text)
-    shutil.copytree(ROOT / "feeds", d / "feeds")
-    now = time.time()
-    out = seed.build(parse_policy(text), 2000, 30, 1, now)
-    (d / "data").mkdir()
-    (d / "data" / "org.json").write_text(json.dumps(out["directory"]))
-    (d / "data" / "history.json").write_text(json.dumps(out["history"]))
-    state = out["state"]
+def seeded(seeded_org):
+    """The seeded org's state, where one heavy agent gets an expired grant to renew."""
+    d, out = seeded_org(2000)
+    state = copy.deepcopy(out["state"])
+    resources = parse_policy((d / "policy.yaml").read_text()).resources
+
+    def capped(rid: str) -> bool:  # renewing it sets an expiry to check
+        return rid not in state["suspended"] and resources[rid].max_grant_hours is not None
+
     # The owner of the agent with most grants: several pills of every kind.
-    agent = max(sorted(state["grants"]), key=lambda a: len(state["grants"][a]))
-    rid = next(r for r in sorted(state["grants"][agent]) if r not in state["suspended"])
-    state["grants"][agent][rid]["expires_at"] = now - 3600
-    (d / "data" / "state.json").write_text(json.dumps(state))
+    agent = max(sorted(state["grants"]), key=lambda a: (any(map(capped, state["grants"][a])), len(state["grants"][a])))
+    rid = next(r for r in sorted(state["grants"][agent]) if capped(r))
+    state["grants"][agent][rid]["expires_at"] = time.time() - 3600
     return {"dir": d, "agent": agent, "expired": rid, "state": state}
 
 
 @pytest.fixture
 def org(seeded, tmp_path):
-    """A fresh app per test: actions write state.json (copied); the large read-only seed files are linked."""
-    d = tmp_path / "org"
-    shutil.copytree(seeded["dir"], d, ignore=lambda _, names: [n for n in names if n in ("org.json", "history.json")])
-    for name in ("org.json", "history.json"):
-        (d / "data" / name).symlink_to(seeded["dir"] / "data" / name)
-    return TestClient(create_app(d / "policy.yaml", watch=False))
+    """A fresh app per test: actions write state.json, so each test gets its own."""
+    return TestClient(create_app(org_copy(seeded["dir"], tmp_path / "org", seeded["state"]), watch=False))
 
 
 class Recording(Console):

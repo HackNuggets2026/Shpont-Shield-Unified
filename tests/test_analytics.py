@@ -7,14 +7,13 @@ import time
 import pytest
 from fastapi.testclient import TestClient
 
-from controllayer import seed
 from controllayer.analytics import DAY, HOUR, Buckets, UsageHistory, _bins
 from controllayer.config import parse_policy
 from controllayer.controls.budget import BudgetLedger
 from controllayer.gateway.app import create_app
 from controllayer.types import Context, Direction, Principal
 
-from .conftest import ROOT, chat
+from .conftest import ROOT, chat, org_copy
 from .test_resources import AGENT, call, grant
 
 POLICY = parse_policy((ROOT / "policy.yaml").read_text())
@@ -154,18 +153,11 @@ def test_bins_are_1_2_5_and_cover_the_range():
 
 
 @pytest.fixture(scope="module")
-def org(tmp_path_factory):
+def org(seeded_org, tmp_path_factory):
     """A seeded 120-person org, its gateway and its history."""
-    d = tmp_path_factory.mktemp("org")
-    (d / "policy.yaml").write_text((ROOT / "policy.yaml").read_text())
-    (d / "feeds").mkdir()
-    (d / "feeds" / "signatures.json").write_text((ROOT / "feeds" / "signatures.json").read_text())
-    policy = parse_policy((d / "policy.yaml").read_text())
-    out = seed.build(policy, 120, 30, 7, time.time())
-    (d / "data").mkdir()
-    (d / "data" / "org.json").write_text(json.dumps(out["directory"]))
-    (d / "data" / "history.json").write_text(json.dumps(out["history"]))
-    client = TestClient(create_app(d / "policy.yaml", watch=False), headers={"x-admin-token": "demo-admin-token"})
+    d, out = seeded_org(120, 7)
+    policy = org_copy(d, tmp_path_factory.mktemp("org"))
+    client = TestClient(create_app(policy, watch=False), headers={"x-admin-token": "demo-admin-token"})
     return client, out
 
 

@@ -1,33 +1,21 @@
 """Console charts: time series and distributions render as smooth, non-overshooting curves with a
 hover crosshair; each point still drills down."""
 
-import json
 import re
-import time
 
 import pytest
 from fastapi.testclient import TestClient
 
-from controllayer import seed
-from controllayer.config import parse_policy
 from controllayer.gateway.app import create_app
 
-from .conftest import ROOT
+from .conftest import org_copy
 from .jsconsole import Console
 
 
 @pytest.fixture(scope="module")
-def org(tmp_path_factory):
-    d = tmp_path_factory.mktemp("org200")
-    text = (ROOT / "policy.yaml").read_text()
-    (d / "policy.yaml").write_text(text)
-    (d / "feeds").mkdir()
-    (d / "feeds" / "signatures.json").write_text((ROOT / "feeds" / "signatures.json").read_text())
-    out = seed.build(parse_policy(text), 200, 30, 1, time.time())
-    (d / "data").mkdir()
-    (d / "data" / "org.json").write_text(json.dumps(out["directory"]))
-    (d / "data" / "history.json").write_text(json.dumps(out["history"]))
-    return TestClient(create_app(d / "policy.yaml", watch=False))
+def org(seeded_org, tmp_path_factory):
+    d, _ = seeded_org(200)
+    return TestClient(create_app(org_copy(d, tmp_path_factory.mktemp("org200")), watch=False))
 
 
 def svg(html: str, label: str) -> str:
