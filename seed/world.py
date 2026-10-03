@@ -38,7 +38,7 @@ class Person:
     claude_code: float = 0.0  # Claude Code sessions per working day
     hours: tuple[int, int] = (8, 18)  # UTC working hours
     weekend: float = 0.05  # share of a weekday's work done on a weekend day
-    live_demo: bool = False  # used live during the demo: keep today light so budgets have room
+    live_demo: bool = False  # used live during the demo: no seeded traffic today, so budgets have room
 
 
 ORG = [
@@ -251,7 +251,7 @@ class Seeder:
             for p in ORG:
                 factor = p.weekend if weekend else 1.0
                 if d == 0 and p.live_demo:
-                    factor *= 0.35  # leave budget headroom for the live demo
+                    factor = 0.0  # no seeded traffic today: the live demo starts on a full daily budget at any hour
                 client = "acme-agent/1.4" if p.id != "ops-agent" else "ops-runner/2.0"
                 for wf, rate in p.workflows.items():
                     for _ in range(self.poisson(rate * factor)):
