@@ -6,22 +6,6 @@
 <title>AI Control Layer</title>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@primer/css@21.5.1/dist/primer.css">
 <link rel="stylesheet" href="/ui/core.css">
-<script>
-// ?theme=<name> layers an optional skin over Primer; only names listed here load.
-(function () {
-  var THEMES = { mil: "https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@400;500;600;700&family=Share+Tech+Mono&display=swap" };
-  var name = new URLSearchParams(location.search).get("theme");
-  if (!Object.prototype.hasOwnProperty.call(THEMES, name)) return;
-  var root = document.documentElement;
-  root.setAttribute("data-acl-theme", name);
-  [THEMES[name], "/ui/themes/" + name + ".css"].forEach(function (href) {
-    var l = document.createElement("link");
-    l.rel = "stylesheet";
-    l.href = href;
-    document.head.appendChild(l);
-  });
-})();
-</script>
 </head>
 <body class="color-bg-default color-fg-default">
 <div id="acl-root"></div>
