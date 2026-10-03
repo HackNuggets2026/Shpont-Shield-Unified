@@ -1,0 +1,162 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Color tokens as RGB triplets so Tailwind can apply alpha. Light is the base; dark follows the OS
+   unless the viewer pinned a theme (data-theme on <html>). */
+:root {
+  color-scheme: light;
+  --page: 246 247 249;
+  --panel: 255 255 255;
+  --raised: 241 243 246;
+  --line: 226 229 234;
+  --ink: 13 16 20;
+  --ink2: 61 67 76;
+  --muted: 107 114 128;
+  --accent: 42 120 214;
+  --good: 10 128 10;
+  --warn: 176 116 0;
+  --serious: 196 82 31;
+  --bad: 196 47 47;
+  --info: 42 120 214;
+  --cc: 74 58 167;
+
+  --s1: #2a78d6;
+  --s2: #eb6834;
+  --s3: #1baf7a;
+  --s4: #eda100;
+  --s5: #e87ba4;
+  --s6: #008300;
+  --s7: #4a3aa7;
+  --s8: #e34948;
+  --s-other: #a3a29b;
+  --grid: #e1e0d9;
+  --axis: #898781;
+  --chart-surface: #ffffff;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --page: 10 12 15;
+    --panel: 19 22 27;
+    --raised: 27 31 38;
+    --line: 39 44 52;
+    --ink: 236 238 241;
+    --ink2: 182 188 197;
+    --muted: 128 136 147;
+    --accent: 72 148 240;
+    --good: 52 190 52;
+    --warn: 250 178 25;
+    --serious: 236 131 90;
+    --bad: 240 100 100;
+    --info: 86 160 240;
+    --cc: 160 150 240;
+
+    --s1: #3987e5;
+    --s2: #d95926;
+    --s3: #199e70;
+    --s4: #c98500;
+    --s5: #d55181;
+    --s6: #008300;
+    --s7: #9085e9;
+    --s8: #e66767;
+    --s-other: #5f5e59;
+    --grid: #2a2e35;
+    --axis: #8a909a;
+    --chart-surface: #13161b;
+  }
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --page: 10 12 15;
+  --panel: 19 22 27;
+  --raised: 27 31 38;
+  --line: 39 44 52;
+  --ink: 236 238 241;
+  --ink2: 182 188 197;
+  --muted: 128 136 147;
+  --accent: 72 148 240;
+  --good: 52 190 52;
+  --warn: 250 178 25;
+  --serious: 236 131 90;
+  --bad: 240 100 100;
+  --info: 86 160 240;
+  --cc: 160 150 240;
+
+  --s1: #3987e5;
+  --s2: #d95926;
+  --s3: #199e70;
+  --s4: #c98500;
+  --s5: #d55181;
+  --s6: #008300;
+  --s7: #9085e9;
+  --s8: #e66767;
+  --s-other: #5f5e59;
+  --grid: #2a2e35;
+  --axis: #8a909a;
+  --chart-surface: #13161b;
+}
+
+html,
+body {
+  background: rgb(var(--page));
+  color: rgb(var(--ink));
+}
+
+body {
+  font-feature-settings: "cv11", "ss01";
+  -webkit-font-smoothing: antialiased;
+}
+
+.tnum {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Dense data tables. */
+.tbl {
+  @apply w-full text-sm;
+  border-collapse: separate;
+  border-spacing: 0;
+}
+.tbl th {
+  @apply sticky top-0 z-[1] bg-panel px-3 py-2 text-left text-[11px] font-medium uppercase tracking-wide text-muted;
+  border-bottom: 1px solid rgb(var(--line));
+}
+.tbl td {
+  @apply px-3 py-2 align-middle;
+  border-bottom: 1px solid rgb(var(--line) / 0.6);
+}
+.tbl tbody tr:last-child td {
+  border-bottom: 0;
+}
+.tbl tbody tr.row-link {
+  @apply cursor-pointer;
+}
+.tbl tbody tr.row-link:hover td {
+  background: rgb(var(--raised) / 0.7);
+}
+
+.input {
+  @apply w-full rounded-md border border-line bg-page px-3 py-2 text-sm text-ink placeholder:text-muted focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30;
+}
+
+.recharts-cartesian-axis-tick-value {
+  font-variant-numeric: tabular-nums;
+}
+.recharts-tooltip-cursor {
+  fill: rgb(var(--ink) / 0.06);
+}
+
+@keyframes flash-in {
+  from {
+    background: rgb(var(--accent) / 0.16);
+  }
+  to {
+    background: transparent;
+  }
+}
+.flash-in {
+  animation: flash-in 1.6s ease-out;
+}

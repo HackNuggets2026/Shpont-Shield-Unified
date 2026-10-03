@@ -6,3 +6,6 @@ data/
 *.pdf
 build/
 *.egg-info/
+.venv-web/
+web/node_modules/
+web/dist/
