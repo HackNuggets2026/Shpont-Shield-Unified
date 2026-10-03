@@ -286,3 +286,18 @@ def test_incidents_list_includes_history_beyond_the_scoring_window(make_client):
     c.post("/admin/incidents/old-1", json={"status": "resolved", "note": "stale"})
     resolved = c.get("/admin/incidents", params={"status": "resolved"}).json()["incidents"]
     assert [r["id"] for r in resolved] == ["old-1"]
+
+
+def test_activity_feeds_filter_by_source_kind_severity_and_decision(client):
+    chat(client, "hello", who="carol")
+    chat(client, "my key is AKIAIOSFODNN7EXAMPLE", who="carol")
+    client.post("/v1/events", json=_ce("x1", {"usd": 1.0}), headers=KEYS["carol"])
+    me = lambda **q: client.get("/me/activity", params=q, headers=KEYS["carol"]).json()  # noqa: E731
+    assert me(source="cloudevents") and all(e["source"] == "cloudevents" for e in me(source="cloudevents"))
+    assert all(e["kind"] == "check.input" for e in me(kind="check.input"))
+    blocked = me(decision="block") + me(decision="redact")
+    assert blocked and all(e["decision"] in ("block", "redact") for e in blocked)
+    assert all(e["severity"] == "info" for e in me(severity="info"))
+    assert len(me(limit=5000)) <= 2000
+    adm = client.get("/admin/activity", params={"decision": "allow", "principal": "carol"}).json()
+    assert adm and all(e["decision"] == "allow" for e in adm)

@@ -509,10 +509,11 @@ def register(
         kind: str | None = None,
         principal: str | None = None,
         severity: str | None = None,
+        decision: str | None = None,
     ):
         """The live feed: newest events first (no content; masked text stays in the audit log)."""
         return usage.events(limit=max(1, min(limit, 500)), before=before, source=source, kind=kind,
-                            principal=principal, severity=severity)  # fmt: skip
+                            principal=principal, severity=severity, decision=decision)  # fmt: skip
 
     # ---- employees ---------------------------------------------------------------------
 
@@ -638,13 +639,21 @@ def register(
         return timeseries(metric, by, days, who.id, own=True)
 
     @app.get("/me/activity")
-    async def me_activity(request: Request, limit: int = 50, before: float | None = None):
+    async def me_activity(
+        request: Request,
+        limit: int = 50,
+        before: float | None = None,
+        source: str | None = None,
+        kind: str | None = None,
+        severity: str | None = None,
+        decision: str | None = None,
+    ):
         who = me(request)
         if who is None:
             return err("your API key is required", 401)
-        return usage.events(
-            principal=who.id, limit=max(1, min(limit, 500)), before=before, exclude_sources=hidden_from(who.id)
-        )
+        return usage.events(principal=who.id, limit=max(1, min(limit, 2000)), before=before,
+                            exclude_sources=hidden_from(who.id), source=source, kind=kind, severity=severity,
+                            decision=decision)  # fmt: skip
 
     @app.post("/me/requests")
     async def me_request(request: Request):
