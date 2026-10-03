@@ -89,7 +89,14 @@ export function Security() {
     queryKey: ["admin", "people", "restricted-counts"],
     queryFn: async () => {
       const st = ["quarantined", "revoked", "limited"] as const;
-      const n = await Promise.all(st.map((s) => ops.people({ status: s, limit: 1 }).then((r) => r.total).catch(() => null)));
+      const n = await Promise.all(
+        st.map((s) =>
+          ops
+            .people({ status: s, limit: 1 })
+            .then((r) => r.total)
+            .catch(() => null),
+        ),
+      );
       return Object.fromEntries(st.map((s, i) => [s, n[i]])) as Record<(typeof st)[number], number | null>;
     },
     refetchInterval: 15_000,
@@ -130,7 +137,9 @@ export function Security() {
   const th = pol.data?.response ?? null;
   const now = Date.now() / 1000;
   const autos24 = (acts.data ?? []).filter((a) => isAuto(a) && now - a.ts < 86400);
-  const autoKinds = Object.entries(autos24.reduce<Record<string, number>>((m, a) => ({ ...m, [a.action]: (m[a.action] ?? 0) + 1 }), {})).sort((a, b) => b[1] - a[1]);
+  const autoKinds = Object.entries(autos24.reduce<Record<string, number>>((m, a) => ({ ...m, [a.action]: (m[a.action] ?? 0) + 1 }), {})).sort(
+    (a, b) => b[1] - a[1],
+  );
   const adh = adherence.data;
   const adhTrend = (adh?.rows ?? []).filter((r) => r.total > 0).sort((a, b) => a.key.localeCompare(b.key));
   const rs = restricted.data;
@@ -194,7 +203,11 @@ export function Security() {
             ) : (
               <span>
                 restricted now:{" "}
-                {[rs!.quarantined && `${countC(rs!.quarantined)} quarantined`, rs!.revoked && `${countC(rs!.revoked)} revoked`, rs!.limited && `${countC(rs!.limited)} limited`]
+                {[
+                  rs!.quarantined && `${countC(rs!.quarantined)} quarantined`,
+                  rs!.revoked && `${countC(rs!.revoked)} revoked`,
+                  rs!.limited && `${countC(rs!.limited)} limited`,
+                ]
                   .filter(Boolean)
                   .join(" · ")}
               </span>
@@ -206,7 +219,14 @@ export function Security() {
           icon={<IconRadar />}
           tone={s?.auto_actions_24h ? "serious" : undefined}
           value={s ? countC(s.auto_actions_24h) : "…"}
-          sub={autoKinds.length ? autoKinds.slice(0, 3).map(([k, n]) => `${n} ${k.replace(/_/g, " ")}`).join(" · ") : "Nothing needed doing"}
+          sub={
+            autoKinds.length
+              ? autoKinds
+                  .slice(0, 3)
+                  .map(([k, n]) => `${n} ${k.replace(/_/g, " ")}`)
+                  .join(" · ")
+              : "Nothing needed doing"
+          }
         />
         <Kpi
           label="Policy adherence, 30d"
@@ -243,7 +263,12 @@ export function Security() {
           }
         >
           {matrix.cells ? (
-            <RuleDeptHeatmap cells={matrix.cells} mode={mode} onPick={pickCell} selected={v.rule && v.department ? { rule: v.rule, department: v.department } : undefined} />
+            <RuleDeptHeatmap
+              cells={matrix.cells}
+              mode={mode}
+              onPick={pickCell}
+              selected={v.rule && v.department ? { rule: v.rule, department: v.department } : undefined}
+            />
           ) : matrix.q.isError ? (
             <ErrorBox error={matrix.q.error} retry={() => matrix.q.refetch()} />
           ) : (
@@ -293,169 +318,176 @@ export function Security() {
         </div>
       </div>
 
-      <div className="grid gap-4 xl:grid-cols-3">
-        <div ref={tableRef} className="min-w-0 scroll-mt-4 xl:col-span-2">
-          <Card
-            flush
-            title={
-              <span>
-                Incidents{" "}
-                <span className="font-normal text-muted">
-                  · {list.data ? (list.data.total !== null ? countC(list.data.total) : `${list.data.rows.length}${list.data.hasMore ? "+" : ""}`) : "…"}
-                </span>
+      <div ref={tableRef} className="min-w-0 scroll-mt-4">
+        <Card
+          flush
+          title={
+            <span>
+              Incidents{" "}
+              <span className="font-normal text-muted">
+                · {list.data ? (list.data.total !== null ? countC(list.data.total) : `${list.data.rows.length}${list.data.hasMore ? "+" : ""}`) : "…"}
               </span>
-            }
-            subtitle="High severity first, then open before acknowledged, then newest. Click one for its evidence."
-          >
-            <div className="flex flex-wrap items-center gap-2 border-b border-line px-4 py-2">
-              <Select
-                label="Severity"
-                value={v.severity}
-                onChange={(x) => f.set({ severity: x })}
-                options={[{ value: "", label: "Any severity" }, ...SEVERITIES.map((x) => ({ value: x, label: x }))]}
-              />
-              <Select label="Rule" value={v.rule} onChange={(x) => f.set({ rule: x })} options={[{ value: "", label: "Any rule" }, ...rules.map((r) => ({ value: r, label: ruleLabel(r) }))]} />
-              <DepartmentSelect value={v.department} onChange={(x) => f.set({ department: x, team: "" })} />
-              <TeamSelect department={v.department} value={v.team} onChange={(x) => f.set({ team: x })} />
-              <SearchBox value={v.q} onChange={(x) => f.set({ q: x })} placeholder="Person: name, email, id" />
-              {v.person && (
-                <Pill tone="accent">
-                  person {v.person}{" "}
-                  <button type="button" className="ml-1" onClick={() => f.set({ person: "" })} aria-label="Clear person">
-                    ×
-                  </button>
-                </Pill>
-              )}
-              {f.dirty && (
-                <button type="button" onClick={f.reset} className="text-xs font-medium text-accent hover:underline">
-                  Reset
+            </span>
+          }
+          subtitle="High severity first, then open before acknowledged, then newest. Click one for its evidence."
+        >
+          <div className="flex flex-wrap items-center gap-2 border-b border-line px-4 py-2">
+            <Select
+              label="Severity"
+              value={v.severity}
+              onChange={(x) => f.set({ severity: x })}
+              options={[{ value: "", label: "Any severity" }, ...SEVERITIES.map((x) => ({ value: x, label: x }))]}
+            />
+            <Select
+              label="Rule"
+              value={v.rule}
+              onChange={(x) => f.set({ rule: x })}
+              options={[{ value: "", label: "Any rule" }, ...rules.map((r) => ({ value: r, label: ruleLabel(r) }))]}
+            />
+            <DepartmentSelect value={v.department} onChange={(x) => f.set({ department: x, team: "" })} />
+            <TeamSelect department={v.department} value={v.team} onChange={(x) => f.set({ team: x })} />
+            <SearchBox value={v.q} onChange={(x) => f.set({ q: x })} placeholder="Person: name, email, id" />
+            {v.person && (
+              <Pill tone="accent">
+                person {v.person}{" "}
+                <button type="button" className="ml-1" onClick={() => f.set({ person: "" })} aria-label="Clear person">
+                  ×
                 </button>
-              )}
-            </div>
-            <div className="overflow-x-auto border-b border-line px-4 py-2">
-              <Segmented<StatusFilter>
-                value={status}
-                onChange={(x) => f.set({ status: x })}
-                options={STATUS_FILTERS.map((x) => ({
-                  value: x,
-                  label: (
-                    <span className="whitespace-nowrap">
-                      {STATUS_LABEL[x]}{" "}
-                      {statusCounts && !v.severity && !v.rule && !v.department && !v.team && !v.q && !v.person && x !== "all" && (
-                        <span className="tnum text-muted" title="last 30 days">
-                          {countC(statusCounts[x])}
-                        </span>
-                      )}
-                    </span>
-                  ),
-                }))}
-              />
-            </div>
-            <Q q={list} rows={8}>
-              {(d) => (
-                <>
-                  <IncidentsTable
-                    incidents={d.rows}
-                    empty={unfiltered ? "Nothing needs attention" : "No incidents match the filters"}
-                    hint={unfiltered ? "Every incident is resolved or dismissed." : undefined}
-                  />
-                  <Pager
-                    page={f.page}
-                    size={PAGE}
-                    shown={d.rows.length}
-                    total={d.total}
-                    hasMore={d.hasMore}
-                    onPage={f.setPage}
-                    fetching={list.isPlaceholderData}
-                    className="border-t border-line"
-                  />
-                </>
-              )}
-            </Q>
-          </Card>
-        </div>
-
-        <div className="min-w-0 space-y-4">
-          <Card
-            title="People at risk"
-            subtitle={
-              atRisk !== undefined && atRisk > 20
-                ? `Top 20 of ${countC(atRisk)}, highest risk score first`
-                : pol.data
-                  ? `Decaying sum of open incident weights; halves every ${Math.round(pol.data.half_life_minutes)} min`
-                  : "Highest risk score first"
-            }
-            actions={
-              <Link to="/console/people?sort=risk" className="text-xs font-medium text-accent hover:underline">
-                All people →
-              </Link>
-            }
-            flush
-          >
-            {outliers.isPending ? (
-              <div className="p-4">
-                <Loading rows={5} />
-              </div>
-            ) : outliers.isError ? (
-              <div className="p-4">
-                <ErrorBox error={outliers.error} retry={() => outliers.refetch()} />
-              </div>
-            ) : outliers.data.length === 0 ? (
-              <Empty title="Nobody carries risk right now" hint="Scores rise with incidents and decay on their own." />
-            ) : (
-              <ul className="max-h-[560px] divide-y divide-line/60 overflow-y-auto">
-                {outliers.data.map((p) => (
-                  <li key={p.principal}>
-                    <Link
-                      to={`/console/people/${encodeURIComponent(p.principal)}`}
-                      className={cx("flex items-center justify-between gap-3 px-4 py-2.5 hover:bg-raised/60", p.level === "quarantine" && "bg-bad/[0.04]")}
-                    >
-                      <div className="min-w-0">
-                        <div className="flex flex-wrap items-center gap-1.5">
-                          <span className="font-medium text-ink">{p.name || p.principal}</span>
-                          {p.level && p.level !== "none" && <LevelPill level={p.level} />}
-                          {p.status && p.status !== "active" && <PersonStatusPill status={p.status} />}
-                        </div>
-                        <OrgLine team={p.team} department={p.department} className="mt-0.5" />
-                        <div className="text-[11px] text-muted">
-                          {p.open_incidents} open incident{p.open_incidents === 1 ? "" : "s"}
-                        </div>
-                      </div>
-                      <RiskMeter score={p.risk} thresholds={th} compact />
-                    </Link>
-                  </li>
-                ))}
-              </ul>
+              </Pill>
             )}
-            {th && (
-              <div className="flex flex-wrap gap-x-3 gap-y-1 border-t border-line px-4 py-2 text-[11px] text-muted">
-                <span>
-                  alert ≥ <b className="text-ink2">{th.alert}</b>
-                </span>
-                <span>
-                  tighten ≥ <b className="text-ink2">{th.tighten}</b> (budget to {Math.round(th.tighten_budget_scale * 100)}%)
-                </span>
-                <span>
-                  quarantine ≥ <b className="text-ink2">{th.quarantine}</b>
-                </span>
-                {!th.auto && <span className="text-warn">automatic responses off</span>}
-              </div>
+            {f.dirty && (
+              <button type="button" onClick={f.reset} className="text-xs font-medium text-accent hover:underline">
+                Reset
+              </button>
             )}
-          </Card>
-
-          <Card title="What the system did on its own" subtitle="Latest automatic responses" flush>
-            <Q q={acts} rows={3}>
-              {(d) => (
-                <div className="max-h-[300px] overflow-y-auto">
-                  <AdminLog actions={d.filter(isAuto).slice(0, 15)} empty="No automatic responses yet" />
-                </div>
-              )}
-            </Q>
-          </Card>
-        </div>
+          </div>
+          <div className="overflow-x-auto border-b border-line px-4 py-2">
+            <Segmented<StatusFilter>
+              value={status}
+              onChange={(x) => f.set({ status: x })}
+              options={STATUS_FILTERS.map((x) => ({
+                value: x,
+                label: (
+                  <span className="whitespace-nowrap">
+                    {STATUS_LABEL[x]}{" "}
+                    {statusCounts && !v.severity && !v.rule && !v.department && !v.team && !v.q && !v.person && x !== "all" && (
+                      <span className="tnum text-muted" title="last 30 days">
+                        {countC(statusCounts[x])}
+                      </span>
+                    )}
+                  </span>
+                ),
+              }))}
+            />
+          </div>
+          <Q q={list} rows={8}>
+            {(d) => (
+              <>
+                <IncidentsTable
+                  incidents={d.rows}
+                  empty={unfiltered ? "Nothing needs attention" : "No incidents match the filters"}
+                  hint={unfiltered ? "Every incident is resolved or dismissed." : undefined}
+                />
+                <Pager
+                  page={f.page}
+                  size={PAGE}
+                  shown={d.rows.length}
+                  total={d.total}
+                  hasMore={d.hasMore}
+                  onPage={f.setPage}
+                  fetching={list.isPlaceholderData}
+                  className="border-t border-line"
+                />
+              </>
+            )}
+          </Q>
+        </Card>
       </div>
 
-      <Card title="Security signal" subtitle="Live: blocks, redactions, incidents, grants, zombie flags and Claude Code rejections. Allowed checks are left out." flush>
+      <div className="grid gap-4 lg:grid-cols-2">
+        <Card
+          title="People at risk"
+          subtitle={
+            atRisk !== undefined && atRisk > 20
+              ? `Top 20 of ${countC(atRisk)}, highest risk score first`
+              : pol.data
+                ? `Decaying sum of open incident weights; halves every ${Math.round(pol.data.half_life_minutes)} min`
+                : "Highest risk score first"
+          }
+          actions={
+            <Link to="/console/people?sort=risk" className="text-xs font-medium text-accent hover:underline">
+              All people →
+            </Link>
+          }
+          flush
+        >
+          {outliers.isPending ? (
+            <div className="p-4">
+              <Loading rows={5} />
+            </div>
+          ) : outliers.isError ? (
+            <div className="p-4">
+              <ErrorBox error={outliers.error} retry={() => outliers.refetch()} />
+            </div>
+          ) : outliers.data.length === 0 ? (
+            <Empty title="Nobody carries risk right now" hint="Scores rise with incidents and decay on their own." />
+          ) : (
+            <ul className="max-h-[480px] divide-y divide-line/60 overflow-y-auto">
+              {outliers.data.map((p) => (
+                <li key={p.principal}>
+                  <Link
+                    to={`/console/people/${encodeURIComponent(p.principal)}`}
+                    className={cx("flex items-center justify-between gap-3 px-4 py-2.5 hover:bg-raised/60", p.level === "quarantine" && "bg-bad/[0.04]")}
+                  >
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <span className="font-medium text-ink">{p.name || p.principal}</span>
+                        {p.level && p.level !== "none" && <LevelPill level={p.level} />}
+                        {p.status && p.status !== "active" && <PersonStatusPill status={p.status} />}
+                      </div>
+                      <OrgLine team={p.team} department={p.department} className="mt-0.5" />
+                      <div className="text-[11px] text-muted">
+                        {p.open_incidents} open incident{p.open_incidents === 1 ? "" : "s"}
+                      </div>
+                    </div>
+                    <RiskMeter score={p.risk} thresholds={th} compact />
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          )}
+          {th && (
+            <div className="flex flex-wrap gap-x-3 gap-y-1 border-t border-line px-4 py-2 text-[11px] text-muted">
+              <span>
+                alert ≥ <b className="text-ink2">{th.alert}</b>
+              </span>
+              <span>
+                tighten ≥ <b className="text-ink2">{th.tighten}</b> (budget to {Math.round(th.tighten_budget_scale * 100)}%)
+              </span>
+              <span>
+                quarantine ≥ <b className="text-ink2">{th.quarantine}</b>
+              </span>
+              {!th.auto && <span className="text-warn">automatic responses off</span>}
+            </div>
+          )}
+        </Card>
+
+        <Card title="What the system did on its own" subtitle="Latest automatic responses" flush>
+          <Q q={acts} rows={3}>
+            {(d) => (
+              <div className="max-h-[520px] overflow-y-auto">
+                <AdminLog actions={d.filter(isAuto).slice(0, 15)} empty="No automatic responses yet" />
+              </div>
+            )}
+          </Q>
+        </Card>
+      </div>
+
+      <Card
+        title="Security signal"
+        subtitle="Live: blocks, redactions, incidents, grants, zombie flags and Claude Code rejections. Allowed checks are left out."
+        flush
+      >
         <ActivityFeed
           load={(p) => ops.activity({ ...p, interesting: true })}
           queryKey={["admin", "activity", "security", "interesting"]}
