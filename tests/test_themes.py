@@ -45,10 +45,17 @@ def test_panel_loads_mil_theme_after_primer(client, path):
     html = client.get(path).text
     assert html.index("primer.css") < html.index("/ui/core.css") < html.index("<script>")
     out = run_loader(html, "?token=x&theme=mil")
-    assert out["attrs"] == {"data-color-mode": "dark", "data-dark-theme": "dark", "data-acl-theme": "mil"}
+    assert out["attrs"] == {"data-acl-theme": "mil"}
     assert [link.split(" ", 1)[0] for link in out["links"]] == ["stylesheet", "stylesheet"]
     assert out["links"][0].split(" ", 1)[1].startswith(FONTS)
     assert out["links"][1] == "stylesheet /ui/themes/mil.css"
+
+
+@pytest.mark.parametrize("path", ["/security", "/me"])
+def test_panel_forces_light_color_mode(client, path):
+    html_tag = re.search(r"<html[^>]*>", client.get(path).text).group(0)
+    assert 'data-color-mode="light"' in html_tag and 'data-light-theme="light"' in html_tag
+    assert "data-dark-theme" not in html_tag
 
 
 UNLISTED = [

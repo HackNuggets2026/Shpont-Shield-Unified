@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en" data-color-mode="auto" data-light-theme="light" data-dark-theme="dark_dimmed">
+<html lang="en" data-color-mode="light" data-light-theme="light">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -13,8 +13,6 @@
   var name = new URLSearchParams(location.search).get("theme");
   if (!Object.prototype.hasOwnProperty.call(THEMES, name)) return;
   var root = document.documentElement;
-  root.setAttribute("data-color-mode", "dark");
-  root.setAttribute("data-dark-theme", "dark");
   root.setAttribute("data-acl-theme", name);
   [THEMES[name], "/ui/themes/" + name + ".css"].forEach(function (href) {
     var l = document.createElement("link");
