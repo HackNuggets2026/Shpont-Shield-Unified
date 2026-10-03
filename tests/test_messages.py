@@ -815,10 +815,13 @@ def test_a_base64_text_document_is_masked_in_place_and_otherwise_forwarded_uncha
     [
         PDF,
         {"type": "base64", "media_type": "text/plain", "data": b64(b"\xff\xfe binary")},
+        # A lenient decoder reads only "hello"; the upstream gets the key too.
+        {"type": "base64", "media_type": "text/plain", "data": b64("hello") + b64(KEY)},
+        {"type": "base64", "media_type": "text/plain", "data": "aGVsbG9="},
         {"type": "url", "url": "https://x.example/report.pdf"},
         {"type": "file", "file_id": "file_01"},
     ],
-    ids=["pdf", "undecodable-text", "url", "file"],
+    ids=["pdf", "undecodable-text", "concatenated", "non-canonical", "url", "file"],
 )
 @pytest.mark.parametrize("where", ["message", "tool_result"])
 def test_documents_the_gateway_cannot_read_are_blocked_by_default(policy_dir, monkeypatch, source, where):
@@ -856,6 +859,28 @@ def test_base64_images_are_allowed_by_default_and_can_be_blocked(policy_dir, mon
     r = ask(c, tool_turn([image]))
     assert r.status_code == 400 and "upstream.anthropic.opaque_images" in r.json()["error"]["message"]
     assert len(sent) == 2
+
+
+@pytest.mark.parametrize(
+    "source, what",
+    [
+        ({"type": "base64", "media_type": "text/plain", "data": b64(KEY)}, "text/plain data"),
+        ({"type": "base64", "media_type": "image/png", "data": {"note": KEY}}, "non-string image/png data"),
+        ({"type": "base64", "data": [KEY]}, "non-string base64 data"),
+    ],
+    ids=["text-media-type", "non-string-data", "no-media-type"],
+)
+@pytest.mark.parametrize("where", ["message", "tool_result"])
+def test_images_that_are_not_image_data_are_left_to_opaque_documents(policy_dir, monkeypatch, source, what, where):
+    c, sent = upstream(policy_dir, lambda b: message(text("ok")), monkeypatch)
+    block = {"type": "image", "source": source}
+    r = ask(c, tool_turn([block]) if where == "tool_result" else [{"role": "user", "content": [block, text("hi")]}])
+    assert r.status_code == 400, r.text
+    assert r.json()["error"]["message"] == (
+        f"blocked by policy: an image's {what} cannot be inspected by the gateway "
+        "(upstream.anthropic.opaque_documents: block)"
+    )
+    assert sent == []
 
 
 # --- unusual upstream streams -----------------------------------------------------------------

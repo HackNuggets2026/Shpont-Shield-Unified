@@ -117,12 +117,25 @@ def _unreadable(block: dict[str, Any]) -> str | None:
     kind = src.get("type")
     if kind == "base64":
         media = src.get("media_type")
-        return f"{media} data" if isinstance(media, str) else "base64 data"
+        what = f"{media} data" if isinstance(media, str) else "base64 data"
+        return what if isinstance(src.get("data"), str) else f"non-string {what}"
     if kind == "url":
         return "content fetched from a URL"
     if kind == "file":
         return "uploaded file"
     return f"{kind!r} source"
+
+
+def _image(block: dict[str, Any]) -> bool:
+    """An image block whose data, if inline, is a string with an image media type; any other image is
+    left to `opaque_documents`."""
+    src = block.get("source")
+    if block.get("type") != "image" or not isinstance(src, dict):
+        return False
+    media = src.get("media_type")
+    return src.get("type") != "base64" or (
+        isinstance(src.get("data"), str) and isinstance(media, str) and media.strip().lower().startswith("image/")
+    )
 
 
 def _text_media(media: Any) -> bool:
@@ -150,10 +163,15 @@ def open_documents(messages: list[Any]) -> dict[int, tuple[dict[str, Any], str]]
             and isinstance(src.get("data"), str)
         ):
             continue
+        # Strictly, whole: a lenient decoder stops at the first padding, hiding whatever follows it.
+        compact = "".join(src["data"].split())
         try:
-            text = base64.b64decode(src["data"]).decode()
+            raw = base64.b64decode(compact, validate=True)
+            text = raw.decode()
         except ValueError:
             continue  # not UTF-8 or not base64: unreadable
+        if base64.b64encode(raw).decode() != compact:
+            continue  # non-canonical (stray trailing bits): decoders disagree on it
         opened[k] = (src, text)
         b["source"] = {**src, "type": "text", "data": text}
     return opened
@@ -447,14 +465,16 @@ def mount(app: FastAPI, layer: ControlLayer, store: PolicyStore, http: httpx.Asy
         for i, m in enumerate(messages):
             for b in _media(m.get("content")):
                 what = _unreadable(b)
-                kind = "document" if b.get("type") == "document" else "image"
-                mode = cfg.opaque_documents if kind == "document" else cfg.opaque_images
+                kind = "image" if b.get("type") == "image" else "document"
+                policy = "image" if _image(b) else "document"
+                mode = cfg.opaque_images if policy == "image" else cfg.opaque_documents
                 # A logged one is recorded once, in the turn that adds it.
                 if what is None or mode == "allow" or (mode == "log" and (counting or i < new)):
                     continue
                 ctx = Context(principal, Direction.INPUT, "", model=model, channel=CHANNEL, metered=False)
                 act = Action.BLOCK if mode == "block" else Action.LOG
-                setting = f"upstream.anthropic.opaque_{kind}s"
+                setting = f"upstream.anthropic.opaque_{policy}s"
+                noun = "an image" if kind == "image" else "a document"
                 v = Verdict(
                     act,
                     "",
@@ -462,7 +482,7 @@ def mount(app: FastAPI, layer: ControlLayer, store: PolicyStore, http: httpx.Asy
                     ctx.request_id,
                     store.policy.version,
                     status_code=400 if act is Action.BLOCK else 200,
-                    reason=f"a {kind}'s {what} cannot be inspected by the gateway ({setting}: {mode})",
+                    reason=f"{noun}'s {what} cannot be inspected by the gateway ({setting}: {mode})",
                 )
                 layer.audit.record(ctx, v, inspected=False)
                 if v.blocked:
