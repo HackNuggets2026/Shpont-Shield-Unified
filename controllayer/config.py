@@ -184,12 +184,21 @@ class Policy(_Strict):
         data = self.model_dump(by_alias=True)
         for name, fields in override.controls.items():
             if name in data and isinstance(data[name], dict):
-                data[name].update(fields)
+                _merge(data[name], fields)
             elif name in data["semantic_controls"]:
-                data["semantic_controls"][name].update(fields)
+                _merge(data["semantic_controls"][name], fields)
             else:
                 raise ValueError(f"team {team!r} overrides unknown control {name!r}")
         return Policy.model_validate(data)
+
+
+def _merge(base: dict, patch: dict) -> None:
+    """Deep merge, so overriding one entity or threshold keeps its siblings."""
+    for k, v in patch.items():
+        if isinstance(v, dict) and isinstance(base.get(k), dict):
+            _merge(base[k], v)
+        else:
+            base[k] = v
 
 
 def parse_policy(text: str) -> Policy:

@@ -157,7 +157,7 @@ semantic_controls:
 teams:
   finance:
     controls:
-      pii: { mode: block }                 # finance must never paste card numbers into any model
+      pii: { mode: block, entities: { credit_card: block, iban: block } }   # never send card/account numbers to a model
   interns:
     controls:
       prompt_injection: { thresholds: { block: 0.6, warn: 0.4, log: 0.2 } }
