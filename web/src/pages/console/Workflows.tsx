@@ -15,7 +15,7 @@ interface Pending {
 export function costRange(m: Workflow["measured"]) {
   if (!m.runs) return <span className="text-muted">no runs yet</span>;
   return (
-    <span className="tnum">
+    <span className="tnum whitespace-nowrap">
       {usd(m.usd_p50)}
       <span className="text-muted"> – </span>
       {usd(m.usd_p90)}
@@ -70,7 +70,7 @@ export function Workflows() {
                 <Empty title="No workflows on the menu" hint="Add workflows under menu.workflows in policy.yaml." />
               ) : (
                 <TableWrap>
-                  <table className="tbl min-w-[1080px]">
+                  <table className="tbl min-w-[1000px]">
                     <thead>
                       <tr>
                         <th>Workflow</th>
@@ -80,8 +80,7 @@ export function Workflows() {
                         <th className="text-right">Spend 30d</th>
                         <th>Limits</th>
                         <th>Who</th>
-                        <th>Models</th>
-                        <th>Tools</th>
+                        <th>Models &amp; tools</th>
                         <th className="text-center">Approval</th>
                         <th className="text-center">Enabled</th>
                       </tr>
@@ -89,7 +88,7 @@ export function Workflows() {
                     <tbody>
                       {m.workflows.map((w) => (
                         <tr key={w.name} className={w.enabled ? "" : "opacity-60"}>
-                          <td className="max-w-[260px]">
+                          <td className="max-w-[220px]">
                             <div className="font-medium text-ink">{w.name}</div>
                             <div className="truncate text-xs text-muted" title={w.description}>
                               {w.description || "—"}
@@ -107,11 +106,15 @@ export function Workflows() {
                           <td>
                             <Chips items={[...w.teams, ...w.roles.map((r) => `role:${r}`)]} max={2} empty="everyone" />
                           </td>
-                          <td>
-                            <Chips items={w.models} max={2} />
-                          </td>
-                          <td>
-                            <Chips items={w.tools} max={2} />
+                          <td className="max-w-[220px] space-y-1">
+                            <div className="flex gap-1.5 text-[11px]">
+                              <span className="w-10 shrink-0 text-muted">models</span>
+                              <Chips items={w.models} max={1} />
+                            </div>
+                            <div className="flex gap-1.5 text-[11px]">
+                              <span className="w-10 shrink-0 text-muted">tools</span>
+                              <Chips items={w.tools} max={2} />
+                            </div>
                           </td>
                           <td>
                             <div className="flex items-center justify-center gap-2">
@@ -122,7 +125,7 @@ export function Workflows() {
                                   setPending({ wf: w, patch: { approval: v ? "admin" : "none" }, what: v ? "Require approval" : "Remove approval" })
                                 }
                               />
-                              <span className="w-10 text-xs text-muted">{w.approval === "admin" ? "admin" : "none"}</span>
+                              <span className="w-9 text-xs text-muted">{w.approval === "admin" ? "admin" : "none"}</span>
                             </div>
                           </td>
                           <td className="text-center">

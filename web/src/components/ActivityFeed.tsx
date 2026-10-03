@@ -38,7 +38,7 @@ export function FeedRow({ e, linkPeople, fresh, onClick }: { e: ActivityEvent; l
       )}
     >
       <time className="tnum pt-0.5 text-muted" title={dateTime(e.ts)}>
-        {Date.now() / 1000 - e.ts < 86400 ? timeOfDay(e.ts).slice(0, 5) : ago(e.ts)}
+        {new Date(e.ts * 1000).toDateString() === new Date().toDateString() ? timeOfDay(e.ts).slice(0, 5) : ago(e.ts)}
       </time>
       <div className="hidden pt-px sm:block">
         <SourceBadge source={e.source} />

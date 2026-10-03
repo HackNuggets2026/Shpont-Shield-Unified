@@ -52,7 +52,7 @@ function WorkflowCard({ w, pending, onRequest }: { w: Workflow; pending: boolean
             {w.why ?? "not available"}
           </Pill>
         )}
-        {!w.available && w.enabled && w.approval === "admin" && (
+        {!w.available && w.enabled && w.approval === "admin" && !w.why?.startsWith("paused") && (
           pending ? (
             <Pill tone="info">request pending</Pill>
           ) : (
@@ -78,7 +78,10 @@ export function PortalMenu() {
   const s = q.data;
   const pendingWf = new Set(s.requests.filter((r) => r.status === "pending" && r.kind === "workflow").map((r) => r.workflow));
   const quotaPending = s.requests.some((r) => r.status === "pending" && r.kind === "quota");
-  const sorted = [...s.menu].sort((a, b) => Number(b.available) - Number(a.available));
+  // The menu's availability ignores account status; a paused account can use nothing.
+  const paused = s.status.status !== "active";
+  const menu = paused ? s.menu.map((w) => ({ ...w, available: false, why: `paused: your access is ${s.status.status}` })) : s.menu;
+  const sorted = [...menu].sort((a, b) => Number(b.available) - Number(a.available));
 
   return (
     <div className="space-y-4">
