@@ -7,8 +7,8 @@ each one; none blocks the demo.
    breadcrumbs (Organization › department › team › person). The SPA runs one extra
    `GET /admin/people?q=<pid>&limit=10` and picks the exact `principal` match. Suggest adding
    `department`, `name` (and `title`, `location`) to the person detail.
-2. **`/outliers` growth rows have no `name`.** `cost` and `risk` rows carry `name`; `growth` rows only have
-   `principal`. The UI falls back to the id. Suggest adding `name` for consistency.
+2. **`/outliers` growth rows have no `name` in the contract.** M1 returns it anyway; the client type keeps it
+   optional and falls back to the id. Suggest adding it to the contract text.
 3. **`/org/teams` has no name filter (`q=`).** The global search box matches team names client-side against
    one `?limit=200` page. Fine at 41 teams, not at a 50k-person install with ~1,000 teams. Suggest `q=` on
    `/org/teams` (prefix/substring, like `/people`).
