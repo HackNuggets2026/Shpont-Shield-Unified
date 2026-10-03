@@ -150,8 +150,15 @@ export function IncidentPage() {
   // Org context: the directory fields ride on the incident; the person's profile fills in for older servers.
   const inc0 = q.data?.incident as OrgIncident | undefined;
   const pd = person.data as (typeof person.data & OrgFields) | undefined;
-  const team = inc0?.team || pd?.team || "";
-  const department = inc0?.department || pd?.department || "";
+  // The incident detail does not carry directory fields yet: look the person up in the directory.
+  const dir = useQuery({
+    queryKey: ["admin", "people", "lookup", pid],
+    queryFn: async () => (await ops.people({ q: pid!, limit: 10 })).rows.find((r) => r.principal === pid) ?? null,
+    enabled: !!pid && !inc0?.department,
+    staleTime: 60_000,
+  });
+  const team = inc0?.team || dir.data?.team || pd?.team || "";
+  const department = inc0?.department || dir.data?.department || pd?.department || "";
   const rule = inc0?.rule ?? "";
   const peersTeam = useQuery({
     queryKey: ["admin", "incidents", "peers", "team", rule, team],
@@ -219,7 +226,7 @@ export function IncidentPage() {
 
   const { incident: inc, timeline, principal } = q.data;
   const row = person.data;
-  const who = inc0?.name || principal.id;
+  const who = inc0?.name || dir.data?.name || principal.id;
   const th = pol.data?.response ?? null;
   const halfLife = pol.data?.half_life_minutes ?? null;
   const live = inc.status === "open" || inc.status === "acknowledged";
@@ -380,7 +387,7 @@ export function IncidentPage() {
             {row && (
               <div className="mb-3 text-xs text-muted">
                 {who !== principal.id && <span className="font-mono">{principal.id} · </span>}
-                {[team, department !== team ? department : "", row.role].filter(Boolean).join(" · ")} · {row.open_incidents} open incident{row.open_incidents === 1 ? "" : "s"}
+                {[team, department !== team ? department : "", row.role !== "?" ? row.role : ""].filter(Boolean).join(" · ")} · {row.open_incidents} open incident{row.open_incidents === 1 ? "" : "s"}
               </div>
             )}
             <div className="mb-1 text-[11px] font-medium uppercase tracking-wide text-muted">Risk score</div>
