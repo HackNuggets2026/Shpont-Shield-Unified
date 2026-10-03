@@ -223,6 +223,8 @@ class ControlLayer:
             findings = _drop_known_pii(ctx, findings)
 
         extra = dict(extra or {})
+        if ctx.model:
+            extra["provider"] = policy.upstream.backend
         # Deterministic block already decided the outcome; skip the model call.
         if inspect and semantic and not _blocked(findings):
             sem, stats = await SemanticGuard(self.backend(policy)).check(ctx, policy)

@@ -15,6 +15,7 @@ from typing import Any
 import httpx
 
 from .config import Policy
+from .export import convert
 from .state import StateStore
 from .types import Context, Principal, Verdict
 
@@ -125,13 +126,14 @@ class RiskEngine:
         }
         self.alerts.append(event)
         for sink in policy.insider_risk.sinks:
+            doc = convert(event, "alert", sink.format)
             if sink.type == "file" and sink.path:
                 path = self.base_dir / sink.path
                 path.parent.mkdir(parents=True, exist_ok=True)
                 with path.open("a") as fh:
-                    fh.write(json.dumps(event) + "\n")
+                    fh.write(json.dumps(doc) + "\n")
             elif sink.type == "webhook" and sink.url and self.http:
-                self._spawn(self._post(sink.url, event))
+                self._spawn(self._post(sink.url, doc))
         return event
 
     async def _post(self, url: str, event: dict[str, Any]) -> None:

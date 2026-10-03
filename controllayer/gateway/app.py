@@ -20,7 +20,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
-from .. import resources
+from .. import audit, export, resources
 from ..config import PolicyStore
 from ..controls.access import authenticate
 from ..controls.pii_model import PII_CONTROLS
@@ -136,6 +136,7 @@ def create_app(
 
     @app.middleware("http")
     async def admin_guard(request: Request, call_next):
+        audit.client_ip.set(request.client.host if request.client else None)
         token = store.policy.identity.admin_token
         if token and (request.url.path.startswith("/admin") or request.url.path == "/metrics"):
             given = request.headers.get("x-admin-token") or request.query_params.get("token") or ""
@@ -762,8 +763,23 @@ def create_app(
         return out[:limit]
 
     @app.get("/admin/audit/export")
-    async def export(format: str = "jsonl"):
+    async def audit_export(format: str = "jsonl"):
+        if format not in ("jsonl", "csv", "ocsf", "ecs"):
+            raise BadRequest("format must be jsonl, csv, ocsf or ecs")
         rows = list(layer.audit.events)
+        if format in ("ocsf", "ecs"):
+            # One stream for a SIEM: decisions, admin actions and insider-risk alerts, in time order.
+            records = sorted(
+                [(e, "decision") for e in rows]
+                + [(n, "note") for n in layer.audit.notes]
+                + [(a, "alert") for a in layer.risk.alerts],
+                key=lambda r: r[0]["ts"],
+            )
+            return Response(
+                "".join(json.dumps(export.convert(r, kind, format)) + "\n" for r, kind in records),
+                media_type="application/x-ndjson",
+                headers={"content-disposition": f"attachment; filename=audit-{format}.jsonl"},
+            )
         if format == "csv":
             buf = io.StringIO()
             w = csv.writer(buf)

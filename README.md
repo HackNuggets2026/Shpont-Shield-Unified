@@ -64,7 +64,7 @@ Security defines a catalog in `policy.yaml` (`resources:`) with who is entitled 
 
 ## Insider risk
 
-Every finding adds points to the person's score, which decays with a 24 h half-life. An agent's points also count half against its owner. At `watch` the person gets a stricter policy (`insider_risk.watch_controls`) and full-text capture. At `restricted` everything is blocked. Security can override a person's level in either direction, or leave it on auto (score-based); an agent is never less restricted than its owner. Level changes, blocks while watched and selected categories (exfiltration, malware, leaked keys) raise **silent alerts** to the console, a JSONL file or a SIEM webhook. The employee's response is unchanged. Monitoring itself is disclosed (GDPR, Polish Labour Code art. 22³).
+Every finding adds points to the person's score, which decays with a 24 h half-life. An agent's points also count half against its owner. At `watch` the person gets a stricter policy (`insider_risk.watch_controls`) and full-text capture. At `restricted` everything is blocked. Security can override a person's level in either direction, or leave it on auto (score-based); an agent is never less restricted than its owner. Level changes, blocks while watched and selected categories (exfiltration, malware, leaked keys) raise **silent alerts** to the console, a JSONL file or a SIEM webhook (each sink sends native JSON, OCSF or ECS: `format:`). The employee's response is unchanged. Monitoring itself is disclosed (GDPR, Polish Labour Code art. 22³).
 
 ## Contextual PII (OpenAI Privacy Filter)
 
@@ -99,6 +99,7 @@ All controls, thresholds, allowed models, budgets and team overrides live in [`p
 |---|---|
 | `/` | Dashboard: posture, threats, shadow findings, controls, budgets, latency, audit trail, prompt playground |
 | `/admin/audit/export?format=jsonl\|csv` | Audit log for security teams. Detected PII and secrets are masked in every event, whatever the action; the SHA-256 of the original is kept |
+| `/admin/audit/export?format=ocsf\|ecs` | The same decisions plus admin actions and insider-risk alerts as one NDJSON stream for a SIEM: [OCSF 1.9.0](https://schema.ocsf.io/1.9.0/) or ECS 9.5 (Elastic, Wazuh). Same masking; full text only where the native event has it |
 | `/admin/summary`, `/admin/events` | JSON for other tools |
 | `/metrics` | Prometheus: decisions, findings, latency per stage, spend |
 

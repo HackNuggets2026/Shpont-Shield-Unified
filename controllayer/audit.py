@@ -7,11 +7,15 @@ import json
 import statistics
 import time
 from collections import Counter, deque
+from contextvars import ContextVar
 from pathlib import Path
 from typing import Any
 
 from .controls.patterns import redact
 from .types import Action, Context, Verdict
+
+# Address of the HTTP peer that caused the event, set per request by the gateway.
+client_ip: ContextVar[str | None] = ContextVar("client_ip", default=None)
 
 
 class AuditLog:
@@ -39,18 +43,19 @@ class AuditLog:
             "channel": ctx.channel,
             "direction": ctx.direction.value,
             "principal": ctx.principal.id,
+            "owner": ctx.principal.owner,
             "team": ctx.principal.team,
             "role": ctx.principal.role,
             "model": ctx.model,
             "tool": ctx.tool,
+            "src_ip": client_ip.get(),
             "action": v.action.value,
             "status_code": v.status_code,
             "reason": v.reason,
             "policy_version": v.policy_version,
             "latency_ms": {k: round(x, 2) for k, x in v.latency_ms.items()},
             "text_sha256": hashlib.sha256(ctx.text.encode()).hexdigest(),
-            # Every detected span is masked, even when the action was only log/warn/shadow.
-            "text": None if v.action is Action.BLOCK else redact(v.text, [s for f in v.findings for s in f.spans]),
+            "text": _stored_text(ctx, v),
             "findings": [
                 {
                     "control": f.control,
@@ -86,7 +91,7 @@ class AuditLog:
 
     def note(self, kind: str, actor: str, **details: Any) -> dict[str, Any]:
         """Administrative events (grants, revocations, watch changes) on the same trail as decisions."""
-        event = {"ts": time.time(), "kind": kind, "actor": actor, **details}
+        event = {"ts": time.time(), "kind": kind, "actor": actor, "src_ip": client_ip.get(), **details}
         self.notes.append(event)
         if self.path:
             with self.path.open("a") as fh:
@@ -104,3 +109,13 @@ class AuditLog:
                 "max": round(s[-1], 2),
             }
         return out
+
+
+def _stored_text(ctx: Context, v: Verdict) -> str | None:
+    """Every detected span masked, even when the action was only log/warn/shadow. Spans index into
+    the original text, not the verdict's already redacted one."""
+    if v.action is Action.BLOCK:
+        return None
+    if any(f.action is Action.REDACT and not f.spans for f in v.findings):
+        return v.text  # withheld as a whole: nothing to mask precisely
+    return redact(ctx.text, [s for f in v.findings for s in f.spans])

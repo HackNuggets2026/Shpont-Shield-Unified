@@ -231,9 +231,9 @@ insider_risk:
   watch_capture_raw: true  # full text of watched sessions goes to the audit log
   alert_on_block_while_watched: true
   alert_categories: [data_exfiltration, malware, aws_access_key, private_key]
-  sinks:
+  sinks:                   # format: native (default) | ocsf (OCSF 1.9 Detection Finding) | ecs
     - { type: file, path: data/security-alerts.jsonl }
-    # - { type: webhook, url: "${SECURITY_WEBHOOK_URL}" }
+    # - { type: webhook, url: "${SECURITY_WEBHOOK_URL}", format: ocsf }
 
 # --- Contextual PII (OpenAI Privacy Filter) -------------------------------------
 # Token classifier sidecar (services/privacy_filter). Finds names, addresses, etc. that

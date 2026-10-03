@@ -150,6 +150,7 @@ class AlertSink(_Strict):
     type: Literal["webhook", "file"]
     url: str | None = None
     path: str | None = None
+    format: Literal["native", "ocsf", "ecs"] = "native"
 
 
 class InsiderRisk(_Strict):

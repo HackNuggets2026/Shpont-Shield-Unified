@@ -33,6 +33,19 @@ Such decisions are never cached, because expiry depends on time. Reaching a cata
 
 `RiskEngine` keeps a decaying score per principal. Points come from each finding's *proposed* action, so shadowed and capped findings still count as intent, plus category weights. Rate limits, outages and auth failures are not evidence. A person's own level is the one security set manually if any (an override, in either direction), otherwise the score-based one. The effective level is the higher of that and, for agents, the owner's effective level. The level selects the policy variant (`watch_controls`), turns on raw capture, or blocks (`restricted`). It is part of the verdict cache key.
 
+## SIEM export
+
+`controllayer/export.py` maps native records to OCSF 1.9.0 (checked against schema.ocsf.io; `tests/ocsf_1.9.0_schema.json` is the extract the tests validate against) and to ECS 9.5:
+
+| Record | OCSF class | ECS |
+|---|---|---|
+| Decision | API Activity (6003), profiles `security_control` + `ai_operation`: `action_id`/`disposition_id` from the action, `message_context.prompt_text` or `response_text` (by whether the text goes to the model or comes from it), `ai_model` | `event.kind: event`, `event.category: api`, `gen_ai.*` |
+| Grant / revoke | User Management (3007), Assign / Remove Privileges; `user` is the agent, `privileges` the scopes | `event.category: iam` |
+| Risk level, suspension | Entity Management (3004), Update / Suspend / Resume | `iam` / `configuration` |
+| Insider-risk alert | Detection Finding (2004): `risk_score`, `risk_level`, `finding_info`, `evidences` | `event.kind: alert`, `event.risk_score` |
+
+An agent's event names its owner as the user (`actor.user`, ECS `user`), the agent as `ai_agent` (ECS `gen_ai.agent`) and the owner-to-agent binding as `delegation`. Fields OCSF has no place for (findings, channel, latency, `raw_text`) go in `unmapped` (ECS: `controllayer.*`). `src_endpoint.ip` / `source.ip` is the HTTP peer of the request. Every mapped text is the masked native one.
+
 ## Contextual PII
 
 The Privacy Filter sidecar returns BIOES-decoded spans. The gateway applies `min_score`, maps labels to actions and merges the spans with regex findings. In chat, reversible labels become placeholders numbered per request, and are put back after the reply passes its own checks. PII values the caller supplied in the same request are not re-redacted in the reply. Overrides (user header or decision model) downgrade PII findings to `log`, never past `override_max`, and are written to the audit trail.
@@ -79,7 +92,7 @@ LLM04 (data poisoning), LLM08 (vector/embedding) and LLM09 (misinformation) are 
 
 ## Privacy
 
-Monitoring employees' AI use is personal-data processing. In the EU that means GDPR, and possibly works-council agreements. By default the audit log stores the text with every detected span masked (even when the action was only `log`), plus a SHA-256 of the original (`audit.store_raw_text: false`). Blocked payloads are not stored at all. Content flagged only by a semantic control has no span to mask and is stored as sent. `shadow` and `log` modes allow monitoring without interfering.
+Monitoring employees' AI use is personal-data processing. In the EU that means GDPR, and possibly works-council agreements. By default the audit log stores the text with every detected span masked (even when the action was only `log`), plus a SHA-256 of the original and the client's IP address (`audit.store_raw_text: false`). Blocked payloads are not stored at all. Content flagged only by a semantic control has no span to mask and is stored as sent. `shadow` and `log` modes allow monitoring without interfering.
 
 ## Known gaps
 
