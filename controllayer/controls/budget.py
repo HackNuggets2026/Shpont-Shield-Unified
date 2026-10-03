@@ -117,11 +117,11 @@ class BudgetLedger:
                 )
         return out
 
-    def absorb(self, principal: str, team: str, usd: float, ts: float) -> None:
-        """Spend recorded elsewhere (an imported bill): counts against today's budgets when it is today's."""
+    def absorb(self, principal: str, team: str, usd: float, ts: float, tokens: int = 0) -> None:
+        """Spend recorded elsewhere (telemetry, an imported bill): counts against today's budgets if it is today's."""
         day = time.strftime("%Y-%m-%d", time.gmtime(ts))
         if day == _day():
-            self._apply(principal, team, None, day, 0, 0, 0, usd, 0.0)
+            self._apply(principal, team, None, day, 0, tokens, 0, usd, 0.0)
 
     def downgrade(self, ctx: Context, policy: Policy, model: str | None) -> str | None:
         """The cheaper model to use instead of `model`, once the caller is past `downgrade.at`."""
@@ -241,7 +241,14 @@ class BudgetLedger:
         return usd
 
     def charge(
-        self, ctx: Context, resource: str, usd: float, quantity: float, unit: str, ref: str | None = None
+        self,
+        ctx: Context,
+        resource: str,
+        usd: float,
+        quantity: float,
+        unit: str,
+        ref: str | None = None,
+        source: str = "gateway",
     ) -> None:
         """A non-LLM cost (a closed lease, a reported CI run): counts against the same USD budgets."""
         self._apply(ctx.principal.id, ctx.principal.team, None, _day(), 0, 0, 0, usd, 0.0)
@@ -253,6 +260,7 @@ class BudgetLedger:
                 unit=unit,
                 usd=usd,
                 request_id=ref or ctx.request_id,
+                source=source,
             )
 
     def record_guard(self, ctx: Context, model: str, input_tokens: int) -> None:

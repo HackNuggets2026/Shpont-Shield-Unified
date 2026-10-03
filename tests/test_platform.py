@@ -226,3 +226,71 @@ def test_focus_round_trip(client, policy_dir, tmp_path_factory):
     assert by(again) == by(rows)
     assert fresh.post("/v1/import/focus", content="a,b\n1,2\n").status_code == 400
     assert fresh.post("/v1/import/focus", content=csv_text, headers={"x-admin-token": "wrong"}).status_code == 401
+
+
+# ---- events -------------------------------------------------------------------------------
+
+
+def _events(c, **q):  # noqa: ANN001
+    layer = c.app.state.layer
+    return layer.usage.events(**q)
+
+
+def test_gateway_checks_leases_and_reports_become_events(client):
+    chat(client, "hello", who="alice")
+    mcp(client, "tools/call", {"name": "boot_simulator", "arguments": {}}, who="alice")
+    chat(client, "my key is AKIAIOSFODNN7EXAMPLE", who="alice")
+    client.post("/v1/usage", json={"resource": "ci_minutes", "quantity": 3}, headers=KEYS["alice"])
+    ev = _events(client, principal="alice")
+    kinds = {e["kind"] for e in ev}
+    assert {"check.input", "check.tool_call", "lease.start", "usage.report"} <= kinds
+    sim = next(e for e in ev if e["kind"] == "lease.start")
+    assert sim["urn"].startswith("urn:shield:device:apple:ios-simulator/sim-")
+    chk = next(e for e in ev if e["kind"] == "check.input" and e["decision"] == "allow")
+    assert chk["resource"] == "mock" and chk["source"] == "gateway"
+    assert any(e["decision"] in ("redact", "block") and e["severity"] != "info" for e in ev)
+
+
+def _ce(**over):
+    return {
+        "specversion": "1.0",
+        "id": "evt-1",
+        "source": "//ci.acme.example/runner-7",
+        "type": "dev.shpont.llm.call",
+        "subject": "bob",
+        "time": "2026-09-01T10:00:00Z",
+        "data": {
+            "gen_ai.request.model": "gpt-4o-mini",
+            "gen_ai.usage.input_tokens": 1000,
+            "gen_ai.usage.output_tokens": 500,
+            "workflow": "data_analysis",
+            "task": "FIN-9",
+            "region": "eu",
+        },
+        **over,
+    }
+
+
+def test_cloudevents_ingest_attributes_meters_and_keeps_history(client):
+    r = client.post("/v1/events", json=[_ce(), _ce(id="evt-2", subject=None, data={"email": "Alice@acme.example",
+                    "ConsumedQuantity": 30, "ResourceId": "urn:shield:ci:github:actions-minutes"})],
+                    headers={"x-admin-token": ADMIN})  # fmt: skip
+    assert r.json()["accepted"] == 2
+    ev = {e["id"]: e for e in _events(client, source="cloudevents")}
+    llm = ev["evt-1"]
+    assert (llm["principal"], llm["team"], llm["resource"], llm["tokens"]) == ("bob", "finance", "gpt-4o-mini", 1500)
+    assert llm["ts"] == pytest.approx(1788256800) and llm["detail"] == {"region": "eu"}
+    assert llm["usd"] == pytest.approx(1000 * 0.15 / 1e6 + 500 * 0.6 / 1e6)  # no cost sent: priced from the catalog
+    ci = ev["evt-2"]
+    assert (ci["principal"], ci["resource"], ci["usd"]) == ("alice", "ci_minutes", pytest.approx(0.24))
+    rows = client.get("/admin/usage", params={"by": "resource,source", "days": 60}).json()
+    assert any(x["resource"] == "ci_minutes" and x["source"] == "cloudevents" for x in rows)
+
+
+def test_cloudevents_from_an_employee_are_their_own(client):
+    r = client.post("/v1/events", json=_ce(subject="bob"), headers=KEYS["carol"])
+    assert r.status_code == 200
+    assert _events(client, source="cloudevents")[0]["principal"] == "carol"
+    assert client.post("/v1/events", json=_ce(specversion="0.3"), headers=KEYS["carol"]).status_code == 400
+    assert client.post("/v1/events", json={"id": "x"}, headers=KEYS["carol"]).status_code == 400
+    assert client.post("/v1/events", json=_ce(), headers={"x-admin-token": "wrong"}).status_code == 401

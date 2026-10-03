@@ -14,10 +14,10 @@ identity:
   require_auth: true
   admin_token: ${ACL_ADMIN_TOKEN:-demo-admin-token}   # dashboard: http://127.0.0.1:8787/?token=demo-admin-token
   api_keys:
-    dev-alice-key: { principal: alice, team: engineering, role: developer }
-    fin-bob-key: { principal: bob, team: finance, role: analyst }
+    dev-alice-key: { principal: alice, team: engineering, role: developer, email: alice@acme.example }
+    fin-bob-key: { principal: bob, team: finance, role: analyst, email: bob@acme.example }
     ops-agent-key: { principal: ops-agent, team: platform, role: automation }
-    intern-key: { principal: carol, team: interns, role: intern }
+    intern-key: { principal: carol, team: interns, role: intern, email: carol@acme.example }
 
 models:
   # Glob patterns. Requests naming any other model are refused before reaching it.

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import time
 import unicodedata
 from collections import OrderedDict
@@ -17,8 +18,11 @@ from .controls.resources import LeaseTracker, check_grants
 from .controls.semantic import SemanticGuard
 from .decision import DecisionBackend, HeuristicBackend, OllamaSystemOne
 from .detections import RiskEngine
+from .events import Ingestor, verdict_event
 from .types import Action, Context, Direction, Finding, Principal, Verdict
 from .usage import UsageStore
+
+log = logging.getLogger(__name__)
 
 _STATUS = {"auth": 401, "budget": 429, "resources": 429}  # access_grant: 403
 
@@ -36,6 +40,8 @@ class ControlLayer:
         self.leases = LeaseTracker(self.usage, self.ledger)
         self.risk = RiskEngine(self.usage, store)
         self.leases.on_signal = self.risk.signal
+        self.ingestor = Ingestor(self.usage, self.ledger, store)
+        self.leases.urns = {n: r.urn for n, r in p.catalog.items()}
         # (principal, session) -> declared workflow, so later calls in a session inherit its label.
         self.sessions: OrderedDict[tuple[str, str], str] = OrderedDict()
         self.audit = audit or AuditLog(store.data_path(p.audit.path), p.audit.ring_size, p.audit.store_raw_text)
@@ -51,6 +57,7 @@ class ControlLayer:
         return self.store.policy
 
     def _on_reload(self, old: str, new: Policy) -> None:
+        self.leases.urns = {n: r.urn for n, r in new.catalog.items()}
         self._team_cache.clear()
         self._seen.clear()
         self.audit.store_raw_text = new.audit.store_raw_text
@@ -225,6 +232,11 @@ class ControlLayer:
         if ctx.task_id:
             extra.setdefault("task", ctx.task_id)
         self.audit.record(ctx, verdict, extra)
+        if ctx.channel != "dashboard" and (ctx.metered or verdict.action is not Action.ALLOW):
+            try:
+                self.usage.add_event(verdict_event(ctx, verdict, policy))
+            except Exception:  # noqa: BLE001 - the activity stream must never fail the request it records
+                log.exception("event write failed")
         self.risk.observe(ctx, verdict, policy)
         return verdict
 

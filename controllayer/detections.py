@@ -220,6 +220,19 @@ class RiskEngine:
         }
         self.store.add_incident(inc)
         self.incidents.append(inc)
+        self.store.add_event(
+            {
+                "ts": now,
+                "id": "inc-" + inc["id"],
+                "source": "detections",
+                "kind": "incident",
+                "principal": pid,
+                "decision": rule,
+                "severity": inc["severity"],
+                "request_id": evidence[-1] if evidence else None,
+                "detail": {"incident": inc["id"], "detail": detail, "weight": w, "evidence": evidence},
+            }
+        )
         log.warning("incident %s %s: %s", rule, pid, detail)
         self._respond(pid, policy, now)
 

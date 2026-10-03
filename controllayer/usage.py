@@ -38,10 +38,25 @@ CREATE TABLE IF NOT EXISTS requests (
     id TEXT PRIMARY KEY, ts REAL, principal TEXT, kind TEXT, workflow TEXT, scale REAL,
     reason TEXT, status TEXT, decided_by TEXT, decided_at REAL, note TEXT, detail TEXT
 );
+CREATE TABLE IF NOT EXISTS events (
+    ts REAL, id TEXT, source TEXT, kind TEXT, principal TEXT, team TEXT, client TEXT, session TEXT,
+    prompt_id TEXT, task TEXT, workflow TEXT, resource TEXT, urn TEXT, model TEXT, tool TEXT, decision TEXT,
+    severity TEXT, usd REAL, tokens INTEGER, request_id TEXT, detail TEXT
+);
+CREATE INDEX IF NOT EXISTS events_ts ON events(ts);
+CREATE INDEX IF NOT EXISTS events_who ON events(principal, ts);
+CREATE INDEX IF NOT EXISTS events_req ON events(request_id);
 CREATE TABLE IF NOT EXISTS admin_actions (
     ts REAL, actor TEXT, action TEXT, target TEXT, reason TEXT, detail TEXT
 );
 """
+
+EVENT_COLUMNS = (
+    "ts", "id", "source", "kind", "principal", "team", "client", "session", "prompt_id", "task", "workflow",
+    "resource", "urn", "model", "tool", "decision", "severity", "usd", "tokens", "request_id", "detail",
+)  # fmt: skip
+EVENT_FILTERS = {"source", "kind", "principal", "team", "session", "task", "workflow", "decision", "severity",
+                 "request_id", "resource", "tool", "model"}  # fmt: skip
 
 # Columns added after a table was first created: (table, column, type).
 MIGRATIONS = [("usage", "source", "TEXT"), ("usage", "client", "TEXT"), ("requests", "detail", "TEXT")]
@@ -349,6 +364,67 @@ class UsageStore:
         )
         rows = self._q("SELECT * FROM requests WHERE id=?", (rid,))
         return rows[0] if rows else None
+
+    # ---- events: the activity stream ------------------------------------------------
+
+    def add_event(self, evt: dict[str, Any]) -> dict[str, Any]:
+        row = {c: evt.get(c) for c in EVENT_COLUMNS}
+        row["ts"] = row["ts"] or time.time()
+        row["id"] = row["id"] or uuid.uuid4().hex[:16]
+        detail = row["detail"]
+        row["detail"] = json.dumps(detail) if detail is not None and not isinstance(detail, str) else detail
+        self._x(f"INSERT INTO events ({', '.join(EVENT_COLUMNS)}) VALUES ({', '.join('?' * len(EVENT_COLUMNS))})",
+                tuple(row.values()))  # fmt: skip
+        return {**row, "detail": detail}
+
+    def events(
+        self, since: float = 0, until: float | None = None, limit: int = 200, before: float | None = None, **eq: Any
+    ) -> list[dict[str, Any]]:
+        """Newest first. `eq` filters on columns (EVENT_FILTERS); a list value matches any of its items."""
+        where, args = ["ts>=?"], [since]
+        if until is not None:
+            where.append("ts<?")
+            args.append(until)
+        if before is not None:
+            where.append("ts<?")
+            args.append(before)
+        for k, v in eq.items():
+            if k not in EVENT_FILTERS or v is None:
+                continue
+            if isinstance(v, list | tuple | set):
+                if not v:
+                    continue
+                where.append(f"{k} IN ({', '.join('?' * len(v))})")
+                args.extend(v)
+            else:
+                where.append(f"{k}=?")
+                args.append(v)
+        rows = self._q(
+            f"SELECT * FROM events WHERE {' AND '.join(where)} ORDER BY ts DESC LIMIT ?", (*args, min(limit, 5000))
+        )
+        for r in rows:
+            r["detail"] = json.loads(r["detail"]) if r["detail"] else None
+        return rows
+
+    def event_counts(self, by: str, since: float, until: float | None = None, **eq: Any) -> list[dict[str, Any]]:
+        """Events per `by` value and decision: what adherence and the activity charts are computed from."""
+        if by not in EVENT_FILTERS | {"day"}:
+            raise ValueError(f"group by one of {sorted(EVENT_FILTERS | {'day'})}")
+        col = "strftime('%Y-%m-%d', ts, 'unixepoch')" if by == "day" else f"COALESCE({by}, '(none)')"
+        where, args = ["ts>=?"], [since]
+        if until is not None:
+            where.append("ts<?")
+            args.append(until)
+        for k, v in eq.items():
+            if k in EVENT_FILTERS and v is not None:
+                where.append(f"{k}=?")
+                args.append(v)
+        return self._q(
+            f"SELECT {col} key, COALESCE(decision, 'none') decision, COUNT(*) n, COALESCE(SUM(usd), 0) usd,"
+            f" COALESCE(SUM(tokens), 0) tokens FROM events WHERE {' AND '.join(where)}"
+            f" GROUP BY key, decision ORDER BY key",
+            tuple(args),
+        )
 
     # ---- admin actions (who changed what, and who looked at whose content) -------
 

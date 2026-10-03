@@ -30,6 +30,7 @@ class ApiKey(_Strict):
     principal: str
     team: str
     role: str
+    email: str | None = None  # joins telemetry that names a user by email (Claude Code's user.email)
 
 
 class Identity(_Strict):
@@ -582,6 +583,13 @@ class Policy(_Strict):
             g = self.grant_for(pid, name, None, workflow)
             if g:
                 return g
+        return None
+
+    def identity_of(self, pid: str | None = None, email: str | None = None) -> ApiKey | None:
+        """The directory entry for a principal id or an email address."""
+        for k in self.identity.api_keys.values():
+            if (pid and k.principal == pid) or (email and k.email and k.email.lower() == email.lower()):
+                return k
         return None
 
     def principal(self, pid: str) -> PrincipalPolicy:

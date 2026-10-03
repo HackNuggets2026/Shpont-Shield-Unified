@@ -24,7 +24,7 @@ from ..controls.access import authenticate
 from ..decision import DecisionBackend
 from ..engine import ControlLayer, flatten
 from ..types import Action, Context, Direction, Verdict
-from . import catalog, governance, mcp_demo
+from . import catalog, governance, ingest, mcp_demo
 from .upstream import UpstreamClient
 
 DASHBOARD = Path(__file__).resolve().parent.parent / "dashboard" / "index.html"
@@ -697,6 +697,7 @@ def create_app(
 
     governance.register(app, store, layer, app_reclaim, _api_key, _json_object)
     catalog.register(app, store, layer, _api_key, _json_object)
+    ingest.register(app, store, layer, _api_key)
     return app
 
 

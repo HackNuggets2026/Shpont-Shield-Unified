@@ -118,6 +118,11 @@ def authorize(
     return deny("grant_required", f"{resource} needs an approved grant; request one at /me ({r.urn})")
 
 
+def policy_urn(urns: dict[str, str], name: str, handle: str | None) -> str | None:
+    base = urns.get(name)
+    return f"{base}/{handle}" if base and handle else base
+
+
 def check_grants(ctx: Context, policy: Policy) -> list[Finding]:
     """Tool calls into access-grant resources (prod data, deploys, external email) need a live grant."""
     if ctx.direction is not Direction.TOOL_CALL or not ctx.tool or not ctx.metered:
@@ -140,6 +145,26 @@ class LeaseTracker:
             lease["id"]: lease for lease in store.leases(open_only=True, limit=10_000)
         }
         self.on_signal: Signal = lambda *a: None
+        self.urns: dict[str, str] = {}  # resource name -> URN, refreshed by the engine on policy load
+
+    def _event(self, kind: str, lease: dict, urn: str | None, ts: float, **extra: Any) -> None:
+        self.store.add_event(
+            {
+                "ts": ts,
+                "source": "mcp",
+                "kind": kind,
+                "principal": lease["principal"],
+                "team": lease["team"],
+                "task": lease["task"],
+                "workflow": lease["workflow"],
+                "resource": lease["resource"],
+                "urn": urn,
+                "tool": lease["tool"],
+                "severity": "info",
+                "request_id": lease["id"],
+                **extra,
+            }
+        )
 
     def held(self, principal: str, resource: str | None = None) -> list[dict[str, Any]]:
         out = [x for x in self.open.values() if x["principal"] == principal and resource in (None, x["resource"])]
@@ -206,6 +231,7 @@ class LeaseTracker:
         }
         self.open[lease["id"]] = lease
         self.store.save_lease(lease)
+        self._event("lease.start", lease, policy_urn(self.urns, name, handle), now)
         if not ctx.workflow or ctx.workflow == "unlabeled":
             self.on_signal(
                 "unlabeled_resource", ctx.principal.id, f"{name} leased outside any workflow", [ctx.request_id]
@@ -227,6 +253,8 @@ class LeaseTracker:
         usd = minutes * (r.usd_per_minute if r else 0.0)
         lease.update(ended=now, end_reason=reason, usd=round(usd, 6))
         self.store.save_lease(lease)
+        self._event("lease.stop", lease, policy_urn(self.urns, lease["resource"], lease["handle"]), now,
+                    usd=usd, detail={"reason": reason, "minutes": round(minutes, 2)})  # fmt: skip
         ctx = Context(
             Principal(lease["principal"], lease["team"], ""),
             Direction.TOOL_CALL,
@@ -234,7 +262,7 @@ class LeaseTracker:
             workflow=lease["workflow"],
             task_id=lease["task"],
         )
-        self.ledger.charge(ctx, lease["resource"], usd, minutes, "minute", ref=lease["id"])
+        self.ledger.charge(ctx, lease["resource"], usd, minutes, "minute", ref=lease["id"], source="mcp")
         return lease
 
     # ---- background: zombies and over-time leases -------------------------------
@@ -260,6 +288,8 @@ class LeaseTracker:
                 continue
             lease["flags"] = [*lease["flags"], *new]
             self.store.save_lease(lease)
+            self._event("lease.flag", lease, policy_urn(self.urns, lease["resource"], lease["handle"]), now,
+                        severity="low", detail={"flags": new, "idle_minutes": round(idle / 60, 1)})  # fmt: skip
             detail = (
                 f"{lease['resource']} {lease['handle'] or lease['id']}: {', '.join(new)} ({idle / 60:.0f} min idle)"
             )

@@ -512,5 +512,21 @@ def register(
             workflow_source="declared" if wf else None,
             task_id=task,
         )
-        layer.ledger.charge(ctx, resource, usd, quantity, unit)
+        layer.ledger.charge(ctx, resource, usd, quantity, unit, ref=ctx.request_id, source="report")
+        usage.add_event(
+            {
+                "source": "report",
+                "kind": "usage.report",
+                "principal": who.id,
+                "team": who.team,
+                "task": task,
+                "workflow": wf,
+                "resource": resource,
+                "urn": p.catalog[resource].urn if resource in p.catalog else None,
+                "usd": usd,
+                "severity": "info",
+                "request_id": ctx.request_id,
+                "detail": {"quantity": quantity, "unit": unit},
+            }
+        )
         return {"ok": True, "resource": resource, "quantity": quantity, "unit": unit, "usd": round(usd, 6)}
