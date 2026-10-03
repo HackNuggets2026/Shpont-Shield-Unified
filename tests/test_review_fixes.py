@@ -346,3 +346,19 @@ def test_denials_are_logged_and_admin_action_detail_is_flat(client):
     acts = {a["action"]: a for a in client.get("/admin/actions", params={"target": "carol"}).json()}
     assert acts["restrict"]["detail"]["status"] == "quarantined" and "principals" not in acts["restrict"]["detail"]
     assert acts["grant"]["detail"]["grants"][0]["resource"] == "prod_db"
+
+
+def test_me_summary_explains_quarantine_and_risk_thresholds(client):
+    s = client.get("/me/summary", headers=KEYS["carol"]).json()
+    assert "quarantine" not in s and s["runs_total"] >= len(s["runs"])
+    assert set(s["risk"]["thresholds"]) == {"alert", "tighten", "quarantine", "half_life_minutes"}
+    client.post("/admin/principals/carol", json={"status": "quarantined", "reason": "x"})
+    q = client.get("/me/summary", headers=KEYS["carol"]).json()["quarantine"]
+    assert q["budget_scale"] == 0.1 and "read_*" in q["tools"]
+
+
+def test_detections_settings_endpoint(client):
+    d = client.get("/admin/detections").json()
+    assert {"alert", "tighten", "quarantine", "tighten_budget_scale", "auto"} == set(d["response"])
+    assert d["rules"] and all(set(r) == {"enabled", "weight", "window_minutes"} for r in d["rules"].values())
+    assert client.get("/api/admin/detections", headers={"x-admin-token": "wrong"}).status_code == 401

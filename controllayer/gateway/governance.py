@@ -350,6 +350,27 @@ def register(
         usage.log_admin(actor(request), f"incident_{status}", iid, str(body.get("note", "")))
         return {"ok": True}
 
+    @app.get("/admin/detections")
+    async def admin_detections():
+        """The detection settings the console shows, without the whole policy."""
+        d = store.policy.detections
+        r = d.response
+        return {
+            "enabled": d.enabled,
+            "half_life_minutes": d.half_life_minutes,
+            "response": {
+                "alert": r.alert,
+                "tighten": r.tighten,
+                "quarantine": r.quarantine,
+                "tighten_budget_scale": r.tighten_budget_scale,
+                "auto": r.auto,
+            },  # fmt: skip
+            "rules": {
+                n: {"enabled": x.enabled, "weight": x.weight, "window_minutes": x.window_minutes}
+                for n, x in d.rules.items()
+            },
+        }
+
     @app.get("/admin/requests")
     async def admin_requests(status: str | None = None):
         return usage.requests(status=status)
@@ -568,6 +589,7 @@ def register(
         score = layer.risk.score(who.id, p)
         leases = layer.leases.snapshot(p, who.id)
         by_workflow = usage.breakdown(["workflow"], week, who.id)
+        runs = usage.breakdown(["workflow", "task"], week, who.id)
         out: dict[str, Any] = {
             "principal": who.id,
             "team": who.team,
@@ -591,7 +613,8 @@ def register(
             "by_workflow": by_workflow,
             "by_resource": usage.breakdown(["resource"], week, who.id),
             "by_model": usage.breakdown(["model"], week, who.id),
-            "runs": usage.breakdown(["workflow", "task"], week, who.id)[:30],
+            "runs": runs[:30],
+            "runs_total": len(runs),
             "leases": leases,
             "menu": menu_view(p, who),
             "events": events_of(who.id, 50, interesting=True),
@@ -608,10 +631,19 @@ def register(
                 "client IP and user agent, to detect a stolen key",
             ],
         }
+        if pp.status == "quarantined":
+            out["quarantine"] = {"tools": p.quarantine.tools, "budget_scale": p.quarantine.budget_scale}
         if p.privacy.show_risk_to_employee:
+            r = p.detections.response
             out["risk"] = {
                 "score": score,
                 "level": layer.risk.level(score, p),
+                "thresholds": {
+                    "alert": r.alert,
+                    "tighten": r.tighten,
+                    "quarantine": r.quarantine,
+                    "half_life_minutes": p.detections.half_life_minutes,
+                },  # fmt: skip
                 "incidents": [i for i in reversed(layer.risk.incidents) if i["principal"] == who.id][:20],
             }
         return out
