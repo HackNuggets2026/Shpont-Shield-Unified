@@ -186,9 +186,8 @@ function NeedsAttention() {
                   <div className="min-w-0 flex-1">
                     <div className="truncate text-sm font-medium text-ink">{it.i.rule.replace(/_/g, " ")}</div>
                     <div className="truncate text-xs text-muted">
-                      {it.i.name || it.i.principal}
-                      {it.i.team ? ` · ${it.i.team}` : ""}
-                      {it.i.department ? ` · ${it.i.department}` : ""} · {ago(it.i.ts)}
+                      {ago(it.i.ts)} · {it.i.name || it.i.principal}
+                      {it.i.team ? ` · ${it.i.team}` : it.i.department ? ` · ${it.i.department}` : ""}
                     </div>
                   </div>
                 </Link>

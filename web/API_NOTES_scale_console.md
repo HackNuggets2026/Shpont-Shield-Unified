@@ -40,7 +40,7 @@ each one; none blocks the demo.
 
 ## Seen on the real 5k seed (after merging M1, `seed --days 30 --seed 42`)
 
-12. **`activity?interesting=1` still returns noise.** Claude Code `metric.session` / `metric.lines_of_code`
+12. **(Fixed in M2.) `activity?interesting=1` returned noise at M1.** Claude Code `metric.session` / `metric.lines_of_code`
     rows (severity `null`, not `info`) and allowed `check.*` rows come back. The filter should drop
     `metric.*` and anything with `decision in (allow, log)`, and treat a null severity like `info`.
 13. **Claude Code commits carry no workflow.** `value?by=workflow` puts 84.6k of 84.8k commits under
@@ -53,11 +53,12 @@ each one; none blocks the demo.
     The org-level `usd_prev` looks right, but per-workflow deltas would mislead, so the Workflows page shows
     share of spend instead of Δ. A per-workflow `usd_prev` from the server (see 7) plus a consistent seed
     would bring the Δ back.
-15. **`people_at_risk` disagrees across endpoints.** `org.totals.people_at_risk` is 10 while
-    `overview.at_risk` is 6 (the nav badge). They probably use different thresholds (`tighten` vs
+15. **`people_at_risk` disagrees across endpoints.** After M2, `org.totals.people_at_risk` is 18 while
+    `overview.at_risk` is 6. The console now reads the org number everywhere (tile and nav badge). They probably use different thresholds (`tighten` vs
     `alert`, or open incidents vs score). One definition would avoid two numbers on one screen.
-16. **`incidents` has no `total`, `name`, `department` or `team` yet** (contract, M2). The "Needs
-    attention" list falls back to the principal id and counts the page it got.
+16. **(Fixed in M2.)** `incidents` now returns `total`, `name`, `department` and `team`.
+19. **Still open after M2:** `GET /admin/people/{pid}` has no `department`/`name` (item 1), `/org/teams`
+    ignores `q=` (item 3), and Claude Code commits stay unlabelled by workflow (item 13).
 17. **`org/unit?kind=team` has no top-level `department`.** It is inside `metrics.department`; the SPA reads
     either.
 18. **Performance budget.** Cold, uncached: `org?days=90` 0.96 s, `outliers?days=30&department=Finance`
