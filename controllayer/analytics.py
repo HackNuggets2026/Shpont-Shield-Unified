@@ -477,6 +477,8 @@ class Analytics:
         people = self.people()
         roll = self.rollup(pr) if kind == "human" else None
         rows = []
+        bands = dict.fromkeys([b for b, _ in BANDS] + ["nocap"], 0)
+        levels = dict.fromkeys(LEVEL_RANK, 0)
         ql = q.lower()
         for person in people.values():
             if person.kind != kind or (team and person.team != team):
@@ -500,12 +502,19 @@ class Analytics:
                 continue
             if (min_usd is not None and r["usd"] < min_usd) or (max_usd is not None and r["usd"] >= max_usd):
                 continue
-            if budget and _band(r) != budget:
-                continue
-            rk = self.risk(person)
-            if (risk == "elevated" and rk["level"] == "normal") or (risk in LEVEL_RANK and rk["level"] != risk):
-                continue
-            if risk == "flagged" and not (rk["score"] > 0 or rk["manual"] or rk["signals"]):
+            band, rk = _band(r), self.risk(person)
+            band_ok = not budget or band == budget
+            risk_ok = not (
+                (risk == "elevated" and rk["level"] == "normal")
+                or (risk in LEVEL_RANK and rk["level"] != risk)
+                or (risk == "flagged" and not (rk["score"] > 0 or rk["manual"] or rk["signals"]))
+            )
+            # Each facet counts with every other filter applied, so a chip shows what picking it would give.
+            if risk_ok:
+                bands[band] += 1
+            if band_ok:
+                levels[rk["level"]] += 1
+            if not (band_ok and risk_ok):
                 continue
             top = max(r["items"].items(), key=lambda kv: kv[1], default=None)
             rows.append(
@@ -547,6 +556,16 @@ class Analytics:
             "last": day_label(last),
             "sort": ("-" if desc else "") + (col if col in SORTS else "usd"),
             "teams": teams,
+            "summary": {
+                "usd": sum(r["usd"] for r in rows),
+                "budget": sum(r["budget"] for r in rows if r["budget"] is not None),
+                "blocks": sum(r["blocks"] for r in rows),
+                "bands": bands,
+                "levels": levels,
+            },
+            "items": sorted(
+                ({**item_label(k), "usd": v["usd"]} for k, v in pr.org_items.items()), key=lambda i: -i["usd"]
+            ),
             "rows": rows[(page - 1) * per_page : page * per_page],
         }
 

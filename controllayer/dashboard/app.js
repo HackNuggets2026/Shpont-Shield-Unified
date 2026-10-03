@@ -51,7 +51,7 @@
   };
   h.num = (x) => {
     const v = Number(x || 0);
-    return v >= 1e6 ? (v / 1e6).toFixed(1) + "M" : v >= 1e4 ? (v / 1e3).toFixed(1) + "k" : Math.round(v).toLocaleString("en-US");
+    return v >= 1e9 ? (v / 1e9).toFixed(1) + "B" : v >= 1e6 ? (v / 1e6).toFixed(1) + "M" : v >= 1e4 ? (v / 1e3).toFixed(1) + "k" : Math.round(v).toLocaleString("en-US");
   };
   h.pct = (f) => (f == null ? "-" : (100 * f).toFixed(f < 0.1 ? 1 : 0) + "%");
   h.dur = (hours) => (hours % 24 ? hours + "h" : hours / 24 + "d");
@@ -389,6 +389,14 @@
       }
       const btn = t.closest && t.closest("[data-act]");
       if (btn && (btn.tagName === "BUTTON" || btn.tagName === "A") && !btn.disabled) { ev.preventDefault(); act(btn); }
+      else if (!btn) {
+        // A whole table row can link somewhere (<tr data-href>), unless the click was on a control in it.
+        const row = t.closest && t.closest("tr[data-href]");
+        if (row && !(t.closest("a, button, input, select, textarea, label"))) {
+          if (ev.ctrlKey || ev.metaKey) window.open(row.getAttribute("data-href"), "_blank");
+          else { history.pushState(null, "", row.getAttribute("data-href")); hideTip(); render(true); }
+        }
+      }
     });
     document.addEventListener("change", (ev) => {
       const el = ev.target;

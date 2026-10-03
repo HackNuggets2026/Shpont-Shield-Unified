@@ -155,20 +155,38 @@ def build(policy: Policy, people: int, days: int, seed: int, now: float) -> dict
             hours = sorted(rng.sample(range(7, 19), k=rng.randint(2, 6)))
             if d == today:
                 hours = [h for h in hours if h <= time.gmtime(now).tm_hour] or [time.gmtime(now).tm_hour]
-            for model, weight in team[3].items():
-                if rng.random() > 0.35 + weight / 8:
-                    continue
-                share = target * weight / sum(team[3].values())
-                inp, out = rng.randint(1200, 6000), rng.randint(200, 1200)
-                unit = ledger.record(ctx, policy, model, inp, out, rng.uniform(0.8, 3.5))  # prices are linear
-                n = max(1, round(share / unit)) if unit else rng.randint(3, 40)
-                emit(history, p["principal"], f"model:{model}", d, hours, n, (inp + out) * n, unit * n, rng, now)
+            # Today's models and one typical request each; the request count follows the spend target.
+            mix = {m: w for m, w in team[3].items() if rng.random() < 0.35 + w / 8} or dict([max(team[3].items())])
+            reqs = {}
+            for model in mix:
+                inp, out = rng.randint(2000, 24000), rng.randint(300, 2500)
+                reqs[model] = (inp + out, ledger.record(ctx, policy, model, inp, out, rng.uniform(0.8, 3.5)))
+            per_request = sum(w * reqs[m][1] for m, w in mix.items()) / sum(mix.values())
+            # A busy day is a few hundred requests at most; past that, the requests carry more context.
+            total = max(1, round(target / per_request)) if per_request else rng.randint(5, 60)
+            cap = rng.randint(40, 160) * (3 if p.get("owner") else 1)
+            scale = total / cap if total > cap else 1.0
+            for model, weight in mix.items():
+                n = max(1, round(min(total, cap) * weight / sum(mix.values())))
+                tokens, unit = reqs[model]
+                emit(
+                    history,
+                    p["principal"],
+                    f"model:{model}",
+                    d,
+                    hours,
+                    n,
+                    tokens * n * scale,
+                    unit * n * scale,
+                    rng,
+                    now,
+                )
                 decisions(history, p["principal"], d * DAY + hours[0] * HOUR, n, rng, pmult)
             for rid in used:
                 if rng.random() > 0.55:
                     continue
                 svc = services[rid].connection["service"]
-                calls = max(1, int(rng.lognormvariate(1.6, 0.9) * (2 if p.get("owner") else 1)))
+                calls = max(1, int(rng.lognormvariate(2.3, 0.9) * (4 if p.get("owner") else 1)))
                 usd = calls * policy.budgets.call_price(svc, None)
                 emit(history, p["principal"], f"service:{svc}", d, hours, calls, 0, usd, rng, now)
                 decisions(history, p["principal"], d * DAY + hours[0] * HOUR, calls * 2, rng, pmult)

@@ -34,6 +34,8 @@ window.ACL.register({
 });
 ```
 
+A table row with `data-href` (e.g. from `h.table`'s `rowAttrs`) is a link, except for clicks on a control inside it; ctrl/cmd-click opens a tab.
+
 After an action the page re-renders (an exception becomes a red flash). The router re-renders every 15 s unless an input has focus, and keeps focus and caret in the `data-input` element across renders.
 
 ### URL state
@@ -89,6 +91,10 @@ Params: `q` (id, name or team, case-insensitive), `team`, `risk` (`normal|watch|
 
 ```
 {total, page, pages, per_page, period, first, last, sort, teams: [team...],
+ summary: {usd, budget, blocks,                 // over every matched row (all pages); budget sums non-null allowances
+           bands: {under, half, near, over, nocap},   // counted with every filter but `budget`
+           levels: {normal, watch, restricted}},      // counted with every filter but `risk`
+ items: [{key, kind, name, usd}],               // everything with spend in the period, usd desc (for an item filter)
  rows: [{id, name, team, role, owner, agents: n, usd, requests, budget|null, used|null,
          top_item: {key, kind, name, usd}|null, item_usd|null, blocks, redacts, last_seen|null,
          score, level, manual: {level, reason, at}|null, signals: n}]}

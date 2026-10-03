@@ -285,3 +285,18 @@ def test_security_grants_for_an_owner_within_their_entitlement(client):
     assert client.post("/admin/grants", json={"agent": "alice", "resource": "slack"}).status_code == 404
     notes = [n for n in client.app.state.layer.audit.notes if n["actor"] == "security"]
     assert [n["kind"] for n in notes] == ["grant", "grant_scopes"]
+
+
+def test_people_summary_and_facet_counts(org):
+    client, _ = org
+    everyone = client.get("/admin/analytics/people?per_page=200").json()
+    s = everyone["summary"]
+    assert s["usd"] == pytest.approx(sum(r["usd"] for r in everyone["rows"]))
+    assert sum(s["bands"].values()) == sum(s["levels"].values()) == everyone["total"]
+    over = client.get("/admin/analytics/people?budget=over&per_page=200").json()
+    assert over["total"] == s["bands"]["over"]
+    assert over["summary"]["bands"] == s["bands"]  # the budget facet ignores the budget filter itself
+    assert sum(over["summary"]["levels"].values()) == over["total"]
+    watch = client.get("/admin/analytics/people?risk=watch&per_page=200").json()
+    assert watch["total"] == s["levels"]["watch"] and watch["summary"]["levels"] == s["levels"]
+    assert [i["usd"] for i in everyone["items"]] == sorted((i["usd"] for i in everyone["items"]), reverse=True)
