@@ -53,8 +53,8 @@ PII: dict[str, Detector] = {
 }
 
 SECRETS: dict[str, Detector] = {
-    "aws_access_key": Detector(re.compile(r"\b(?:AKIA|ASIA)[0-9A-Z]{16}\b")),
-    "github_token": Detector(re.compile(r"\bgh[pousr]_[A-Za-z0-9]{36,}\b")),
+    "aws_access_key": Detector(re.compile(r"(?<![A-Za-z0-9])(?:AKIA|ASIA)[0-9A-Z]{16}(?![A-Za-z0-9])")),
+    "github_token": Detector(re.compile(r"(?<![A-Za-z0-9])gh[pousr]_[A-Za-z0-9]{36,}")),
     "openai_key": Detector(re.compile(r"\bsk-(?:proj-)?[A-Za-z0-9_-]{20,}\b")),
     "slack_token": Detector(re.compile(r"\bxox[abprs]-[A-Za-z0-9-]{10,}\b")),
     "private_key": Detector(re.compile(r"-----BEGIN (?:[A-Z]+ )?PRIVATE KEY-----")),

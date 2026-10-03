@@ -459,3 +459,43 @@ def test_multimodal_parts_survive_redaction(policy_dir):
     post_chat(c, [{"role": "user", "content": [{"type": "text", "text": f"card {CARD}"}, image]}])
     content = sent[0]["messages"][0]["content"]
     assert content == [{"type": "text", "text": "card [REDACTED:credit_card]"}, image]
+
+
+# --- fourth review pass ---------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        {"response_format": {"type": "json_schema", "json_schema": {"schema": {"description": f"key {AKIA}"}}}},
+        {"tool_choice": {"type": "function", "function": {"name": f"f_{AKIA}"}}},
+    ],
+    ids=["response_format", "tool_choice"],
+)
+def test_any_body_field_is_swept(client, extra):
+    assert post_chat(client, [{"role": "user", "content": "hi"}], **extra).status_code == 403
+
+
+def test_card_in_unknown_body_field_is_redacted_before_forwarding(policy_dir):
+    c, sent = _recording_chat(policy_dir)
+    assert post_chat(c, [{"role": "user", "content": "hi"}], metadata={"note": CARD}).status_code == 200
+    assert "4111" not in json.dumps(sent[0])
+
+
+@pytest.mark.parametrize(
+    "content", [{"a": f"x\n{AKIA}"}, [{"type": "text", "text": [f"x\n{AKIA}"]}]], ids=["dict", "list-text"]
+)
+def test_non_string_content_is_inspected_as_raw_text(client, content):
+    assert post_chat(client, [{"role": "user", "content": content}]).status_code == 403
+
+
+def test_tools_call_params_beyond_arguments_are_inspected(client):
+    r = mcp(client, "tools/call", {"name": "search_docs", "arguments": {"query": "x"}, "_meta": {"note": AKIA}})
+    assert r["error"]["code"] == -32001
+
+
+def test_benign_text_is_forwarded_byte_for_byte(policy_dir):
+    c, sent = _recording_chat(policy_dir)
+    text = 'E=mc² and s = "ｆｏｏ" ½ ™'
+    post_chat(c, [{"role": "user", "content": text}])
+    assert sent[0]["messages"][0]["content"] == text

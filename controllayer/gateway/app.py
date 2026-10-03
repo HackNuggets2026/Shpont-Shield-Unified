@@ -170,16 +170,18 @@ def create_app(
                 warnings.append(v.reason)
             if metered:
                 metered_ctx = ctx
-            if v.text != text:
-                if not isinstance(content, list):
+            if v.action is Action.REDACT:
+                if isinstance(content, str):
                     m["content"] = v.text
                 elif layer.spans_only(v):
                     cleaned = layer.redact_tree(content, principal, direction)
                     if cleaned is None:
                         return _refused(v)
                     m["content"] = cleaned
-                else:  # withheld as a whole: replace the text, keep images and other parts
+                elif isinstance(content, list):  # withheld as a whole: replace the text, keep other parts
                     m["content"] = [{"type": "text", "text": v.text}, *(p for p in content if not _is_text_part(p))]
+                else:
+                    m["content"] = v.text
 
             # Everything else: tool_calls, function_call, name, refusal, image URLs, extra keys on parts.
             rest = {k: val for k, val in m.items() if k not in ("role", "content")}
@@ -228,8 +230,23 @@ def create_app(
             if v.blocked:
                 return _policy_error(v)
 
+        # Backstop: every remaining field of the outgoing body (response_format, tool_choice, metadata,
+        # roles, anything a future API adds) gets the deterministic detectors before it leaves.
+        outgoing = {**body, "messages": messages}
+        sv = await layer.evaluate(
+            Context(principal, Direction.INPUT, flatten(outgoing), model=model, channel="chat", metered=False),
+            semantic=False,
+        )
+        if sv.blocked:
+            return _policy_error(sv)
+        if sv.action is Action.REDACT:
+            cleaned = layer.redact_tree(outgoing, principal, Direction.INPUT)
+            if cleaned is None:
+                return _refused(sv)
+            outgoing = cleaned
+
         try:
-            completion = await upstream().chat({**body, "messages": messages})
+            completion = await upstream().chat(outgoing)
         except (httpx.HTTPError, ValueError, KeyError, IndexError, TypeError) as e:
             return JSONResponse(
                 {"error": {"type": "upstream_error", "message": f"{type(e).__name__}: {e}"}}, status_code=502
@@ -254,7 +271,7 @@ def create_app(
         ov = await layer.evaluate(
             out_ctx, {"usd": round(cost, 6), "tokens": completion.input_tokens + completion.output_tokens}
         )
-        content, finish = ov.text, "stop"
+        content, finish = (ov.text if ov.action is Action.REDACT else completion.content), "stop"
         if ov.blocked:
             content, finish = f"[Response withheld by policy: {ov.reason}]", "content_filter"
         if ov.action is Action.WARN:
@@ -334,15 +351,16 @@ def create_app(
             name, args = params.get("name"), params.get("arguments") or {}
             if not isinstance(name, str) or not isinstance(args, dict):
                 return rpc(rid, -32602, "tools/call needs a string name and object arguments")
-            ctx = Context(principal, Direction.TOOL_CALL, flatten(args), tool=name, tool_args=args, channel="mcp")
+            # All of params (name, _meta, ...), not only the arguments, reaches the server.
+            ctx = Context(principal, Direction.TOOL_CALL, flatten(params), tool=name, tool_args=args, channel="mcp")
             v = await layer.evaluate(ctx, {"server": server})
             if v.blocked:
                 return blocked(v)
             if v.action is Action.REDACT:
-                cleaned = layer.redact_tree(args, principal, Direction.TOOL_CALL) if layer.spans_only(v) else None
+                cleaned = layer.redact_tree(params, principal, Direction.TOOL_CALL) if layer.spans_only(v) else None
                 if cleaned is None:
-                    return blocked(v)  # cannot be cut out of the arguments, so the call cannot go ahead
-                req = {**req, "params": {**params, "arguments": cleaned}}
+                    return blocked(v)  # cannot be cut out of the call, so it cannot go ahead
+                req = {**req, "params": cleaned}
             request_id = ctx.request_id
         elif method not in ("initialize", "tools/list"):
             # resources/read, prompts/get, ...: their params reach the server too (and gates apply).
@@ -377,8 +395,16 @@ def create_app(
                 tctx = Context(
                     principal, Direction.TOOL_DESCRIPTION, flatten(tool), tool=tool.get("name"), channel="mcp"
                 )
-                if not (await layer.evaluate(tctx, {"server": server})).blocked:
-                    kept.append(tool)
+                tv = await layer.evaluate(tctx, {"server": server})
+                if tv.blocked:
+                    continue
+                if tv.action is Action.REDACT:
+                    tool = (
+                        layer.redact_tree(tool, principal, Direction.TOOL_DESCRIPTION) if layer.spans_only(tv) else None
+                    )
+                    if tool is None:
+                        continue
+                kept.append(tool)
             return JSONResponse({**resp, "result": {**result, "tools": kept}})
 
         # Every other result (tool output, resources, prompts) flows back into the agent: inspect all of it.
@@ -611,7 +637,9 @@ def _is_text_part(p: Any) -> bool:
 
 
 def _text(content: Any) -> str:
-    """OpenAI content is a string or a list of parts; only text parts are inspected."""
+    """The text of OpenAI content: a string, the text parts of a list, or any other shape flattened."""
+    if isinstance(content, str):
+        return content
     if isinstance(content, list):
-        return "\n".join(str(p.get("text", "")) for p in content if isinstance(p, dict) and p.get("type") == "text")
-    return "" if content is None else str(content)
+        return "\n".join(flatten(p.get("text", "")) for p in content if _is_text_part(p))
+    return flatten(content)

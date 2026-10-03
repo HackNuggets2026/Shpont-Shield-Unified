@@ -92,9 +92,9 @@ class ControlLayer:
             return found + signatures.check(ctx, policy.signatures, self.feed)
 
         def fix(text: str) -> str:
-            text = sanitize(text)
-            hits = [f for f in detect(text) if f.action is Action.REDACT]
-            return redact(text, [sp for f in hits for sp in f.spans]) if hits else text
+            clean = sanitize(text)
+            hits = [f for f in detect(clean) if f.action is Action.REDACT]
+            return redact(clean, [sp for f in hits for sp in f.spans]) if hits else text  # untouched unless redacted
 
         def walk(o: Any) -> Any:
             if isinstance(o, dict):
@@ -112,13 +112,22 @@ class ControlLayer:
         """Gates and budgets only, for a request whose content is inspected separately."""
         return await self._evaluate(ctx, None, inspect=False)
 
-    async def evaluate(self, ctx: Context, extra: dict | None = None) -> Verdict:
+    async def evaluate(self, ctx: Context, extra: dict | None = None, semantic: bool = True) -> Verdict:
         ctx.text = sanitize(ctx.text)
-        key = (self.policy.version, self.feed.loaded_at, ctx.principal.id, ctx.direction, ctx.model, ctx.tool, ctx.text)
+        key = (
+            self.policy.version,
+            self.feed.loaded_at,
+            semantic,
+            ctx.principal.id,
+            ctx.direction,
+            ctx.model,
+            ctx.tool,
+            ctx.text,
+        )
         if not ctx.metered and key in self._seen:
             self._seen.move_to_end(key)
             return self._seen[key]
-        verdict = await self._evaluate(ctx, extra)
+        verdict = await self._evaluate(ctx, extra, semantic=semantic)
         # Budget and engine-failure outcomes depend on the moment, not the content: never cached.
         if not any(f.control in ("budget", "semantic_engine") for f in verdict.findings):
             self._seen[key] = verdict
@@ -126,7 +135,7 @@ class ControlLayer:
                 self._seen.popitem(last=False)
         return verdict
 
-    async def _evaluate(self, ctx: Context, extra: dict | None, inspect: bool = True) -> Verdict:
+    async def _evaluate(self, ctx: Context, extra: dict | None, inspect: bool = True, semantic: bool = True) -> Verdict:
         policy = self.policy_for(ctx.principal.team)
         t_start = time.perf_counter()
         latency: dict[str, float] = {}
@@ -153,7 +162,7 @@ class ControlLayer:
 
         extra = dict(extra or {})
         # Deterministic block already decided the outcome; skip the model call.
-        if inspect and not _blocked(findings):
+        if inspect and semantic and not _blocked(findings):
             sem, stats = await SemanticGuard(self.backend(policy)).check(ctx, policy)
             findings += sem
             latency["semantic"] = (time.perf_counter() - t) * 1000
