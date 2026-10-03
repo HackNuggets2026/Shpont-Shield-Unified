@@ -132,6 +132,16 @@ The catalog is built on existing standards rather than a home-grown format:
 
 Older policies with `resources:` and `budgets.pricing` still load: they are folded into the catalog.
 
+## Claude Code
+
+Claude Code reports to the gateway and is governed by the same `policy.yaml`. The setup is in [`deploy/claude-code/`](deploy/claude-code/README.md).
+
+- **Observe:** its OpenTelemetry export (OTLP over HTTP JSON at `/v1/logs` and `/v1/metrics`) provides cost and tokens per API call, tool accept and reject decisions, lines of code, commits, PRs and active time. People are identified by their key, or by `user.email` when a central collector forwards telemetry. Money comes only from `api_request` events, so it is never counted twice, and prompt text is never stored.
+- **Enforce:** hooks (`/v1/hooks/claude-code`) check every prompt before it is sent and every tool call before it runs. The checks cover secrets, PII, signatures, budgets, the role's and workflow's tool lists, access grants and simulator caps. The hooks also open and close leases for MCP simulators. HTTP hooks fail open; the command-hook variant fails closed.
+- **Detect:** bypass permission mode, MCP servers that are not on the approved list, and a run of rejected tool calls each open an incident.
+
+This was verified live with Claude Code 2.1.288: a pasted AWS key was blocked before it was sent, and the session's cost showed up under `bugfix/DEMO-1`.
+
 ## One event stream
 
 Gateway checks, lease starts and stops, incidents, usage reports, CloudEvents and imported bills all land in the `events` table, with one set of fields: source, kind, who (principal, team, client, session), what for (workflow, task), on what (resource, URN, model, tool), the decision, severity and cost. Telemetry that names a person by email is joined to the directory through `identity.api_keys.*.email`. Events that carry cost are also written to the usage ledger and count against today's budgets. A missing price is taken from the catalog.
