@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Logo } from "../Logo";
 import { Link } from "react-router-dom";
 import type { CatalogItem, Lease } from "../../api";
 import type { OrgFields } from "../../opsApi";
@@ -93,7 +94,10 @@ export function LiveLeases({
                     <OrgLine team={l.team} department={l.department} />
                   </td>
                   <td>
-                    <div className="font-medium text-ink">{title}</div>
+                    <div className="flex items-center gap-2 font-medium text-ink">
+                      <Logo id={l.resource} label={title} />
+                      {title}
+                    </div>
                     <div className="font-mono text-[11px] text-muted">{l.handle ?? l.id}</div>
                   </td>
                   <td className="text-xs">

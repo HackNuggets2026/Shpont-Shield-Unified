@@ -226,7 +226,7 @@ export function BarList({
   right,
   empty = "Nothing to show yet",
 }: {
-  rows: { key: string; value: number; label?: ReactNode; color?: string; sub?: ReactNode }[];
+  rows: { key: string; value: number; label?: ReactNode; color?: string; sub?: ReactNode; icon?: ReactNode }[];
   fmt: (v: number) => string;
   max?: number;
   tone?: string;
@@ -240,7 +240,10 @@ export function BarList({
       {rows.map((r) => (
         <li key={r.key} className="text-xs">
           <div className="mb-1 flex items-baseline justify-between gap-3">
-            <span className="min-w-0 truncate font-medium text-ink2">{r.label ?? seriesLabel(r.key)}</span>
+            <span className="flex min-w-0 items-center gap-1.5 truncate font-medium text-ink2">
+              {r.icon}
+              {r.label ?? seriesLabel(r.key)}
+            </span>
             <span className="tnum shrink-0 text-ink">{right ? right(r) : fmt(r.value)}</span>
           </div>
           <div className="h-2 w-full overflow-hidden rounded-full bg-ink/[0.07]">

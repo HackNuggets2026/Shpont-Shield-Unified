@@ -1,6 +1,7 @@
 // One workflow, explained: what it includes, what a run costs, who orders it, what went wrong inside it,
 // and the two switches that govern it.
 import { useMemo, useState, type ReactNode } from "react";
+import { Logo } from "../../components/Logo";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { admin, type Incident, type Workflow } from "../../api";
@@ -466,6 +467,7 @@ export function WorkflowPage() {
               rows={r.resources.slice(0, 6).map((x) => ({
                 key: x.resource,
                 label: resourceWord(x.resource),
+                icon: <Logo id={x.resource} label={resourceWord(x.resource)} size={14} />,
                 value: x.usd,
                 color: r.color,
                 sub: x.minutes ? `${count(Math.round(x.minutes / 60))} machine-hours` : undefined,

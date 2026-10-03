@@ -1,4 +1,5 @@
 import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Logo } from "../Logo";
 import { admin, type CatalogItem } from "../../api";
 import { ops } from "../../opsApi";
 import { countC } from "../../lib/compact";
@@ -82,7 +83,8 @@ export function SensitiveAccess({
                 const active = v.resource === r.name;
                 return (
                   <li key={r.name} className={cx("flex flex-wrap items-center gap-x-3 gap-y-1 py-1.5", active && "bg-accent/[0.07]")}>
-                    <button type="button" className="min-w-0 flex-1 truncate text-left font-medium text-ink hover:text-accent" onClick={() => onOpen(r)} title={r.description || "Details"}>
+                    <button type="button" className="flex min-w-0 flex-1 items-center gap-2 truncate text-left font-medium text-ink hover:text-accent" onClick={() => onOpen(r)} title={r.description || "Details"}>
+                      <Logo id={r.name} label={r.title} />
                       {r.title || r.name}
                     </button>
                     <SensitivityPill s={r.sensitivity} />

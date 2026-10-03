@@ -1,4 +1,5 @@
 import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Logo } from "../Logo";
 import { admin, type CatalogItem } from "../../api";
 import { ops, type LeasesResponse, type OrgLease } from "../../opsApi";
 import { countC, usdC } from "../../lib/compact";
@@ -71,7 +72,12 @@ export function RunningNow({ catalog, leasable }: { catalog: Record<string, Cata
               head={["Resource", "Running", "Zombies", "Cost so far"]}
               rows={(sum?.by_resource ?? []).map((r) => ({
                 key: r.resource,
-                label: title(r.resource),
+                label: (
+                  <span className="inline-flex items-center gap-1.5">
+                    <Logo id={r.resource} label={title(r.resource)} size={14} />
+                    {title(r.resource)}
+                  </span>
+                ),
                 cells: [{ value: r.open }, { value: r.zombies, tone: "warn" }, { value: r.running_usd, fmt: "usd" }],
               }))}
               active={v.resource}

@@ -1,4 +1,5 @@
 import { useState, type ReactNode } from "react";
+import { Logo } from "../../components/Logo";
 import { useParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { admin, type Breakdown } from "../../api";
@@ -154,7 +155,9 @@ export function PersonPage() {
             <div className="border-t border-line pt-4">
               <BarList
                 tone="var(--s3)"
-                rows={p.by_resource.filter((r) => r.usd > 0).map((r) => ({ key: String(r.resource), value: r.usd }))}
+                rows={p.by_resource
+                  .filter((r) => r.usd > 0)
+                  .map((r) => ({ key: String(r.resource), value: r.usd, icon: <Logo id={String(r.resource)} size={14} /> }))}
                 fmt={(v) => usd(v)}
                 empty="No resource spend"
               />

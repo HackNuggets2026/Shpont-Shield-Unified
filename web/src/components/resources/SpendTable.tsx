@@ -1,4 +1,5 @@
 import type { CatalogItem } from "../../api";
+import { Logo } from "../Logo";
 import { exact, usdC } from "../../lib/compact";
 import { Empty, TableWrap } from "../ui";
 import { plainPrice, usageShort } from "./catalogInfo";
@@ -15,7 +16,10 @@ export function SpendTable({ items, onOpen }: { items: CatalogItem[]; onOpen: (r
           <li key={r.name}>
             <button type="button" onClick={() => onOpen(r)} className="block w-full px-4 py-3 text-left active:bg-raised">
               <div className="flex items-baseline justify-between gap-3">
-                <span className="min-w-0 font-medium text-ink">{r.title || r.name}</span>
+                <span className="flex min-w-0 items-center gap-2 font-medium text-ink">
+                  <Logo id={r.name} label={r.title} />
+                  {r.title || r.name}
+                </span>
                 <span className="tnum shrink-0 font-medium text-ink" title={exact(r.usage.usd, true)}>
                   {usdC(r.usage.usd)}
                 </span>
@@ -49,8 +53,13 @@ export function SpendTable({ items, onOpen }: { items: CatalogItem[]; onOpen: (r
               {items.map((r) => (
                 <tr key={r.name} className="row-link" onClick={() => onOpen(r)} title="Details">
                   <td className="max-w-[280px]">
-                    <div className="font-medium text-ink">{r.title || r.name}</div>
-                    {r.description && <div className="line-clamp-1 text-[11px] text-muted">{r.description}</div>}
+                    <div className="flex items-center gap-2.5">
+                      <Logo id={r.name} label={r.title} size={18} />
+                      <div className="min-w-0">
+                        <div className="font-medium text-ink">{r.title || r.name}</div>
+                        {r.description && <div className="line-clamp-1 text-[11px] text-muted">{r.description}</div>}
+                      </div>
+                    </div>
                   </td>
                   <td className="max-w-[220px] text-xs text-ink2">{plainPrice(r)}</td>
                   <td className="text-right">
