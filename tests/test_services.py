@@ -1,0 +1,239 @@
+"""The company services behind /mcp/company: per-tool scopes, filtered tool lists, mock backends."""
+
+import json
+import re
+import time
+
+import pytest
+import yaml
+
+from controllayer import services
+from controllayer.config import parse_policy
+
+from .conftest import ROOT
+
+ALICE = {"x-api-key": "dev-alice-key"}
+BOB = {"x-api-key": "fin-bob-key"}
+CODER = {"x-api-key": "alice-agent-key"}  # alice's agent, engineering
+BOB_AGENT = {"x-api-key": "bob-agent-key"}  # bob's agent, finance
+
+
+def rpc(client, method, params=None, headers=CODER):
+    body = {"jsonrpc": "2.0", "id": 1, "method": method, "params": params or {}}
+    return client.post("/mcp/company", headers=headers, json=body).json()
+
+
+def call(client, tool, args, headers=CODER):
+    return rpc(client, "tools/call", {"name": tool, "arguments": args}, headers)
+
+
+def text(r):
+    return r["result"]["content"][0]["text"]
+
+
+def tool_names(client, headers=CODER):
+    return {t["name"] for t in rpc(client, "tools/list", headers=headers)["result"]["tools"]}
+
+
+def grant(client, resource, scopes=("read",), hours=2, agent="alice-coder", who=ALICE):
+    r = client.post(
+        "/me/api/grants",
+        headers=who,
+        json={"agent": agent, "resource": resource, "scopes": list(scopes), "hours": hours},
+    )
+    assert r.status_code == 200, r.text
+
+
+def test_catalog_offers_twenty_services_with_scoped_tools():
+    policy = parse_policy((ROOT / "policy.yaml").read_text())
+    offered = {r.connection["service"] for r in policy.resources.values() if r.type == "service"}
+    assert offered == set(services.SERVICES) and len(offered) == 20
+    names = [t.name for s in services.SERVICES.values() for t in s.tools]
+    assert len(names) == len(set(names)) == 55
+    for key, svc in services.SERVICES.items():
+        assert 2 <= len(svc.tools) <= 4, key
+        assert svc.scopes <= {"read", "write", "admin", "exec"}, key
+
+
+def test_tools_list_follows_the_live_grant(client):
+    assert tool_names(client) == {"list_resources"}
+    grant(client, "github-acme")
+    assert tool_names(client) == {"list_resources", "github_list_issues", "github_get_file"}
+    client.patch("/me/api/grants/alice-coder/github-acme", headers=ALICE, json={"scopes": ["read", "write"]})
+    # admin is not in the catalog's scopes for GitHub, so merging is never offered to an agent
+    assert tool_names(client) == {"list_resources", "github_list_issues", "github_get_file", "github_create_issue"}
+    client.app.state.layer.state.grants["alice-coder"]["github-acme"]["expires_at"] = time.time() - 1
+    assert tool_names(client) == {"list_resources"}
+
+
+def test_tools_list_drops_a_suspended_service(client):
+    grant(client, "slack")
+    assert "slack_read_channel" in tool_names(client)
+    client.post("/admin/resources/slack/suspend", json={"suspended": True})
+    assert tool_names(client) == {"list_resources"}
+
+
+def test_employee_sees_tools_of_every_entitled_service(client):
+    mine = tool_names(client, ALICE)
+    assert {"postgres_query", "heroku_scale_formation", "zendesk_reply"} <= mine
+    assert not mine & {"stripe_refund", "salesforce_get_account", "github_merge_pull_request", "zapier_trigger_zap"}
+    assert "stripe_refund" in tool_names(client, BOB)
+
+
+@pytest.mark.parametrize(
+    "tool,args,category",
+    [
+        ("github_create_issue", {"repo": "acme/web", "title": "x"}, "scope_denied"),  # write on a read grant
+        ("postgres_query", {"sql": "select 1"}, "not_granted"),  # another service
+        ("stripe_refund", {"charge": "ch_3Pq04"}, "not_granted"),  # owner not entitled
+    ],
+)
+def test_each_call_is_authorised_by_the_tools_scope(client, tool, args, category):
+    grant(client, "github-acme")
+    r = call(client, tool, args)
+    assert f"resource_access/{category}" in r["error"]["message"]
+
+
+def test_exec_and_admin_tools_need_their_own_scope(client):
+    grant(client, "heroku", scopes=("read", "exec"))
+    restart = call(client, "heroku_restart_dyno", {"app": "acme-api", "dyno": "web.1"})
+    assert json.loads(text(restart)) == {"app": "acme-api", "restarted": "web.1"}
+    scale = call(client, "heroku_scale_formation", {"app": "acme-api", "process_type": "web", "quantity": 8})
+    assert "scope_denied" in scale["error"]["message"]
+
+
+def test_bad_arguments_get_a_service_error_not_a_crash(client):
+    grant(client, "github-acme")
+    r = call(client, "github_list_issues", {"repo": "acme/web", "state": "open", "limt": 5})
+    assert r["result"]["isError"] and "unknown argument(s) ['limt']" in text(r)
+    r = call(client, "github_list_issues", {"repo": "acme/secret"})
+    assert r["result"]["isError"] and "'repo' must be one of" in text(r)
+
+
+@pytest.mark.parametrize(
+    "sql,found",
+    [
+        ("DELETE FROM customers", "DELETE"),
+        ("update customers set plan = 'free'", "UPDATE"),
+        ("DROP TABLE orders", "DROP"),
+        ("WITH gone AS (DELETE FROM orders RETURNING *) SELECT * FROM gone", "DELETE"),
+        ("SELECT * INTO backup FROM customers", "INTO"),
+        ("CREATE TABLE x (id int)", "CREATE"),
+        ("select 1; drop table customers", None),
+    ],
+)
+def test_postgres_replica_rejects_writes_and_ddl(client, sql, found):
+    grant(client, "postgres-prod")
+    r = call(client, "postgres_query", {"sql": sql})
+    assert r["result"]["isError"]
+    assert "read-only" in text(r) and (found is None or f"found {found})" in text(r))
+
+
+def test_read_only_guard_reads_keywords_only_outside_literals(client):
+    grant(client, "postgres-prod")
+    r = call(client, "postgres_query", {"sql": "select id from orders where status <> 'delete me' -- drop\n"})
+    assert json.loads(text(r))["row_count"] == 6
+
+
+def test_runaway_query_is_cancelled(client, monkeypatch):
+    monkeypatch.setattr(services, "_QUERY_SECONDS", 0.2)
+    grant(client, "postgres-prod")
+    sql = "with recursive c(x) as (select 1 union all select x + 1 from c) select count(*) from c"
+    r = call(client, "postgres_query", {"sql": sql})
+    assert "statement timeout" in text(r)
+
+
+def test_pii_in_a_database_answer_is_redacted(client):
+    grant(client, "postgres-prod")
+    r = call(client, "postgres_query", {"sql": "select name, national_id from customers where national_id is not null"})
+    rows = json.loads(text(r))["rows"]
+    assert [row["national_id"] for row in rows] == ["[REDACTED:pesel]", "[REDACTED:us_ssn]", "[REDACTED:pesel]"]
+
+
+def test_card_pasted_into_a_ticket_is_redacted_for_engineering_and_blocked_for_finance(client):
+    grant(client, "zendesk")
+    ticket = json.loads(text(call(client, "zendesk_get_ticket", {"ticket_id": 4521})))
+    assert "The card is [REDACTED:credit_card]," in ticket["description"]
+    grant(client, "zendesk", agent="bob-assistant", who=BOB)
+    r = call(client, "zendesk_get_ticket", {"ticket_id": 4521}, BOB_AGENT)
+    assert r["error"]["message"].startswith("blocked by policy: pii/credit_card") and "4111" not in json.dumps(r)
+
+
+@pytest.mark.parametrize(
+    "resource,tool,args",
+    [
+        ("zendesk", "zendesk_get_ticket", {"ticket_id": 4533}),
+        ("notion", "notion_get_page", {"page_id": "c3d4e5f6"}),
+    ],
+)
+def test_planted_instructions_in_a_document_are_blocked(client, resource, tool, args):
+    grant(client, resource)
+    r = call(client, tool, args)
+    assert r["error"]["message"].startswith("blocked by policy: prompt_injection")
+    assert "partner-tools" not in json.dumps(r)
+
+
+@pytest.mark.parametrize(
+    "resource,tool,args,secret",
+    [
+        ("aws-s3", "s3_get_object", {"bucket": "acme-deploy-artifacts", "key": "api/.env.production"}, "AKIA"),
+        ("github-acme", "github_get_file", {"repo": "acme/infra", "path": "scripts/bootstrap.sh"}, "ghp_"),
+    ],
+)
+def test_a_key_leaked_into_company_data_is_blocked(client, resource, tool, args, secret):
+    grant(client, resource)
+    r = call(client, tool, args)
+    assert r["error"]["message"].startswith("blocked by policy: secrets/") and secret not in json.dumps(r)
+
+
+def test_credentials_are_injected_but_never_returned_or_audited(client, policy_dir, monkeypatch):
+    policy = parse_policy((ROOT / "policy.yaml").read_text())
+    envs = {rid: r.connection["secret_env"] for rid, r in policy.resources.items() if r.type == "service"}
+    secrets = {rid: f"live-{rid}-Zq81xW" for rid in envs}
+    for rid, env in envs.items():
+        monkeypatch.setenv(env, secrets[rid])
+    seen = []
+    real = services.call
+
+    def spy(svc, tool, args, headers):
+        seen.append(headers)
+        return real(svc, tool, args, headers)
+
+    monkeypatch.setattr(services, "call", spy)
+
+    grant(client, "github-acme")
+    grant(client, "slack")
+    out = [
+        rpc(client, "tools/list"),
+        call(client, "list_resources", {}),
+        call(client, "github_list_issues", {"repo": "acme/web"}),
+        call(client, "slack_read_channel", {"channel": "incidents"}),
+        rpc(client, "tools/list", headers=ALICE),
+        call(client, "datadog_search_logs", {"query": "acme"}, ALICE),
+    ]
+    assert seen == [
+        {"Authorization": f"Bearer {secrets['github-acme']}"},
+        {"Authorization": f"Bearer {secrets['slack']}"},
+        {"DD-API-KEY": secrets["datadog"]},
+    ]
+    exposed = json.dumps(out) + (policy_dir / "data" / "audit.jsonl").read_text()
+    exposed += json.dumps(list(client.app.state.layer.audit.events)) + client.get("/admin/grants").text
+    assert "Login button" in exposed  # the results themselves did come back
+    for rid in envs:
+        assert secrets[rid] not in exposed and envs[rid] not in exposed
+
+
+@pytest.mark.parametrize(
+    "change,error",
+    [
+        (lambda r: r["slack"]["connection"].update(service="slak"), "unknown service 'slak'"),
+        (lambda r: r["slack"].update(scopes=["read", "exec"]), "scopes ['exec'] unlock no slack tool"),
+        (lambda r: r["slack"]["connection"].pop("secret_env"), "connection is {service"),
+        (lambda r: r["notion"]["connection"].update(service="slack"), "both offer service 'slack'"),
+    ],
+)
+def test_catalog_rejects_unknown_services_and_unusable_scopes(change, error):
+    data = yaml.safe_load((ROOT / "policy.yaml").read_text())
+    change(data["resources"])
+    with pytest.raises(ValueError, match=re.escape(error)):
+        parse_policy(yaml.safe_dump(data))
