@@ -92,7 +92,11 @@ def test_tool_only_turns_are_not_mistaken_for_a_loop(client):
     assert codes == [200] * 7
 
 
-def test_tool_only_turn_still_gated(client):
-    r = client.post("/v1/chat/completions", headers={}, json={"model": "mock-model", "messages": [
-        {"role": "user", "content": "x"}, {"role": "assistant", "content": "y"}, {"role": "tool", "content": "z"}]})
-    assert r.status_code == 401
+def test_tool_only_turns_are_still_metered(make_client):
+    from .conftest import KEYS
+
+    c = make_client(mutate=_limits(requests_per_minute=2))
+    codes = [c.post("/v1/chat/completions", headers=KEYS["alice"], json={"model": "mock-model", "messages": [
+        {"role": "user", "content": "x"}, {"role": "assistant", "content": "y"}, {"role": "tool", "content": f"r{i}"}]}).status_code
+        for i in range(3)]
+    assert codes == [200, 200, 429]

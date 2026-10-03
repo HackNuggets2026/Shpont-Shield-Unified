@@ -177,3 +177,8 @@ def test_output_warning_is_reported_to_client(make_client):
     sb = ScriptedBackend({"data_exfiltration": [("mock", 0.7)]})
     r = chat(make_client(backend=sb), "hello")
     assert r.json()["control"]["warnings"] == ["data_exfiltration/data_exfiltration"]
+
+
+def test_threshold_is_inclusive(make_client):
+    sb = ScriptedBackend({"prompt_injection": [("edge", 0.85)]}, per_model={"nimble": {"prompt_injection": [("edge", 0.85)]}})
+    assert guard(make_client(backend=sb), "edge case").json()["action"] == "block"
