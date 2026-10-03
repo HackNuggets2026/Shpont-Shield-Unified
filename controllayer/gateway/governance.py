@@ -29,6 +29,7 @@ from ..controls.budget import Usage
 from ..detections import LEVELS
 from ..engine import ControlLayer
 from ..types import Context, Direction, Principal
+from . import org as org_api
 
 ME_PAGE = Path(__file__).resolve().parent.parent / "dashboard" / "me.html"
 DAY = 86400.0
@@ -87,6 +88,7 @@ def register(
     json_object: Callable[[Request], Awaitable[dict[str, Any]]],
 ) -> None:
     usage = layer.usage
+    cache: org_api.AdminCache = app.state.admin_cache
 
     def actor(request: Request) -> str:
         return (request.headers.get("x-admin-user") or "admin")[:80]
@@ -211,10 +213,16 @@ def register(
         }
 
     @app.get("/admin/usage")
-    async def usage_breakdown(by: str = "workflow", days: float = 1, principal: str | None = None):
+    async def usage_breakdown(
+        by: str = "workflow",
+        days: float = 1,
+        principal: str | None = None,
+        department: str | None = None,
+        team: str | None = None,
+    ):
         try:
             since = _day_start(time.time()) if days == 1 else time.time() - days * DAY
-            return usage.breakdown(by.split(","), since, principal)
+            return usage.breakdown(by.split(","), since, principal, department=department, team=team)
         except ValueError as e:
             return err(str(e))
 
@@ -441,7 +449,15 @@ def register(
         """Event sources an employee does not see about themselves: incidents, unless the policy shows risk."""
         return () if principal is None or store.policy.privacy.show_risk_to_employee else ("detections",)
 
-    def timeseries(metric: str, by: str | None, days: int, principal: str | None, own: bool = False):
+    def timeseries(
+        metric: str,
+        by: str | None,
+        days: int,
+        principal: str | None,
+        own: bool = False,
+        department: str | None = None,
+        team: str | None = None,
+    ):
         days = max(1, min(int(days), 120))
         now = time.time()
         try:
@@ -451,22 +467,38 @@ def register(
                 _day_start(now) - (days - 1) * DAY,
                 principal,
                 exclude_sources=hidden_from(principal) if own else (),
+                department=department,
+                team=team,
             )
         except ValueError as e:
             return err(str(e))
         return {"metric": metric, "by": by, **pivot(rows, days, now)}
 
     @app.get("/admin/timeseries")
-    async def admin_timeseries(metric: str = "usd", by: str | None = "workflow", days: int = 30):
-        return timeseries(metric, by, days, None)
+    async def admin_timeseries(
+        metric: str = "usd",
+        by: str | None = "workflow",
+        days: int = 30,
+        principal: str | None = None,
+        department: str | None = None,
+        team: str | None = None,
+    ):
+        return timeseries(metric, by, days, principal or None, department=department or None, team=team or None)
 
     @app.get("/admin/adherence")
-    async def admin_adherence(by: str | None = "team", days: int = 30):
+    async def admin_adherence(
+        by: str | None = "team",
+        days: int = 30,
+        principal: str | None = None,
+        department: str | None = None,
+        team: str | None = None,
+    ):
         """Share of policy checks that needed no intervention (allow or log), per team, workflow, source..."""
         since = time.time() - max(1, min(days, 400)) * DAY
+        unit = {"principal": principal or None, "department": department or None, "team": team or None}
         try:
-            rows = usage.adherence(by or None, since)
-            overall = usage.adherence(None, since)
+            rows = usage.adherence(by or None, since, **unit)
+            overall = usage.adherence(None, since, **unit)
         except ValueError as e:
             return err(str(e))
         return {"by": by, "rows": rows, "overall": overall[0] if overall else None}
@@ -538,18 +570,24 @@ def register(
             "admin_actions": person_actions(pid),
         }
 
-    def value(by: str, days: float, principal: str | None):
+    def value(by: str, days: float, principal: str | None, department: str | None = None, team: str | None = None):
         since = time.time() - max(1, min(days, 400)) * DAY
         try:
-            rows = usage.value(by, since, principal)
+            rows = usage.value(by, since, principal, department=department, team=team)
         except ValueError as e:
             return err(str(e))
         return {"by": by, "days": days, "rows": rows}
 
     @app.get("/admin/value")
-    async def admin_value(by: str = "workflow", days: float = 30):
+    async def admin_value(
+        by: str = "workflow",
+        days: float = 30,
+        principal: str | None = None,
+        department: str | None = None,
+        team: str | None = None,
+    ):
         """Spend against Claude Code's value metrics (commits, PRs, lines, sessions) per workflow/person/team."""
-        return value(by, days, None)
+        return value(by, days, principal or None, department or None, team or None)
 
     @app.get("/admin/activity")
     async def admin_activity(
@@ -564,6 +602,15 @@ def register(
         """The live feed: newest events first (no content; masked text stays in the audit log)."""
         return usage.events(limit=max(1, min(limit, 500)), before=before, source=source, kind=kind,
                             principal=principal, severity=severity, decision=decision)  # fmt: skip
+
+    def row_of(policy: Policy, pid: str, team: str | None = None, role: str | None = None) -> dict[str, Any]:
+        ident = policy.identity_of(pid)
+        person = usage.person(pid) or {}
+        team = ident.team if ident else team or person.get("team") or "unattributed"
+        role = ident.role if ident else role or person.get("role") or "?"
+        return principal_row(policy, Principal(pid, team, role))
+
+    org_api.register(app, store, layer, cache, row_of)
 
     # ---- employees ---------------------------------------------------------------------
 

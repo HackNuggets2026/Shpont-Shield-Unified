@@ -24,6 +24,8 @@ from controllayer.detections import severity as incident_severity
 from controllayer.events import Ingestor
 from controllayer.usage import UsageStore
 
+from .org import OrgSeeder
+
 DAY = 86400.0
 ADMINS = ("dana", "sam")  # dana: security, sam: platform
 
@@ -473,24 +475,83 @@ class Seeder:
         self.lease(judy, "vm", "create_vm", "vm", self.now - 41 * 60, 0, "bugfix", "BUG-733", open_=True, idle=26)
 
 
-def seed(policy: Path, data_dir: Path, days: int = 30, rng_seed: int = 42, now: float | None = None) -> dict:
+NAMES = {
+    "alice": ("Alice Moreau", "Senior Software Engineer", "London"),
+    "dan": ("Dan Whitaker", "Staff Engineer", "London"),
+    "erin": ("Erin Castillo", "Mobile Engineer", "Warsaw"),
+    "frank": ("Frank Doyle", "Software Engineer", "London"),
+    "judy": ("Judy Tanaka", "Engineering Manager", "Warsaw"),
+    "bob": ("Bob Lindqvist", "Financial Analyst", "London"),
+    "grace": ("Grace Mbeki", "Senior Financial Analyst", "London"),
+    "mallory": ("Mallory Brandt", "Financial Analyst", "Frankfurt"),
+    "heidi": ("Heidi Larsen", "Platform Lead", "London"),
+    "ops-agent": ("Ops automation agent", "Service account", "London"),
+    "carol": ("Carol Okafor", "Intern", "London"),
+    "ivan": ("Ivan Petrov", "Intern", "Warsaw"),
+}
+
+
+def named_directory(policies: PolicyStore) -> list[dict]:
+    p = policies.policy
+    rows = []
+    for person in ORG:
+        name, title, loc = NAMES[person.id]
+        key = p.identity_of(person.id)
+        dept = (key.department if key else None) or p.department_of(person.team)
+        cc = "".join(w[0] for w in dept.split() if w[0].isalpha())[:3].upper()
+        rows.append({"principal": person.id, "name": name, "email": key.email if key else None, "team": person.team,
+                     "department": dept, "role": key.role if key else "developer", "title": title, "location": loc,
+                     "cost_center": f"CC-{cc}-{person.team}"})  # fmt: skip
+    return rows
+
+
+def seed(
+    policy: Path,
+    data_dir: Path,
+    days: int = 30,
+    rng_seed: int = 42,
+    now: float | None = None,
+    people: int = 5000,
+) -> dict:
+    """`people` is the size of the org besides the 12 named demo people."""
     data_dir.mkdir(parents=True, exist_ok=True)
     policies = PolicyStore(policy, data_dir=data_dir)
     p = policies.policy
     store = UsageStore(policies.data_path(p.usage.path))
+    store.set_org(p.org.name, p.org.team_departments())
     ledger = BudgetLedger()  # in-memory only; the server rebuilds today's counters from the store
-    s = Seeder(store, Ingestor(store, ledger, policies), policies, random.Random(rng_seed),
-               float(now or math.floor(time.time())), days)  # fmt: skip
+    now = float(now or math.floor(time.time()))
+    s = Seeder(store, Ingestor(store, ledger, policies), policies, random.Random(rng_seed), now, days)
     store.db.execute("BEGIN")
     try:
+        org = OrgSeeder(store, random.Random(rng_seed + 1), now, days, people, named_directory(policies))
         s.routine()
         s.governance()
         s.frank()
         s.running_now()
+        org.history()
+        org.governance(p, s.overlay)
+        org.access(p, s.overlay)
+        org.running_now()
+        named = store._q(
+            f"SELECT principal, team, SUM(usd) usd, SUM(input_tokens+output_tokens) tokens FROM usage"
+            f" WHERE metered=1 AND principal IN ({', '.join('?' * len(ORG))}) GROUP BY principal, team",
+            tuple(x.id for x in ORG),
+        )
+        org.earlier({r["principal"]: (r["team"], r["usd"] / days, int(r["tokens"] / days)) for r in named})
         store.db.execute("COMMIT")
     except BaseException:
         store.db.execute("ROLLBACK")
         raise
     policies.write_overlay(s.overlay)
-    totals = store._q("SELECT COUNT(*) n, COALESCE(SUM(usd), 0) usd FROM usage WHERE metered=1")[0]
-    return {**s.stats, "usage_rows": totals["n"], "usd": round(totals["usd"], 6)}
+    window = now - days * DAY
+    totals = store._q("SELECT COUNT(*) n, COALESCE(SUM(usd), 0) usd FROM usage WHERE metered=1 AND ts>=?", (window,))[0]
+    return {
+        **s.stats,
+        "people": org.stats["people"],
+        "events": s.stats["events"] + org.stats["events"],
+        "leases": s.stats["leases"] + org.stats["leases"],
+        "incidents": len(store.incidents(limit=100_000)),
+        "usage_rows": totals["n"],
+        "usd": round(totals["usd"], 6),
+    }

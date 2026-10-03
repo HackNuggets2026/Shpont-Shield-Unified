@@ -31,6 +31,7 @@ class ApiKey(_Strict):
     team: str
     role: str
     email: str | None = None  # joins telemetry that names a user by email (Claude Code's user.email)
+    department: str | None = None  # else the department `org.departments` lists the team under
 
 
 class Identity(_Strict):
@@ -471,6 +472,35 @@ class Detections(_Strict):
         return v
 
 
+class OrgDepartment(_Strict):
+    teams: list[str] = Field(default_factory=list)
+    owner: str = ""
+
+
+UNASSIGNED = "Unassigned"
+
+
+class Org(_Strict):
+    """The company's organization units: departments, each a list of teams. A team listed nowhere belongs to
+    department "Unassigned"."""
+
+    name: str = ""
+    departments: dict[str, OrgDepartment] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def _one_department_per_team(self) -> Org:
+        seen: dict[str, str] = {}
+        for dept, d in self.departments.items():
+            for team in d.teams:
+                if team in seen and seen[team] != dept:
+                    raise ValueError(f"team {team!r} is listed under both {seen[team]!r} and {dept!r}")
+                seen[team] = dept
+        return self
+
+    def team_departments(self) -> dict[str, str]:
+        return {team: dept for dept, d in self.departments.items() for team in d.teams}
+
+
 class UsageStoreCfg(_Strict):
     path: str = "data/usage.sqlite"  # ":memory:" keeps nothing across restarts
 
@@ -509,6 +539,7 @@ class Policy(_Strict):
     detections: Detections = Field(default_factory=Detections)
     usage: UsageStoreCfg = Field(default_factory=UsageStoreCfg)
     privacy: Privacy = Field(default_factory=Privacy)
+    org: Org = Field(default_factory=Org)
     # Restrictions written from the admin dashboard and by automatic responses, merged over this file.
     admin_overlay: str | None = "data/admin-overlay.yaml"
 
@@ -599,6 +630,13 @@ class Policy(_Strict):
 
     def principal(self, pid: str) -> PrincipalPolicy:
         return self.principals.get(pid) or _ACTIVE
+
+    def department_of(self, team: str | None) -> str:
+        """The department a team belongs to (`org.departments`), else "Unassigned"."""
+        for dept, d in self.org.departments.items():
+            if team in d.teams:
+                return dept
+        return UNASSIGNED
 
     def budget_scale(self, pid: str) -> float:
         pp = self.principal(pid)
