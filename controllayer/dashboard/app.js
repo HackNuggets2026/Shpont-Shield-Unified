@@ -128,12 +128,47 @@
       <span class="acl-tools">${nav("Previous", r.page - 1, r.page <= 1)}<span class="color-fg-muted">page ${r.page} of ${r.pages}</span>${nav("Next", r.page + 1, r.page >= r.pages)}</span></div>`;
   };
 
+  // ---- brand logos ----------------------------------------------------------------------
+  // Simple Icons (CC0), pinned; drawn as a mask in the brand colour. Brands Simple Icons does not carry
+  // (Heroku, Slack, SendGrid, Salesforce, AWS, OpenAI) get a neutral lettered badge.
+
+  const ICONS = "https://cdn.jsdelivr.net/npm/simple-icons@16.33.0/icons/";
+  const BRANDS = {
+    vercel: ["Vercel", "vercel", "000000"], heroku: ["Heroku", null, "H"], stripe: ["Stripe", "stripe", "635BFF"],
+    postgres: ["PostgreSQL", "postgresql", "4169E1"], supabase: ["Supabase", "supabase", "3FCF8E"],
+    snowflake: ["Snowflake", "snowflake", "29B5E8"], slack: ["Slack", null, "S"], github: ["GitHub", "github", "181717"],
+    linear: ["Linear", "linear", "5E6AD2"], zendesk: ["Zendesk", "zendesk", "03363D"], notion: ["Notion", "notion", "000000"],
+    gdrive: ["Google Drive", "googledrive", "4285F4"], datadog: ["Datadog", "datadog", "632CA6"],
+    pagerduty: ["PagerDuty", "pagerduty", "06AC38"], zapier: ["Zapier", "zapier", "FF4F00"], sendgrid: ["SendGrid", null, "SG"],
+    salesforce: ["Salesforce", null, "SF"], hubspot: ["HubSpot", "hubspot", "FF7A59"], s3: ["AWS S3", null, "S3"],
+    upstash: ["Upstash", "upstash", "00E9A3"],
+    claude: ["Claude (Anthropic)", "claude", "D97757"], anthropic: ["Anthropic", "anthropic", "191919"],
+    openai: ["OpenAI", null, "AI"], meta: ["Llama (Meta)", "meta", "0467DF"], qwen: ["Qwen", "qwen", "6950EF"],
+    mistral: ["Mistral AI", "mistralai", "FA520F"], gemini: ["Gemini (Google)", "googlegemini", "8E75B2"],
+    deepseek: ["DeepSeek", "deepseek", "5786FE"], ollama: ["Ollama", "ollama", "000000"],
+  };
+  const ALIASES = { "github-acme": "github", "postgres-prod": "postgres", "aws-s3": "s3", "salesforce-crm": "salesforce",
+    "google-drive": "gdrive", "upstash-redis": "upstash", redis: "upstash" };
+  const MODELS = [[/^claude/, "claude"], [/^(gpt|o\d|chatgpt|text-embedding)/, "openai"], [/^(llama|codellama)/, "meta"],
+    [/^qwen/, "qwen"], [/^(mistral|mixtral|codestral)/, "mistral"], [/^gemini/, "gemini"], [/^deepseek/, "deepseek"]];
+  // key: "service:stripe", "model:claude-sonnet-5", a service key, a resource id, a model name or a tool name.
+  ACL.logo = (key, size = 14) => {
+    const raw = String(key || "").replace(/^(service|model):/, "");
+    let id = ALIASES[raw] || (BRANDS[raw] ? raw : null) || (BRANDS[raw.split("_")[0]] ? raw.split("_")[0] : null);
+    if (!id) { const m = MODELS.find(([re]) => re.test(raw.toLowerCase())); id = m ? m[1] : null; }
+    const b = id ? BRANDS[id] : [raw || "?", null, (raw[0] || "?").toUpperCase()];
+    const style = `width:${size}px;height:${size}px`;
+    if (!b[1]) return `<span class="acl-logo acl-logo-text" role="img" aria-label="${h.esc(b[0])}" title="${h.esc(b[0])}" style="${style};font-size:${Math.round(size * (b[2].length > 1 ? 0.45 : 0.62))}px">${h.esc(b[2])}</span>`;
+    const url = ICONS + b[1] + ".svg";
+    return `<span class="acl-logo" role="img" aria-label="${h.esc(b[0])}" title="${h.esc(b[0])}" style="${style};background:#${b[2]};-webkit-mask-image:url(${url});mask-image:url(${url})"></span>`;
+  };
+
   // ---- charts (inline SVG; palette in core.css: --viz-1.., status colours) ----------------
   // Every mark carries data-tip (shown by the shared tooltip) and, when it drills down, sits in an
   // <a data-nav href>. Bars are at most 24px thick with a 4px rounded data end and 2px gaps.
 
   const c = (ACL.charts = {});
-  const W = 640;
+  const VBW = 640; // default viewBox width; pass opts.width close to the rendered width so text stays ~11px
   const R = 4;
   const ticks = (max, n = 4) => {
     if (max <= 0) return [0];
@@ -165,7 +200,7 @@
   // Stacked columns over time. opts: {labels: [str], series: [{label, color, values}], fmt, ref: {value, label},
   // href: (i) => url, height}
   c.columns = (opts) => {
-    const H = opts.height || 180, L = 48, B = 22, T = 8, n = opts.labels.length;
+    const W = opts.width || VBW, H = opts.height || 180, L = 48, B = 22, T = 8, n = opts.labels.length;
     const totals = opts.labels.map((_, i) => opts.series.reduce((a, s) => a + (s.values[i] || 0), 0));
     const yt = ticks(Math.max(...totals, opts.ref?.value || 0));
     const max = yt[yt.length - 1] || 1, ph = H - B - T, band = (W - L) / n;
@@ -195,12 +230,12 @@
     return `<svg class="acl-chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="${h.esc(opts.title || "chart")}">${out}</svg>` + (opts.series.length > 1 ? c.legend(opts.series) : "");
   };
 
-  // Ranked horizontal bars. rows: [{label, value, color?, href?, sub?}], opts: {fmt, max}
+  // Ranked horizontal bars. rows: [{label, value, color?, href?, sub?, icon? (html before the label)}], opts: {fmt, max}
   c.hbars = (rows, opts = {}) => {
     const fmt = opts.fmt || h.usd, max = opts.max || Math.max(...rows.map((r) => r.value), 0) || 1;
     return `<div class="acl-hbars">${rows.map((r) => {
       const w = Math.max(0.5, (100 * r.value) / max);
-      const bar = `<span class="acl-hbar-label" title="${h.esc(r.label)}">${h.esc(r.label)}</span>
+      const bar = `<span class="acl-hbar-label" title="${h.esc(r.label)}">${r.icon || ""}${h.esc(r.label)}</span>
         <span class="acl-hbar-track"><span class="acl-hbar" style="width:${w.toFixed(2)}%;background:${r.color || "var(--viz-1)"}"></span></span>
         <span class="acl-hbar-value">${h.esc(fmt(r.value))}${r.sub ? ` <span class="color-fg-muted">${h.esc(r.sub)}</span>` : ""}</span>`;
       const tip = `${r.label}: ${fmt(r.value)}${r.sub ? " (" + r.sub + ")" : ""}`;
@@ -210,7 +245,7 @@
 
   // Histogram of counts with vertical markers. bins: [{label, count, href?, tip?}], markers: [{at: fractional bin index, label}]
   c.histogram = (bins, markers = [], opts = {}) => {
-    const H = opts.height || 150, L = 34, B = 22, T = 16, n = bins.length || 1;
+    const W = opts.width || VBW, H = opts.height || 150, L = 34, B = 22, T = 16, n = bins.length || 1;
     const yt = ticks(Math.max(...bins.map((b) => b.count), 1), 3), max = yt[yt.length - 1];
     const ph = H - B - T, band = (W - L) / n, bw = Math.min(48, band - 2), y = (v) => T + ph - (v / max) * ph;
     let out = yt.map((v) => `<line class="acl-grid" x1="${L}" x2="${W}" y1="${y(v)}" y2="${y(v)}"/><text class="acl-axis" x="${L - 6}" y="${y(v) + 4}" text-anchor="end">${h.num(v)}</text>`).join("");
@@ -245,7 +280,7 @@
 
   // A single-series line over time with optional horizontal thresholds. opts: {labels, values, color, thresholds: [{value, label}], fmt, height}
   c.line = (opts) => {
-    const H = opts.height || 120, L = 34, B = 20, T = 10, n = opts.labels.length;
+    const W = opts.width || VBW, H = opts.height || 120, L = 34, B = 20, T = 10, n = opts.labels.length;
     const yt = ticks(Math.max(...opts.values, ...(opts.thresholds || []).map((t) => t.value), 1), 3), max = yt[yt.length - 1];
     const ph = H - B - T, step = n > 1 ? (W - L - 8) / (n - 1) : 0, x = (i) => L + 4 + i * step, y = (v) => T + ph - (v / max) * ph;
     const fmt = opts.fmt || ((v) => h.num(v));
@@ -326,6 +361,7 @@
         <div class="Header-item Header-item--full f6 color-fg-on-emphasis acl-meta">${pol.name ? `${h.esc(pol.name)} · policy ${h.esc(pol.version)}` : ""}</div>
         ${s.demo_mode ? `<div class="Header-item mr-0"><span class="acl-demo" title="identity.demo_mode is on: no admin token or API keys are checked">Demo mode - no authentication</span></div>` : ""}
       </header>
+      ${view.inspection ? `<div class="acl-inspection px-3">Database inspection: a full, paged listing</div>` : ""}
       <nav class="UnderlineNav px-3 acl-nav" aria-label="Console">
         <div class="UnderlineNav-body">${tabs}</div>
         <div class="UnderlineNav-actions acl-tools">${view.periodic === false ? "" : h.muted("period") + " " + h.navSegmented("period", PERIODS, ACL.period())}</div>

@@ -13,6 +13,7 @@ from controllayer.gateway.app import create_app
 
 from .conftest import ROOT
 from .jsconsole import Console
+from .layout import BUDGET
 
 MAX_HTML = 250_000  # a view never dumps the whole org into the DOM
 
@@ -39,7 +40,7 @@ def test_overview_renders_and_every_link_lands_on_a_view(big_org):
     page = Console(big_org, "/security?ui=next")
     html = page.html
     assert not page.errors(), page.errors()
-    for title in ("Spend over time", "Budget used", "Insider risk", "Cost by service", "Spend per person", "Teams"):
+    for title in ("Spend over time", "Budget used", "Insider risk", "Cost by service", "Spend per person", "Top teams"):
         assert title in html
     assert html.count("<svg") >= 2 and len(html) < MAX_HTML
     assert "Demo mode - no authentication" in html  # the shipped policy runs in demo mode
@@ -72,3 +73,72 @@ def test_token_is_sent_and_kept_only_when_given(big_org):
 def test_classic_console_still_renders(big_org):
     page = Console(big_org, "/security")
     assert "Security Console" in page.html and not page.errors()
+
+
+@pytest.fixture(scope="module")
+def org500(tmp_path_factory):
+    """500 people with grants, overrides and signals: the size the height budget is set for."""
+    d = tmp_path_factory.mktemp("org500")
+    text = (ROOT / "policy.yaml").read_text()
+    (d / "policy.yaml").write_text(text)
+    (d / "feeds").mkdir()
+    (d / "feeds" / "signatures.json").write_text((ROOT / "feeds" / "signatures.json").read_text())
+    out = seed.build(parse_policy(text), 500, 30, 3, time.time())
+    (d / "data").mkdir()
+    (d / "data" / "org.json").write_text(json.dumps(out["directory"]))
+    (d / "data" / "history.json").write_text(json.dumps(out["history"]))
+    (d / "data" / "state.json").write_text(json.dumps(out["state"]))
+    return TestClient(create_app(d / "policy.yaml", watch=False))
+
+
+def test_every_page_fits_two_screens_unless_it_is_an_inspection_page(org500):
+    """Estimated with tests/layout.py: no browser exists here, so this is the markup's arithmetic, not
+    a measured layout."""
+    top = org500.get("/admin/analytics/overview").json()["spend"]["top"][0]["id"]
+    tabs = [v for v in ("overview", "people", "risk", "resources", "controls", "audit", "playground")]
+    pages = [f"/security?ui=next&view={v}" for v in tabs] + [f"/security?ui=next&person={top}"]
+    page = Console(org500, pages[0])
+    seen = {}
+    for url in pages:
+        page.nav(url)
+        assert not page.errors(), (url, page.errors())
+        seen[page.view] = (page.height, page.inspection)
+        if not page.inspection:
+            assert page.height <= BUDGET, (url, page.height)
+    assert set(seen) == {*tabs, "person"}
+
+
+def test_overview_risk_is_a_top_five_with_profiles_and_next_steps(org500):
+    page = Console(org500, "/security?ui=next")
+    html = page.html
+    top = org500.get("/admin/analytics/overview").json()["risk"]
+    assert top["attention"] > 0 and f"{top['attention']}</span> people need attention" in html
+    assert html.count(">View profile</a>") == len(top["top"]) == 5
+    for p in top["top"]:
+        assert f"person={p['id']}" in html and p["reason"].split(" (")[0].replace(">", "&gt;") in html
+    assert "Review watch list" in html and "view=risk" in html
+    assert "Recent alerts" not in html  # no full lists on the overview
+
+
+def test_logos_cover_every_service_and_model_family(big_org):
+    page = Console(big_org, "/security?ui=next")
+
+    def logo(key):
+        return page.js.eval(f"ACL.logo({json.dumps(key)})")
+
+    from controllayer.services import SERVICES
+
+    for key in SERVICES:
+        html = logo("service:" + key)
+        assert 'role="img"' in html and 'aria-label="?"' not in html, key
+    assert "simple-icons@16.33.0/icons/stripe.svg" in logo("stripe")
+    assert "postgresql.svg" in logo("postgres-prod") and "snowflake.svg" in logo("snowflake_query")
+    assert 'aria-label="Salesforce"' in logo("salesforce-crm") and "acl-logo-text" in logo("salesforce-crm")
+    assert "claude.svg" in logo("model:claude-sonnet-5") and 'aria-label="OpenAI"' in logo("gpt-4o-mini")
+    assert (
+        "meta.svg" in logo("llama3.2:3b")
+        and "qwen.svg" in logo("qwen3:8b")
+        and "mistralai.svg" in logo("mistral-large")
+    )
+    assert 'aria-label="mock-model"' in logo("model:mock-model")  # unknown: a lettered badge with its own name
+    assert "&lt;x&gt;" in logo("<x>")

@@ -102,3 +102,10 @@ a.acl-hbar-row:hover, .acl-hbar-row:focus { background: var(--bgColor-muted, #f6
 .acl-tip[hidden] { display: none; }
 .acl-table tr.acl-detail > td { background: var(--bgColor-muted, #f6f8fa); padding: 6px 12px; font-size: 12px; }
 .acl-table tr.acl-detail:hover { background: none; }
+.acl-logo { display: inline-block; vertical-align: -2px; margin-right: 5px; flex: none; -webkit-mask-size: contain; mask-size: contain; -webkit-mask-repeat: no-repeat; mask-repeat: no-repeat; -webkit-mask-position: center; mask-position: center; }
+.acl-logo-text { background: var(--bgColor-neutral-muted, #afb8c133); color: var(--fgColor-muted, #656d76); border-radius: 3px; font-weight: 700; line-height: 1; display: inline-flex; align-items: center; justify-content: center; font-family: system-ui, sans-serif; }
+.acl-inspection { font-size: 11px; color: var(--fgColor-attention, #9a6700); background: var(--bgColor-attention-muted, #fff8c5); border-bottom: 1px solid var(--borderColor-attention-muted, #d4a72c66); padding-top: 2px; padding-bottom: 2px; }
+.acl-risk-row { display: flex; align-items: center; gap: 8px; padding: 4px 0; border-top: 1px solid var(--borderColor-muted, #eaeef2); }
+.acl-risk-who { flex: 1; min-width: 0; font-size: 12px; }
+.acl-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+.acl-ellipsis { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

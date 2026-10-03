@@ -53,11 +53,19 @@ The URL is the state; every link is `<a href data-nav>` and the router intercept
 
 Layout: `<div class="acl-cols">` with children `acl-c3`..`acl-c12` (12-column grid). Greyed table row: `<tr class="acl-greyed">`.
 
+### Logos
+
+`ACL.logo(key, size = 14)`: the brand logo (Simple Icons 16.33.0 from jsDelivr, masked in the brand colour; a neutral lettered badge where Simple Icons has none: Heroku, Slack, SendGrid, Salesforce, AWS S3, OpenAI). `key` is an item key (`service:stripe`, `model:claude-sonnet-5`), a service key, a resource id (`github-acme`), a model name (matched by prefix: claude, gpt/o1, llama, qwen, mistral, gemini, deepseek) or a tool name (`snowflake_query`). Returns one inline element with the brand name as its title, safe to concatenate.
+
+### Page height
+
+Every view fits in two viewport heights (1800 px at 1280 x 900) with a 500-person org, unless it registers `inspection: true` (a full, paged listing; the shell then shows a "Database inspection" strip). Overview-style blocks are summaries plus a top N and a link to the full list, never full lists. `tests/layout.py` `estimate(html) -> px` approximates the rendered height (no browser here); `jsconsole.Console.height` and `.inspection` give it for the current page, and `tests/test_console_js.py` checks every view.
+
 ### Charts (`ACL.charts`)
 
-All inline SVG, one palette (`--viz-1`..`--viz-5`, `--viz-other`, status colours in core.css), bars at most 24 px with 2 px gaps, a tooltip from `data-tip` on every mark, and a drill-down `href` where given.
+All inline SVG (`opts.width`: the viewBox width, default 640; set it near the rendered width, e.g. 380 in an `acl-c4` card, so axis text stays ~11 px), one palette (`--viz-1`..`--viz-5`, `--viz-other`, status colours in core.css), bars at most 24 px with 2 px gaps, a tooltip from `data-tip` on every mark, and a drill-down `href` where given.
 - `columns({labels, series: [{label, color, values}], ref: {value, label}, href: (i) => url, fmt})`: stacked columns over time, legend when 2+ series.
-- `hbars([{label, value, color, sub, href}], {fmt, max})`: ranked horizontal bars.
+- `hbars([{label, value, color, sub, href, icon}], {fmt, max})`: ranked horizontal bars; `icon` is raw HTML before the label (e.g. `ACL.logo(key)`).
 - `histogram(bins: [{count, edge, end, tip, href}], markers: [{at, label}])`.
 - `split([{label, value, color, href}])`: a 100% bar with a labelled legend.
 - `line({labels, values, color, thresholds: [{value, label}], fmt})`.

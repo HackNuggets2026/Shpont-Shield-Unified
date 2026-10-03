@@ -15,6 +15,8 @@ from pathlib import Path
 import quickjs
 from fastapi.testclient import TestClient
 
+from .layout import estimate
+
 DASHBOARD = Path(__file__).resolve().parent.parent / "controllayer" / "dashboard"
 SCRIPTS = ["app.js", "views/overview.js", "views/people.js", "views/person.js", "views/admin.js", "core.js"]
 
@@ -50,6 +52,20 @@ class Console:
     @property
     def html(self) -> str:
         return self.js.eval("document._root.innerHTML")
+
+    @property
+    def height(self) -> int:
+        """Estimated rendered height in px (tests/layout.py)."""
+        return estimate(self.html)
+
+    @property
+    def view(self) -> str:
+        return self.js.eval("ACL.currentView().id")
+
+    @property
+    def inspection(self) -> bool:
+        """The current view is a database inspection page, exempt from the height budget."""
+        return bool(self.js.eval("!!ACL.currentView().inspection"))
 
     @property
     def search(self) -> str:

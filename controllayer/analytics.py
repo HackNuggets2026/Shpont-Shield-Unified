@@ -279,6 +279,22 @@ class Analytics:
         caps = [person.cap] + [self.people()[a].cap for a in person.agents]
         return None if any(c is None for c in caps) else sum(caps)  # type: ignore[misc]
 
+    def reason(self, pid: str) -> str:
+        """One line on why a person is at their level: security's override, the newest alert, an
+        external signal, or the score."""
+        manual = self.layer.state.watch.get(pid)
+        if manual and manual.get("reason"):
+            return f"override to {manual['level']}: {manual['reason']}"
+        alert = next((a for a in reversed(self.layer.risk.alerts) if a["principal"] == pid), None)
+        if alert:
+            return alert["reason"] + (f" ({', '.join(alert['findings'])})" if alert.get("findings") else "")
+        signal = max(
+            self.layer.risk.signals(self.policy, pid).items(), key=lambda kv: LEVEL_RANK[kv[1]["level"]], default=None
+        )
+        if signal:
+            return f"{signal[0]} signal: {signal[1].get('reason') or signal[1]['level']}"
+        return f"score {self.layer.risk.score(self.policy, pid):.0f} from recent findings"
+
     def risk(self, person: Person) -> dict[str, Any]:
         r, p = self.layer.risk, self.policy
         return {
@@ -371,8 +387,13 @@ class Analytics:
         for r in roll.values():
             bands[_band(r)] += 1
         risks = {kind: dict.fromkeys(LEVEL_RANK, 0) for kind in ("human", "agent")}
+        ranked = []
         for person in people.values():
-            risks[person.kind][self.layer.risk.level(self.policy, person.principal)] += 1
+            level = self.layer.risk.level(self.policy, person.principal)
+            risks[person.kind][level] += 1
+            if person.kind == "human":
+                ranked.append((LEVEL_RANK[level], self.layer.risk.score(self.policy, person.id), person, level))
+        ranked.sort(key=lambda r: (-r[0], -r[1], r[2].name))
 
         caps = [self.allowance(p) for p in humans]
         daily_budget = sum(c for c in caps if c is not None)
@@ -431,6 +452,19 @@ class Analytics:
                 "agents": risks["agent"],
                 "overrides": len(self.layer.state.watch),
                 "signals": sum(1 for pid in self.layer.state.signals if self.layer.risk.signals(self.policy, pid)),
+                "attention": risks["human"]["watch"] + risks["human"]["restricted"],
+                "top": [
+                    {
+                        "id": p.id,
+                        "name": p.name,
+                        "team": p.team,
+                        "level": level,
+                        "score": round(score, 1),
+                        "reason": self.reason(p.id),
+                    }
+                    for rank, score, p, level in ranked[:5]
+                    if rank or score > 0
+                ],
             },
             "alerts": [_alert(a, people) for a in list(reversed(self.layer.risk.alerts))[:8]],
             "teams": sorted(teams.values(), key=lambda t: -t["usd"]),
