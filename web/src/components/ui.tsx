@@ -371,7 +371,7 @@ export function Chips({ items, max = 3, empty = "any" }: { items: string[]; max?
   return (
     <span className="inline-flex flex-wrap gap-1" title={items.join(", ")}>
       {shown.map((t) => (
-        <span key={t} className="rounded bg-ink/[0.06] px-1.5 py-px font-mono text-[11px] text-ink2">
+        <span key={t} className="whitespace-nowrap rounded bg-ink/[0.06] px-1.5 py-px font-mono text-[11px] text-ink2">
           {t}
         </span>
       ))}

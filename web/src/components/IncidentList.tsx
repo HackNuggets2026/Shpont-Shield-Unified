@@ -31,7 +31,7 @@ export function IncidentTable({ incidents, showPerson = true, empty = "No incide
               <td>
                 <SeverityPill severity={i.severity} />
               </td>
-              <td className="font-medium text-ink">{titleCase(i.rule)}</td>
+              <td className="whitespace-nowrap font-medium text-ink">{titleCase(i.rule)}</td>
               {showPerson && <td className="font-medium">{i.principal}</td>}
               <td className="max-w-[360px]">
                 <span className="line-clamp-2 text-xs text-ink2" title={i.detail}>

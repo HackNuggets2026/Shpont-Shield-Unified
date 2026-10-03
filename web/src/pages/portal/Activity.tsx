@@ -7,6 +7,7 @@ import { DecisionPill } from "../../components/pills";
 import { Card, Empty, ErrorBox, Loading, PageHeader, Q, TableWrap } from "../../components/ui";
 import { IconTerminal } from "../../components/icons";
 import { ago, dateTime, num, tokens, usd } from "../../lib/format";
+import { kindLabel } from "../../lib/events";
 import { useMe } from "./Home";
 
 interface CcSession {
@@ -48,6 +49,48 @@ function ccSessions(events: ActivityEvent[]): CcSession[] {
     else if (e.kind === "metric.lines_of_code" && e.decision === "added") s.lines += v;
   }
   return [...by.values()].sort((a, b) => b.end - a.end);
+}
+
+const STOPPED = new Set(["block", "redact", "warn"]);
+
+/** Calls the policy stopped or changed. Built from the activity stream, which survives restarts. */
+function BlockedCard() {
+  const q = useQuery({ queryKey: ["me", "activity", 500], queryFn: () => me.activity(500), refetchInterval: 30_000 });
+  const rows = (q.data ?? []).filter((e) => e.kind.startsWith("check.") && e.decision && STOPPED.has(e.decision));
+  return (
+    <Card title="Blocked and flagged" subtitle="Calls the policy stopped or changed, and why" flush>
+      {q.isPending ? (
+        <div className="p-4">
+          <Loading rows={4} />
+        </div>
+      ) : q.isError ? (
+        <div className="p-4">
+          <ErrorBox error={q.error} retry={() => q.refetch()} />
+        </div>
+      ) : rows.length === 0 ? (
+        <Empty title="Nothing blocked" hint="Every recent call went through untouched." />
+      ) : (
+        <ul className="max-h-[380px] divide-y divide-line/60 overflow-y-auto">
+          {rows.map((e) => (
+            <li key={e.id} className="px-4 py-2.5 text-sm">
+              <div className="flex flex-wrap items-center gap-2">
+                <DecisionPill decision={e.decision} />
+                <span className="text-xs text-ink2">
+                  {kindLabel(e.kind)}
+                  {e.tool ? ` · ${e.tool}` : e.model ? ` · ${e.model}` : ""}
+                  {e.workflow ? ` · ${seriesLabel(e.workflow)}` : ""}
+                </span>
+                <span className="ml-auto text-[11px] text-muted" title={dateTime(e.ts)}>
+                  {ago(e.ts)}
+                </span>
+              </div>
+              <div className="mt-1 break-words text-xs text-ink2">{String((e.detail as { reason?: string } | null)?.reason || "—")}</div>
+            </li>
+          ))}
+        </ul>
+      )}
+    </Card>
+  );
 }
 
 function ClaudeCodeCard() {
@@ -163,33 +206,7 @@ export function PortalActivity() {
             }
           </Q>
         </Card>
-        <Card title="Blocked and flagged" subtitle="Calls the policy stopped or changed, and why" flush>
-          <Q q={q} rows={5}>
-            {(s) =>
-              s.events.length === 0 ? (
-                <Empty title="Nothing blocked" hint="Every recent call went through untouched." />
-              ) : (
-                <ul className="max-h-[380px] divide-y divide-line/60 overflow-y-auto">
-                  {s.events.map((e, i) => (
-                    <li key={`${e.request_id}-${i}`} className="px-4 py-2.5 text-sm">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <DecisionPill decision={e.action} />
-                        <span className="text-xs text-ink2">
-                          {e.channel} · {e.direction.replace("_", " ")}
-                          {e.tool ? ` · ${e.tool}` : e.model ? ` · ${e.model}` : ""}
-                        </span>
-                        <span className="ml-auto text-[11px] text-muted" title={dateTime(e.ts)}>
-                          {ago(e.ts)}
-                        </span>
-                      </div>
-                      <div className="mt-1 break-words text-xs text-ink2">{e.reason || e.findings.map((f) => f.detail).join("; ") || "—"}</div>
-                    </li>
-                  ))}
-                </ul>
-              )
-            }
-          </Q>
-        </Card>
+        <BlockedCard />
       </div>
       <ClaudeCodeCard />
       <Card title="Activity feed" subtitle="Everything recorded under your key, newest first" flush>
