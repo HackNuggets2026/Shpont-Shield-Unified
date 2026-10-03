@@ -42,9 +42,11 @@ def seeded(tmp_path_factory):
 
 @pytest.fixture
 def org(seeded, tmp_path):
-    """A fresh app over a copy of the seeded files: actions write state.json."""
+    """A fresh app per test: actions write state.json (copied); the large read-only seed files are linked."""
     d = tmp_path / "org"
-    shutil.copytree(seeded["dir"], d)
+    shutil.copytree(seeded["dir"], d, ignore=lambda _, names: [n for n in names if n in ("org.json", "history.json")])
+    for name in ("org.json", "history.json"):
+        (d / "data" / name).symlink_to(seeded["dir"] / "data" / name)
     return TestClient(create_app(d / "policy.yaml", watch=False))
 
 

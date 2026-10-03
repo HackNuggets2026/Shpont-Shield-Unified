@@ -8,7 +8,6 @@
   const audit = (pid, patch) => ACL.href({ view: "audit", principal: pid, ...patch });
   const score = (x) => String(Math.round(Number(x || 0) * 10) / 10);
   const short = (name) => String(name).replace(/\s*\(.*\)$/, "");
-  const logo = (key) => (ACL.logo ? ACL.logo(key) : "");
   const LEVEL_STYLE = {
     normal: "background:var(--status-good);border-color:var(--status-good);color:#fff",
     watch: "background:var(--status-warning);border-color:var(--status-warning);color:#1f2328",
@@ -64,6 +63,7 @@
     const unit = s.unit === "hour" ? "per hour, last 24 h (UTC)" : "per day (UTC)";
     return `<div class="f6 color-fg-muted mb-1">${unit}${cap ? ` · daily cap ${h.usd(cap)}` : ""}</div>` + c.columns({
       title: "Spend over time",
+      width: 780,
       labels: c.bucketLabels(s, n),
       series: s.items.map((it, k) => ({ label: it.name, color: col[it.key] || c.OTHER, values: s.values[k] })),
       ref,
@@ -78,7 +78,7 @@
       return it.kind + (viaAgents && agents > 0 ? ` · ${h.pct(agents / it.usd)} by agents` : "");
     };
     const top = d.items.slice(0, TOP_ITEMS), rest = d.items.slice(TOP_ITEMS);
-    const rows = top.map((it) => ({ label: it.name, icon: logo(it.key), value: it.usd, color: col[it.key], sub: sub(it),
+    const rows = top.map((it) => ({ label: it.name, icon: ACL.logo(it.key), value: it.usd, color: col[it.key], sub: sub(it),
       href: ACL.href({ view: "people", item: it.key, sort: "-item" }) }));
     if (rest.length) rows.push({ label: `Other (${rest.length})`, value: rest.reduce((a, it) => a + it.usd, 0), color: c.OTHER });
     return c.hbars(rows) + `<div class="f6 color-fg-muted mt-1">Bars link to everyone using the item.</div>`;
@@ -92,7 +92,7 @@
     const at = `data-agent="${h.esc(a.id)}" data-rid="${h.esc(id)}"`;
     const name = r ? short(r.name) : id;
     // h.pill escapes its label: the logo goes in after.
-    const pill = (on, attrs, opts) => h.pill(on, name, `${at} ${attrs}`, opts).replace(/>([^<]*)<\/button>$/, `>${logo(id)}$1</button>`);
+    const pill = (on, attrs, opts) => h.pill(on, name, `${at} ${attrs}`, opts).replace(/>([^<]*)<\/button>$/, (m, text) => `>${ACL.logo(id)}${text}</button>`);
     const link = (label, attrs, title) => `<button type="button" class="btn-link f6" ${at} ${attrs} title="${h.esc(title)}">${label}</button>`;
     const revoke = link("revoke", `data-act="revoke"`, "Remove the grant");
     const wrap = (inner) => `<span class="d-inline-flex flex-items-center no-wrap mr-2 mb-1" style="gap:3px">${inner}</span>`;
@@ -162,7 +162,7 @@
       const labels = r.history.map((_, i) => new Date(day0 + i * 86400000).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" }));
       const thresholds = [{ value: lv.watch, label: "watch" }];
       if (peak >= lv.restricted / 2) thresholds.push({ value: lv.restricted, label: "restricted" });
-      chart = `<div class="f6 color-fg-muted mt-2">Daily peak score</div>` + c.line({ title: "Risk score", labels, values: r.history, color: c.STATUS[r.level], thresholds, height: 90, fmt: score });
+      chart = `<div class="f6 color-fg-muted mt-2">Daily peak score</div>` + c.line({ title: "Risk score", width: 480, labels, values: r.history, color: c.STATUS[r.level], thresholds, height: 90, fmt: score });
     }
     const signals = r.signals.length ? `<div class="f6 text-bold mt-2">External signals${r.manual ? h.muted(" - the override wins") : ""}</div>` + r.signals.map((g) =>
       `<div class="d-flex flex-items-center f6 py-1 border-top" style="gap:6px">${h.badge(h.tone(g.level), g.level)}<b>${h.esc(g.source)}</b>
@@ -184,7 +184,7 @@
       h.ago(e.ts),
       e.principal === pid ? h.muted("self") : h.person(e.principal, e.principal.startsWith(pid + "-") ? e.principal.slice(pid.length + 1) : e.principal),
       h.esc(`${e.channel} · ${e.direction}`),
-      e.model || e.tool ? logo(e.model ? "model:" + e.model : e.tool) + h.esc(e.model || e.tool) : h.muted("-"),
+      e.model || e.tool ? ACL.logo(e.model ? "model:" + e.model : e.tool) + h.esc(e.model || e.tool) : h.muted("-"),
       h.badge(h.tone(e.action), e.action),
       (e.findings || []).length ? h.esc(e.findings.map((f) => (typeof f === "string" ? f : `${f.control}/${f.category}`)).join(", ")) : h.muted("-"),
     ]);
