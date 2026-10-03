@@ -212,7 +212,16 @@ export const ops = {
   requests: async (f: RequestFilters): Promise<Page<OrgRequest>> => {
     const r = await get<unknown>(`${A}/requests${qs({ ...f })}`);
     const o = (r && typeof r === "object" && !Array.isArray(r) ? r : {}) as { total?: number };
-    return page(rowsOf<OrgRequest>(r, "requests"), o.total, f.limit, f.offset);
+    const rows = rowsOf<OrgRequest>(r, "requests");
+    if (f.limit && rows.length > f.limit) {
+      // The server ignored the filters and paging: apply them here so a page never shows the wrong rows.
+      const all = rows.filter(
+        (x) => (!f.status || x.status === f.status) && (!f.kind || x.kind === f.kind) && (!f.department || !x.department || x.department === f.department),
+      );
+      const off = f.offset ?? 0;
+      return { rows: all.slice(off, off + f.limit), total: all.length, hasMore: off + f.limit < all.length };
+    }
+    return page(rows, o.total, f.limit, f.offset);
   },
 
   activity: (p: { limit?: number; before?: number; source?: string; kind?: string; principal?: string; severity?: string; interesting?: boolean; department?: string }) =>
