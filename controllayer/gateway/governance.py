@@ -310,13 +310,19 @@ def register(
             elif req["kind"] == "workflow":
                 patch = {"approved_workflows": sorted({*pp.approved_workflows, req["workflow"]})}
             else:
-                patch = {"budget_scale": float(req["scale"] or 2.0)}
-            patch |= {"reason": f"request {rid} approved: {req['reason']}", "by": actor(request), "since": time.time()}
+                # Never lowers the person's scale; a quarantine still caps what applies (Policy.budget_scale).
+                patch = {"budget_scale": max(pp.budget_scale, float(req["scale"] or 2.0))}
+            if pp.status == "active":
+                patch |= {"reason": f"request {rid} approved: {req['reason']}", "by": actor(request)}
+                patch["since"] = time.time()
+            # Quarantined or revoked: the restriction's reason, author and start stay as they were.
             resp = _write(request, {"principals": {req["principal"]: patch}}, "approve_request", req["principal"], note)
             if resp.status_code != 200:
                 return resp
         usage.decide_request(rid, "approved" if decision == "approve" else "denied", actor(request), note)
-        return {"ok": True}
+        p = store.policy
+        return {"ok": True, "status": p.principal(req["principal"]).status,
+                "budget_scale": p.budget_scale(req["principal"])}  # fmt: skip
 
     # ---- admin: charts, adherence, evidence, people, activity ---------------------------
 

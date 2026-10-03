@@ -212,3 +212,26 @@ def test_a_grant_for_the_second_action_of_a_resource_covers_its_tools(make_clien
     assert r.status_code == 200
     out = mcp(c, "tools/call", {"name": "query_prod_db", "arguments": {"sql": "select 1"}})
     assert "result" in out, out  # used to be refused: only the first action ("read") was ever checked
+
+
+def _quota_request(c, who: str, scale: float) -> str:
+    body = {"kind": "quota", "scale": scale, "reason": "big batch"}
+    return c.post("/me/requests", json=body, headers=KEYS[who]).json()["id"]
+
+
+def test_approving_a_quota_request_does_not_lift_a_quarantine(client):
+    client.post("/admin/principals/carol", json={"status": "quarantined", "reason": "exfil suspected"})
+    rid = _quota_request(client, "carol", 2.0)
+    r = client.post(f"/admin/requests/{rid}", json={"decision": "approve"}).json()
+    assert r["ok"] and r["status"] == "quarantined" and r["budget_scale"] == 0.1
+    pp = client.app.state.store.policy.principal("carol")
+    assert pp.status == "quarantined" and pp.reason == "exfil suspected"
+    me = client.get("/me/summary", headers=KEYS["carol"]).json()["status"]
+    row = next(x for x in client.get("/admin/principals").json() if x["principal"] == "carol")
+    assert me["budget_scale"] == row["budget_scale"] == 0.1
+
+
+def test_approving_a_quota_request_never_lowers_the_scale(client):
+    client.post("/admin/principals/bob", json={"budget_scale": 3.0, "reason": "quarter close"})
+    rid = _quota_request(client, "bob", 1.5)
+    assert client.post(f"/admin/requests/{rid}", json={"decision": "approve"}).json()["budget_scale"] == 3.0
