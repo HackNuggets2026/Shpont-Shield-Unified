@@ -1,12 +1,17 @@
 """Regression tests for review findings: each test names the input that used to misbehave."""
 
+import csv as csvlib
 import gzip
+import io
 import json
 import time
 
 import pytest
+from fastapi.testclient import TestClient
 
-from .conftest import KEYS, chat
+from controllayer.gateway.app import create_app
+
+from .conftest import ADMIN, KEYS, chat
 
 TODAY = lambda: time.strftime("%Y-%m-%d", time.gmtime())  # noqa: E731
 
@@ -143,3 +148,20 @@ def test_grant_minutes_must_be_a_positive_finite_number(client, minutes):
 def test_grant_actions_may_be_a_single_string(client):
     r = client.post("/admin/principals/carol/grants", json={"resource": "prod_db", "actions": "read", "reason": "x"})
     assert r.status_code == 200 and r.json()["grant"]["actions"] == ["read"]
+
+
+def test_focus_export_keeps_quantities_in_full(client, policy_dir, tmp_path_factory):
+    u = client.app.state.layer.usage
+    u.add(principal="alice", team="engineering", resource="gpt-4o-mini", model="gpt-4o-mini", requests=1,
+          input_tokens=1_234_567, usd=0.185185)  # fmt: skip
+    u.add(principal="alice", team="engineering", resource="ci_minutes", quantity=1234.56789, unit="minute", usd=9.87)
+    rows = {r["ResourceName"]: r for r in csvlib.DictReader(io.StringIO(client.get("/admin/export/focus").text))}
+    assert rows["gpt-4o-mini"]["ConsumedQuantity"] == "1234567"
+    assert float(rows["ci_minutes"]["ConsumedQuantity"]) == 1234.56789
+    fresh = TestClient(
+        create_app(policy_dir / "policy.yaml", watch=False, data_dir=tmp_path_factory.mktemp("fresh")),
+        headers={"x-admin-token": ADMIN},
+    )
+    fresh.post("/v1/import/focus", content=client.get("/admin/export/focus").text)
+    tokens = {r["resource"]: r["tokens"] for r in fresh.app.state.layer.usage.cost_rows(0)}
+    assert tokens["gpt-4o-mini"] == 1_234_567

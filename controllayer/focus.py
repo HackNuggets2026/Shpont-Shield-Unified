@@ -56,6 +56,12 @@ SERVICE_CATEGORY = {
 }
 
 
+def _qty(x: Any) -> str:
+    """A quantity in full: `:g` would round 1234567 tokens to 1.23457e+06."""
+    x = float(x or 0)
+    return str(int(x)) if x.is_integer() else repr(x)
+
+
 def _iso(d: datetime) -> str:
     return d.strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -91,7 +97,7 @@ def export_csv(policy: Policy, rows: list[dict[str, Any]], account: str = "shpon
                 "BilledCost": f"{r['usd'] or 0:.8f}",
                 "EffectiveCost": f"{r['usd'] or 0:.8f}",
                 "ListCost": f"{r['usd'] or 0:.8f}",
-                "ConsumedQuantity": f"{qty or 0:g}",
+                "ConsumedQuantity": _qty(qty),
                 "ConsumedUnit": unit,
                 "ProviderName": entry.provider if entry else "",
                 "PublisherName": entry.provider if entry else "",
