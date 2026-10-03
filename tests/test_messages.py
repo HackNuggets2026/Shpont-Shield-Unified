@@ -715,6 +715,22 @@ def test_thinking_shaped_fields_outside_signed_blocks_are_inspected(policy_dir, 
     assert "alice" in {x["principal"] for x in c.get("/admin/risk").json()["principals"]}
 
 
+@pytest.mark.parametrize(
+    "messages",
+    [
+        [{"role": "user", "content": [{"type": "text", "text": [KEY]}]}],
+        with_history({"type": "thinking", "thinking": [KEY], "signature": "c2ln"}),
+    ],
+    ids=["text-list", "thinking-list"],
+)
+def test_text_that_is_not_a_string_is_scored(policy_dir, monkeypatch, messages):
+    c, sent = upstream(policy_dir, lambda b: message(text("ok")), monkeypatch)
+    r = ask(c, messages)
+    assert r.status_code == 400 and "secrets/aws_access_key" in r.json()["error"]["message"]
+    assert sent == []
+    assert "alice" in {x["principal"] for x in c.get("/admin/risk").json()["principals"]}
+
+
 @pytest.mark.parametrize("stream", [False, True])
 @pytest.mark.parametrize(
     "block",

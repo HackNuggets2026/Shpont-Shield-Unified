@@ -237,12 +237,16 @@ def _block_text(block: dict[str, Any]) -> str:
     return flatten({k: v for k, v in bare(block).items() if k != "type"})
 
 
+# The field of a request block its own per-block check reads, and the shape that check accepts.
+_OWN = {"text": ("text", str), "thinking": ("thinking", str), "tool_result": ("content", str | list)}
+
+
 def _rest(block: dict[str, Any], ours: bool) -> dict[str, Any]:
     """What the per-block checks of a request do not read: all of a block but its own text."""
-    own = {"text": ("text",), "tool_result": ("content",), "thinking": ("thinking",)}.get(block.get("type"), ())  # type: ignore[arg-type]
-    if any(not isinstance(block.get(k), str | list) for k in own):
-        own = ()  # malformed: inspect the whole block here instead
-    return {k: v for k, v in readable([block], ours)[0].items() if k not in own and k != "type"}
+    key, shape = _OWN.get(block.get("type"), (None, ()))  # type: ignore[arg-type]
+    if not isinstance(block.get(key), shape):
+        key = None  # malformed: inspect the whole block here instead
+    return {k: v for k, v in readable([block], ours)[0].items() if k != key and k != "type"}
 
 
 def _sse(event: str, data: dict[str, Any]) -> str:
