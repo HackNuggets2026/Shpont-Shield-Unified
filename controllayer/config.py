@@ -367,6 +367,10 @@ class AnthropicUpstream(_Strict):
     api_key_env: str | None = "ANTHROPIC_API_KEY"  # the gateway's own key, used unless the caller's is passed
     # Forward the caller's own Authorization / x-api-key (a claude.ai seat) when it names itself with x-acl-key.
     passthrough_auth: bool = True
+    # Documents and images the gateway cannot read (PDF and other binary data, files, URLs the upstream
+    # fetches): block (a 400 naming this setting), log (forwarded, audited) or allow.
+    opaque_documents: Literal["block", "log", "allow"] = "block"
+    opaque_images: Literal["block", "log", "allow"] = "allow"
 
 
 class Upstream(_Strict):

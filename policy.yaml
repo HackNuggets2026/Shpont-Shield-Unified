@@ -49,6 +49,8 @@ upstream:
     url: ${ACL_ANTHROPIC_URL:-https://api.anthropic.com}
     api_key_env: ANTHROPIC_API_KEY   # the gateway's org key (callers that send only a gateway key)
     passthrough_auth: true           # callers naming themselves with x-acl-key may forward their own seat login
+    opaque_documents: block          # PDFs and other documents the gateway cannot read: block | log | allow
+    opaque_images: allow             # image data (base64, files, URLs): block | log | allow
 
 semantic:
   backend: ${ACL_SEMANTIC:-heuristic}   # ollama (real decision models) | heuristic (offline keyword stand-in) | "off"

@@ -1,20 +1,22 @@
 """Anthropic Messages API (`/v1/messages`, `/v1/messages/count_tokens`) for Claude Code and the
 Anthropic SDKs, under the same controls as the OpenAI-compatible chat proxy.
 
-Every system block, message block and tool definition is inspected on every call; reversible PII
-becomes placeholders before the model sees it and is restored in the reply's text and tool_use
-input. Each reply block is checked before it is released. A streamed reply is relayed block by
-block: a block's deltas are held until its `content_block_stop`, checked, then re-emitted, with
-`ping`s keeping the connection alive meanwhile.
+Every system block, message block and tool definition is inspected on every call; image and
+document data the gateway cannot read, such as a PDF, is left to `opaque_documents` /
+`opaque_images`. Reversible PII becomes placeholders before the model sees it and is restored in
+the reply's text and tool_use input. Each reply block is checked before it is released. A streamed
+reply is relayed block by block: a block's deltas are held until its `content_block_stop`, checked,
+then re-emitted, with `ping`s keeping the connection alive meanwhile.
 """
 
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import os
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator
 from typing import Any
 
 import httpx
@@ -26,7 +28,7 @@ from ..controls.access import identify
 from ..controls.patterns import remask, unmask
 from ..controls.pii_model import PII_CONTROLS
 from ..engine import ControlLayer, flatten
-from ..types import Action, Context, Direction, Principal, Verdict
+from ..types import Action, Context, Direction, Finding, Principal, Verdict
 from .upstream import anthropic_mock
 
 CHANNEL = "messages"
@@ -85,12 +87,112 @@ def bare(block: Any) -> Any:
     return block
 
 
+def _media(content: Any) -> Iterator[dict[str, Any]]:
+    """The image and document blocks of a content list, including those in tool results and documents."""
+    if not isinstance(content, list):
+        return
+    for b in content:
+        if not isinstance(b, dict):
+            continue
+        if b.get("type") == "tool_result":
+            yield from _media(b.get("content"))
+        elif b.get("type") in ("image", "document"):
+            yield b
+            src = b.get("source")
+            if isinstance(src, dict) and src.get("type") == "content":
+                yield from _media(src.get("content"))
+
+
+def _all_media(messages: list[Any]) -> Iterator[dict[str, Any]]:
+    for m in messages:
+        if isinstance(m, dict):
+            yield from _media(m.get("content"))
+
+
+def _unreadable(block: dict[str, Any]) -> str | None:
+    """What of an image or document the gateway cannot read, worded for the caller; None: nothing."""
+    src = block.get("source")
+    if not isinstance(src, dict) or src.get("type") in ("text", "content"):
+        return None
+    kind = src.get("type")
+    if kind == "base64":
+        media = src.get("media_type")
+        return f"{media} data" if isinstance(media, str) else "base64 data"
+    if kind == "url":
+        return "content fetched from a URL"
+    if kind == "file":
+        return "uploaded file"
+    return f"{kind!r} source"
+
+
+def _text_media(media: Any) -> bool:
+    """text/*, JSON, XML, YAML and JavaScript media types, incl. suffixes such as application/ld+json."""
+    if not isinstance(media, str):
+        return False
+    kind = media.split(";")[0].strip().lower()
+    return kind.startswith("text/") or kind.rsplit("+", 1)[-1].rsplit("/", 1)[-1] in _TEXT_SUBTYPES
+
+
+_TEXT_SUBTYPES = {"json", "xml", "yaml", "x-yaml", "javascript"}
+
+
+def open_documents(messages: list[Any]) -> dict[int, tuple[dict[str, Any], str]]:
+    """Turns each base64 document with a text media type into a text source, in place, so every check
+    reads (and can mask) its text; `seal_documents` restores the encoding."""
+    opened = {}
+    for k, b in enumerate(_all_media(messages)):
+        src = b.get("source")
+        if not (
+            b.get("type") == "document"
+            and isinstance(src, dict)
+            and src.get("type") == "base64"
+            and _text_media(src.get("media_type"))
+            and isinstance(src.get("data"), str)
+        ):
+            continue
+        try:
+            text = base64.b64decode(src["data"]).decode()
+        except ValueError:
+            continue  # not UTF-8 or not base64: unreadable
+        opened[k] = (src, text)
+        b["source"] = {**src, "type": "text", "data": text}
+    return opened
+
+
+def seal_documents(messages: list[Any], opened: dict[int, tuple[dict[str, Any], str]]) -> None:
+    """Re-encodes what `open_documents` decoded: the original bytes unless a check changed the text."""
+    for k, b in enumerate(_all_media(messages)):
+        if k in opened:
+            src, text = opened[k]
+            data = b["source"]["data"]
+            b["source"] = src if data == text else {**src, "data": base64.b64encode(data.encode()).decode()}
+
+
+def readable(content: Any, assistant: bool = False) -> Any:
+    """A content list as inspected: an assistant's own blocks `bare`, images and documents without the
+    data the gateway cannot read (`opaque_documents` / `opaque_images` decide on those)."""
+    if not isinstance(content, list):
+        return content
+    out = []
+    for b in content:
+        if isinstance(b, dict):
+            b = bare(b) if assistant else b
+            t, src = b.get("type"), b.get("source")
+            if t == "tool_result" and isinstance(b.get("content"), list):
+                b = {**b, "content": readable(b["content"])}
+            elif t in ("image", "document") and isinstance(src, dict):
+                if src.get("type") == "content":
+                    b = {**b, "source": {**src, "content": readable(src.get("content"))}}
+                elif _unreadable(b) and "data" in src:
+                    b = {**b, "source": {k: v for k, v in src.items() if k != "data"}}
+        out.append(b)
+    return out
+
+
 def inspectable(messages: list[Any]) -> list[Any]:
-    """Messages as inspected: each assistant message's own content blocks `bare`."""
+    """Messages as inspected: each message's content `readable`."""
     return [
-        {**m, "content": [bare(b) for b in m["content"]]}
-        if isinstance(m, dict) and m.get("role") == "assistant" and isinstance(m.get("content"), list)
-        else m
+        {**m, "content": readable(m["content"], m.get("role") == "assistant")} if isinstance(m, dict) else m
         for m in messages
     ]
 
@@ -120,7 +222,7 @@ def _rest(block: dict[str, Any], assistant: bool) -> dict[str, Any]:
     own = {"text": ("text",), "tool_result": ("content",), "thinking": ("thinking",)}.get(block.get("type"), ())  # type: ignore[arg-type]
     if any(not isinstance(block.get(k), str | list) for k in own):
         own = ()  # malformed: inspect the whole block here instead
-    return {k: v for k, v in (bare(block) if assistant else block).items() if k not in own and k != "type"}
+    return {k: v for k, v in readable([block], assistant)[0].items() if k not in own and k != "type"}
 
 
 def _sse(event: str, data: dict[str, Any]) -> str:
@@ -324,6 +426,34 @@ def mount(app: FastAPI, layer: ControlLayer, store: PolicyStore, http: httpx.Asy
             raise _Refused(error(400, "messages must be a non-empty list of objects"))
         mask_map: dict[str, str] = {}
         known: set[str] = set()
+        # The new turn: everything after the last assistant message (Claude Code ends it with a `system`
+        # reminder that is the same every turn). Older messages are history, scored once.
+        new = next((i + 1 for i in range(len(messages) - 1, -1, -1) if messages[i].get("role") == "assistant"), 0)
+        opened = open_documents(messages)
+        cfg = store.policy.upstream.anthropic
+        for i, m in enumerate(messages):
+            for b in _media(m.get("content")):
+                what = _unreadable(b)
+                kind = "document" if b.get("type") == "document" else "image"
+                mode = cfg.opaque_documents if kind == "document" else cfg.opaque_images
+                # A logged one is recorded once, in the turn that adds it.
+                if what is None or mode == "allow" or (mode == "log" and (counting or i < new)):
+                    continue
+                ctx = Context(principal, Direction.INPUT, "", model=model, channel=CHANNEL, metered=False)
+                act = Action.BLOCK if mode == "block" else Action.LOG
+                setting = f"upstream.anthropic.opaque_{kind}s"
+                v = Verdict(
+                    act,
+                    "",
+                    [Finding("opaque_content", kind, act, act, detail=what)],
+                    ctx.request_id,
+                    store.policy.version,
+                    status_code=400 if act is Action.BLOCK else 200,
+                    reason=f"a {kind}'s {what} cannot be inspected by the gateway ({setting}: {mode})",
+                )
+                layer.audit.record(ctx, v, inspected=False)
+                if v.blocked:
+                    raise _Refused(_policy_error(v))
 
         async def check(
             text: str, direction: Direction, resent: bool, fetched: bool = False
@@ -372,7 +502,7 @@ def mount(app: FastAPI, layer: ControlLayer, store: PolicyStore, http: httpx.Asy
                 elif t == "tool_result" and isinstance(b.get("content"), str | list):
                     value = b["content"]
                     _, v = await check(
-                        value if isinstance(value, str) else flatten(value), Direction.TOOL_RESULT, resent
+                        value if isinstance(value, str) else flatten(readable(value)), Direction.TOOL_RESULT, resent
                     )
                     if v.action is Action.REDACT:
                         b = {
@@ -394,9 +524,6 @@ def mount(app: FastAPI, layer: ControlLayer, store: PolicyStore, http: httpx.Asy
             raise _Refused(error(400, "system must be a string or a list of blocks"))
 
         out_messages = []
-        # The new turn: everything after the last assistant message (Claude Code ends it with a `system`
-        # reminder that is the same every turn). Older messages are history, scored once.
-        new = next((i + 1 for i in range(len(messages) - 1, -1, -1) if messages[i].get("role") == "assistant"), 0)
         for i, m in enumerate(messages):
             role, content = m.get("role"), m.get("content")
             resent = counting or i < new
@@ -471,6 +598,7 @@ def mount(app: FastAPI, layer: ControlLayer, store: PolicyStore, http: httpx.Asy
             if cleaned is None:
                 raise _Refused(_unsafe(sv))
             out = cleaned
+        seal_documents(out["messages"], opened)
         return out, metered_ctx, mask_map, frozenset(known)
 
     def upstream_request(request: Request, own: dict[str, str], path: str, body: dict[str, Any]) -> httpx.Request:

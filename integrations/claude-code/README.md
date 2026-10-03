@@ -1,6 +1,6 @@
 # Claude Code through the control layer
 
-Claude Code talks to the gateway's Anthropic Messages endpoint (`/v1/messages`). Every prompt, file it reads, command it runs and edit it makes passes the same checks as chat, and the gateway answers with Claude Code's own streaming format. Two ways to sign in:
+Claude Code talks to the gateway's Anthropic Messages endpoint (`/v1/messages`). Every prompt, text file it reads, command it runs and edit it makes passes the same checks as chat, and the gateway answers with Claude Code's own streaming format. Two ways to sign in:
 
 | Mode | Employee holds | Upstream is called with | Billing | Use when |
 |---|---|---|---|---|
@@ -28,6 +28,8 @@ In seat mode the gateway forwards `Authorization` and `anthropic-beta` (which ca
        url: https://api.anthropic.com
        api_key_env: ANTHROPIC_API_KEY     # gateway-key mode only
        passthrough_auth: true             # seat mode; false makes every call use the org key
+       opaque_documents: block            # PDFs and other documents the gateway cannot read: block | log | allow
+       opaque_images: allow               # screenshots and other images: block | log | allow
    ```
 2. Gateway-key mode: start the gateway with the org's Console key in `ANTHROPIC_API_KEY`.
 3. Serve it over HTTPS at the exact URL you distribute, with no redirect. Exempt `/v1/messages` from WAF request-body rules: Claude Code prompts carry source code and XML-like tags that trip XSS rules.
@@ -61,6 +63,7 @@ With the shipped policy (`upstream.anthropic.backend: mock`) the first command n
 ## Notes
 
 - `allowedProviders: ["customEndpoint"]` needs Claude Code 2.1.285 or later. Pin the version with `requiredMaximumVersion` once tested.
+- PDFs and other binary documents cannot be inspected; with the default `opaque_documents: block` the request is refused with a 400 naming the setting. Images are forwarded by default; their pixels are not inspected. Text files, plain-text documents and base64 documents with a text media type are inspected in full.
 - A blocked tool result stays in Claude Code's history, so every later request of that conversation is blocked too: `/rewind` past it or `/clear`.
 - `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` stops telemetry and update checks outside the gateway path; it also turns off auto-updates. The fast-mode check and the WebFetch domain check still go to `api.anthropic.com` directly.
 - Personal Pro/Max logins: seat mode pins the company org with `forceLoginOrgUUID`; gateway-key mode does not need a login at all.
