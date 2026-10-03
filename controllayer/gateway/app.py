@@ -454,7 +454,7 @@ def create_app(
             if target == "builtin":
                 return mcp_demo.handle(r)
             if target == "broker":
-                return broker.handle(r, principal, policy, layer.state)
+                return await broker.handle(r, principal, policy, layer)
             resp = await http.post(target, json=r, headers={"accept": "application/json"})
             data = resp.json()
             if not isinstance(data, dict):

@@ -52,8 +52,21 @@ def test_catalog_offers_twenty_services_with_scoped_tools():
     assert len(names) == len(set(names)) == 55
     for key, svc in services.SERVICES.items():
         assert 2 <= len(svc.tools) <= 4, key
-        assert svc.scopes <= {"read", "write", "admin", "exec", "pii"}, key
+        assert svc.scopes <= {"read", "write", "admin", "exec", "pii", "external_share"}, key
     assert {k for k, s in services.SERVICES.items() if "pii" in s.scopes} == {"postgres", "snowflake"}
+    assert {k for k, s in services.SERVICES.items() if "external_share" in s.scopes} == {
+        "gdrive",
+        "sendgrid",
+        "zendesk",
+    }
+    egress = {t.name for t in services.TOOLS.values() if t.egress}
+    assert egress == {
+        "gdrive_share_file",
+        "sendgrid_send_email",
+        "slack_post_message",
+        "zapier_trigger_zap",
+        "zendesk_reply",
+    }
 
 
 def test_tools_list_follows_the_live_grant(client):
@@ -380,3 +393,93 @@ def test_a_redacted_value_keeps_the_answer_valid_json(client):
     lines = json.loads(text(call(client, "heroku_get_logs", {"app": "acme-api"})))
     assert len(lines) == 4 and lines[3].endswith("status=200 service=41ms")
     assert lines[2] == "2026-10-03T07:58:09Z app[worker.1]: connecting to [REDACTED:credentials_in_url]"
+
+
+CAROL = {"x-api-key": "intern-key"}
+HANDBOOK, SALARIES = "1hb7Kq", "1sb3Zx"
+
+
+def share(client, file_id, email, headers=ALICE):
+    return call(client, "gdrive_share_file", {"file_id": file_id, "email": email, "role": "reader"}, headers)
+
+
+@pytest.mark.parametrize(
+    "email,inside",
+    [
+        ("bob@acme.io", True),
+        ("Bob@ACME.IO", True),
+        ("bob@eu.acme.io", True),
+        ("me@gmail.com", False),
+        ("bob@acme.io.evil.com", False),
+        ("bob@notacme.io", False),
+        ("bob@acme.io, me@gmail.com", False),
+        ("Bob <bob@acme.io>", False),
+        ("bob@acme.io@gmail.com", False),
+        ("acme.io", False),
+    ],
+)
+def test_sharing_outside_the_company_domains_needs_external_share(client, email, inside):
+    r = share(client, HANDBOOK, email)
+    if inside:
+        assert json.loads(text(r))["file_id"] == HANDBOOK
+    else:
+        assert r["error"]["message"] == (
+            f"blocked by policy: resource_access/external_recipient: [{email!r}] is outside the company domains "
+            "['acme.io']; that needs external_share"
+        )
+
+
+def test_an_entitled_scope_lets_a_harmless_file_out_but_never_a_confidential_one(client):
+    assert json.loads(text(share(client, HANDBOOK, "me@gmail.com", BOB)))["file_id"] == HANDBOOK
+    for who, email in ((BOB, "me@gmail.com"), (ALICE, "hr@acme.io")):
+        r = share(client, SALARIES, email, who)
+        assert r["error"]["message"] == (
+            "blocked by policy: confidential_output/confidential_output (in what gdrive_share_file would send)"
+        )
+        assert "180k" not in json.dumps(r)
+
+
+def test_an_agent_shares_outside_only_with_external_share_in_its_grant(client):
+    grant(client, "google-drive", scopes=("read", "admin"))
+    assert "external_recipient" in share(client, HANDBOOK, "me@gmail.com", CODER)["error"]["message"]
+    grant(client, "google-drive", scopes=("read", "admin", "external_share"), agent="bob-assistant", who=BOB)
+    assert json.loads(text(share(client, HANDBOOK, "me@gmail.com", BOB_AGENT)))["file_id"] == HANDBOOK
+    events = [e for e in client.app.state.layer.audit.events if e.get("principal") == "alice-coder"]
+    assert any(f["category"] == "external_recipient" for e in events for f in e["findings"])
+
+
+def test_a_slack_post_is_checked_like_a_tool_result(client):
+    grant(client, "slack", scopes=("read", "write"))
+    r = call(client, "slack_post_message", {"channel": "general", "text": "Engineering L3 salary: 180k-210k PLN"})
+    assert r["error"]["message"].startswith("blocked by policy: confidential_output/")
+    ok = call(client, "slack_post_message", {"channel": "general", "text": "Deploy of acme-api finished"})
+    assert json.loads(text(ok))["ok"] is True
+
+
+def test_email_to_a_customer_needs_external_share_and_a_clean_message(client):
+    send = {"to": "jan.kowalski@example.com", "template_id": "d-91b2e4", "dynamic_data": {"amount": "2,499 PLN"}}
+    grant(client, "sendgrid", scopes=("read", "write"), agent="bob-assistant", who=BOB)
+    assert "external_recipient" in call(client, "sendgrid_send_email", send, BOB_AGENT)["error"]["message"]
+    client.patch("/me/api/grants/bob-assistant/sendgrid", headers=BOB, json={"scopes": ["write", "external_share"]})
+    assert json.loads(text(call(client, "sendgrid_send_email", send, BOB_AGENT)))["status"] == 202
+    leak = send | {"dynamic_data": {"note": "unreleased pricing, internal only"}}
+    r = call(client, "sendgrid_send_email", leak, BOB_AGENT)
+    assert r["error"]["message"].startswith("blocked by policy: confidential_output/")
+
+
+def test_a_public_ticket_reply_is_email_to_the_customer(client):
+    grant(client, "zendesk", scopes=("read", "write"))
+    reply = {"ticket_id": 4521, "body": "Refund issued."}
+    assert "external_recipient" in call(client, "zendesk_reply", reply)["error"]["message"]
+    assert json.loads(text(call(client, "zendesk_reply", reply | {"public": False})))["public"] is False
+
+
+def test_a_zap_payload_is_checked_before_the_zap_runs(client):
+    r = call(client, "zapier_trigger_zap", {"zap_id": "zap_303", "payload": {"rows": "Q4 salary bands"}}, BOB)
+    assert r["error"]["message"].startswith("blocked by policy: confidential_output/")
+    assert json.loads(text(call(client, "zapier_trigger_zap", {"zap_id": "zap_303"}, BOB)))["status"] == "success"
+
+
+def test_sharing_an_unknown_file_is_a_service_error(client):
+    r = share(client, "nope", "bob@acme.io")
+    assert r["result"]["isError"] and text(r) == "Google Drive: 404 no file 'nope'"

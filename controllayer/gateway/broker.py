@@ -3,7 +3,9 @@
 Every service in the catalog contributes its own tools (controllayer/services.py). The gateway
 authorises each call against the caller's live grant for the tool's scope (see resources.py),
 then performs it itself, injecting the secret from the gateway's environment. Callers only see
-results, which flow back through the normal tool_result checks.
+results, which flow back through the normal tool_result checks. Before an egress tool (share,
+send, post) runs, what it would send out goes through the tool_call and tool_result checks too,
+and the call is refused if any of it would be redacted, withheld or blocked.
 """
 
 from __future__ import annotations
@@ -14,9 +16,9 @@ from typing import Any
 
 from .. import services
 from ..config import Policy
+from ..engine import ControlLayer, flatten
 from ..resources import usable
-from ..state import StateStore
-from ..types import Principal
+from ..types import Action, Context, Direction, Principal, Verdict
 
 LIST_RESOURCES = {
     "name": "list_resources",
@@ -46,8 +48,25 @@ def _secret(policy: Policy, rid: str) -> str:
     return os.environ.get(policy.resources[rid].connection["secret_env"]) or f"demo-{rid}-credential"
 
 
-def handle(req: dict, principal: Principal, policy: Policy, state: StateStore) -> dict:
+async def _vet_egress(
+    layer: ControlLayer, principal: Principal, rid: str, tool: services.Tool, args: dict
+) -> Verdict | None:
+    """The verdict refusing what an egress call would send, if any."""
+    assert tool.egress is not None
+    sent = flatten(tool.egress.content(services.arguments(tool, args)))
+    for direction in (Direction.TOOL_CALL, Direction.TOOL_RESULT):
+        ctx = Context(
+            principal, direction, sent, tool=tool.name, channel="mcp", metered=False, resource=rid, scope=tool.scope
+        )
+        v = await layer.evaluate(ctx, {"server": "company", "egress": True})
+        if v.action.rank >= Action.REDACT.rank:
+            return v
+    return None
+
+
+async def handle(req: dict, principal: Principal, policy: Policy, layer: ControlLayer) -> dict:
     method, rid = req.get("method"), req.get("id")
+    state = layer.state
 
     def ok(result: Any) -> dict:
         return {"jsonrpc": "2.0", "id": rid, "result": result}
@@ -92,6 +111,11 @@ def handle(req: dict, principal: Principal, policy: Policy, state: StateStore) -
     svc = services.SERVICES[policy.resources[res_id].connection["service"]]
     headers = {svc.auth_header: svc.auth_format.format(secret=_secret(policy, res_id))}
     try:
+        refused = await _vet_egress(layer, principal, res_id, tool, args) if tool.egress else None
+        if refused:
+            message = f"blocked by policy: {refused.reason} (in what {name} would send)"
+            data = {"request_id": refused.request_id, "action": refused.action.value}
+            return {"jsonrpc": "2.0", "id": rid, "error": {"code": -32001, "message": message, "data": data}}
         out = services.call(svc, tool, args, headers, mine.get(res_id, ()))
     except services.ServiceError as e:
         return text(f"{svc.title}: {e}", error=True)

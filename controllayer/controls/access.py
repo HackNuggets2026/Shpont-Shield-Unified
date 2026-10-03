@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import re
 from fnmatch import fnmatch
 
+from .. import services
 from ..config import Policy
 from ..resources import usable
 from ..state import StateStore
@@ -48,7 +50,27 @@ def check_resource(ctx: Context, policy: Policy, state: StateStore) -> list[Find
         return [_hard("resource_access", "not_granted", f"{ctx.resource!r} is not {who}")]
     if ctx.scope and ctx.scope not in scopes:
         return [_hard("resource_access", "scope_denied", f"{ctx.resource!r}: scope {ctx.scope!r} not in {scopes}")]
+    tool = services.TOOLS.get(ctx.tool or "") if ctx.scope and ctx.tool_args is not None else None
+    outside = [a for a in services.recipients(tool, ctx.tool_args or {}) if not _inside(a, policy)] if tool else []
+    if outside and services.EXTERNAL_SHARE not in scopes:
+        return [
+            _hard(
+                "resource_access",
+                "external_recipient",
+                f"{outside} is outside the company domains {policy.company_domains}; that needs external_share",
+            )
+        ]
     return []
+
+
+_ADDRESS = re.compile(r"[^@\s,;<>\"]+@([a-z0-9-]+(?:\.[a-z0-9-]+)+)")
+
+
+def _inside(address: str, policy: Policy) -> bool:
+    """One plain address in a company domain or its subdomain. Anything else (a list, a display
+    name, a typo) counts as outside."""
+    m = _ADDRESS.fullmatch(address.lower())
+    return bool(m) and any(m[1] == d or m[1].endswith("." + d) for d in map(str.lower, policy.company_domains))
 
 
 def check_tool(ctx: Context, policy: Policy) -> list[Finding]:

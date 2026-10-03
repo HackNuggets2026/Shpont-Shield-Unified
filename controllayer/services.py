@@ -25,8 +25,10 @@ import yaml
 
 DATA: dict[str, Any] = yaml.safe_load(Path(__file__).with_name("services.yaml").read_text())
 
-# A grant scope that unlocks no tool: with it, a tool answers from the unmasked data.
+# Grant scopes that unlock no tool. With pii, a tool answers from the unmasked data; with
+# external_share, an egress tool may address people outside the company's domains.
 PII = "pii"
+EXTERNAL_SHARE = "external_share"
 
 
 class ServiceError(Exception):
@@ -34,6 +36,15 @@ class ServiceError(Exception):
 
     def __init__(self, status: int, message: str):
         super().__init__(f"{status} {message}")
+
+
+@dataclass(frozen=True)
+class Egress:
+    """What a call sends out of the gateway's reach: the content leaving (the object shared or sent,
+    and the message) and, for tools that address people, their email addresses."""
+
+    content: Callable[[dict[str, Any]], Any]
+    recipients: Callable[[dict[str, Any]], list[str]] | None = None
 
 
 @dataclass(frozen=True)
@@ -45,6 +56,7 @@ class Tool:
     run: Callable[[dict[str, Any]], Any]
     required: tuple[str, ...] = ()
     run_pii: Callable[[dict[str, Any]], Any] | None = None  # the same call on the unmasked data
+    egress: Egress | None = None
 
     def spec(self) -> dict[str, Any]:
         schema = {"type": "object", "properties": self.params, "required": list(self.required)}
@@ -65,7 +77,12 @@ class Service:
     @cached_property
     def scopes(self) -> set[str]:
         """The scopes a grant of this service can usefully hold."""
-        return {t.scope for t in self.tools} | ({PII} if any(t.run_pii for t in self.tools) else set())
+        scopes = {t.scope for t in self.tools}
+        if any(t.run_pii for t in self.tools):
+            scopes.add(PII)
+        if any(t.egress and t.egress.recipients for t in self.tools):
+            scopes.add(EXTERNAL_SHARE)
+        return scopes
 
 
 def call(
@@ -75,10 +92,18 @@ def call(
     `scopes` are the caller's on this service: without `pii`, masked columns stay masked."""
     if not headers.get(service.auth_header):
         raise ServiceError(401, f"Unauthorized: missing {service.auth_header}")
-    _validate(tool, args)
-    defaults = {k: p["default"] for k, p in tool.params.items() if "default" in p}
-    run = tool.run_pii if tool.run_pii and PII in scopes else tool.run
-    return run(defaults | args)
+    a = arguments(tool, args)
+    return (tool.run_pii if tool.run_pii and PII in scopes else tool.run)(a)
+
+
+def recipients(tool: Tool, args: dict[str, Any]) -> list[str]:
+    """The addresses an egress call would reach; none for invalid arguments, which the call itself rejects."""
+    if not (tool.egress and tool.egress.recipients):
+        return []
+    try:
+        return tool.egress.recipients(arguments(tool, args))
+    except ServiceError:
+        return []
 
 
 # ---- argument schemas ---------------------------------------------------------------------------
@@ -86,7 +111,8 @@ def call(
 _PY: dict[str, type] = {"string": str, "integer": int, "boolean": bool, "object": dict, "array": list}
 
 
-def _validate(tool: Tool, args: dict[str, Any]) -> None:
+def arguments(tool: Tool, args: dict[str, Any]) -> dict[str, Any]:
+    """The call's arguments, checked against the tool's schema, with defaults filled in."""
     unknown = sorted(set(args) - set(tool.params))
     if unknown:
         raise ServiceError(400, f"{tool.name}: unknown argument(s) {unknown}; expected {sorted(tool.params)}")
@@ -104,6 +130,7 @@ def _validate(tool: Tool, args: dict[str, Any]) -> None:
             raise ServiceError(400, f"{tool.name}: {k!r} must be one of {p['enum']}")
         if t is int and not p["minimum"] <= v <= p["maximum"]:
             raise ServiceError(400, f"{tool.name}: {k!r} must be between {p['minimum']} and {p['maximum']}")
+    return {k: p["default"] for k, p in tool.params.items() if "default" in p} | args
 
 
 def _s(description: str, **kw: Any) -> dict[str, Any]:
@@ -588,6 +615,11 @@ def _ticket(a: dict[str, Any]) -> dict[str, Any]:
     return _find(DATA["zendesk"], "id", a["ticket_id"], "ticket")
 
 
+def _requester(a: dict[str, Any]) -> list[str]:
+    """A public reply is emailed to the requester ("Name <address>")."""
+    return [_ticket(a)["requester"].rpartition("<")[2].rstrip(">")] if a["public"] else []
+
+
 ZENDESK = Service(
     "Zendesk",
     (
@@ -617,6 +649,7 @@ ZENDESK = Service(
             },
             lambda a: {"ticket_id": _ticket(a)["id"], "comment_id": _ref("", a, 8), "public": a["public"]},
             ("ticket_id", "body"),
+            egress=Egress(lambda a: a["body"], _requester),
         ),
     ),
     auth_format="Basic {secret}",
@@ -940,6 +973,7 @@ SLACK = Service(
                 "ts": f"1759478{int(_ref('', a, 6), 16) % 1000:03d}.0002",
             },
             ("channel", "text"),
+            egress=Egress(lambda a: a["text"]),
         ),
     ),
 )
@@ -1018,6 +1052,7 @@ GOOGLE_DRIVE = Service(
                 "role": a["role"],
             },
             ("file_id", "email", "role"),
+            egress=Egress(lambda a: _find(DATA["gdrive"], "id", a["file_id"], "file"), lambda a: [a["email"]]),
         ),
     ),
 )
@@ -1039,6 +1074,7 @@ ZAPIER = Service(
                 "status": "success",
             },
             ("zap_id",),
+            egress=Egress(lambda a: a.get("payload", {})),
         ),
     ),
     auth_header="X-API-Key",
@@ -1066,6 +1102,10 @@ SENDGRID = Service(
                 "message_id": _ref("", a, 22),
             },
             ("to", "template_id"),
+            egress=Egress(
+                lambda a: [_find(DATA["sendgrid"], "id", a["template_id"], "template"), a.get("dynamic_data", {})],
+                lambda a: [a["to"]],
+            ),
         ),
     ),
 )
@@ -1092,3 +1132,4 @@ SERVICES: dict[str, Service] = {
     "zapier": ZAPIER,
     "sendgrid": SENDGRID,
 }
+TOOLS: dict[str, Tool] = {t.name: t for svc in SERVICES.values() for t in svc.tools}

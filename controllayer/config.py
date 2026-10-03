@@ -347,6 +347,9 @@ class Policy(_Strict):
     teams: dict[str, TeamOverride] = Field(default_factory=dict)
     audit: Audit = Field(default_factory=Audit)
     resources: dict[str, Resource] = Field(default_factory=dict)
+    # Email domains inside the company (subdomains included); egress tools need the external_share
+    # scope to address anyone else.
+    company_domains: list[str] = Field(default_factory=list)
     insider_risk: InsiderRisk = Field(default_factory=InsiderRisk)
     pii_model: PiiModelControl = Field(default_factory=PiiModelControl)
 
