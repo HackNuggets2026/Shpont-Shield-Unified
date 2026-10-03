@@ -7,7 +7,7 @@ import logging
 import os
 import re
 from pathlib import Path
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -15,6 +15,8 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from .types import Action, Direction
 
 log = logging.getLogger(__name__)
+
+Probability = Annotated[float, Field(ge=0.0, le=1.0)]
 
 
 class _Strict(BaseModel):
@@ -56,15 +58,15 @@ class SignatureControl(ControlBase):
 class ToolAccessControl(ControlBase):
     # role -> allowed tool globs; "*" allows everything
     roles: dict[str, list[str]] = Field(default_factory=dict)
-    # tools that need an explicit approval flag because their effect cannot be undone
+    # tools whose effect cannot be undone; always blocked pending human approval
     irreversible: list[str] = Field(default_factory=list)
 
 
 class Thresholds(_Strict):
-    block: float | None = None
-    redact: float | None = None
-    warn: float | None = None
-    log: float | None = None
+    block: Probability | None = None
+    redact: Probability | None = None
+    warn: Probability | None = None
+    log: Probability | None = None
 
     def action_for(self, p: float) -> Action:
         for action in (Action.BLOCK, Action.REDACT, Action.WARN, Action.LOG):
@@ -93,9 +95,14 @@ class SemanticControl(ControlBase):
         if self.type == "choice":
             if not 2 <= len(self.criteria) <= 26:
                 raise ValueError("choice controls need 2-26 criteria")
-            unknown = set(self.actions) - set(self.criteria)
+            unknown = (set(self.actions) | set(self.option_keywords)) - set(self.criteria)
             if unknown:
-                raise ValueError(f"actions reference unknown criteria: {sorted(unknown)}")
+                raise ValueError(f"actions/option_keywords reference unknown criteria: {sorted(unknown)}")
+        for pattern in [*self.keywords, *(k for ks in self.option_keywords.values() for k in ks)]:
+            try:
+                re.compile(pattern)
+            except re.error as e:
+                raise ValueError(f"bad keyword regex {pattern!r}: {e}") from e
         return self
 
 
@@ -105,10 +112,10 @@ class SemanticEngine(_Strict):
     fast_model: str = "tev1:0.8b"
     deep_model: str | None = "nimble"
     # A fast-tier probability inside this band is re-asked to the deep model.
-    escalate_band: tuple[float, float] = (0.3, 0.85)
-    min_confidence: float = 0.5
-    timeout_seconds: float = 3.0
-    max_chunk_chars: int = 6000
+    escalate_band: tuple[Probability, Probability] = (0.3, 0.85)
+    min_confidence: Probability = 0.5
+    timeout_seconds: float = Field(3.0, gt=0)
+    max_chunk_chars: int = Field(6000, ge=500)
     fail_mode: Literal["open", "closed"] = "closed"
     keep_alive: str = "30m"
 
@@ -180,6 +187,16 @@ class Policy(_Strict):
 
     version: str = ""  # content hash, filled by the loader
 
+    @model_validator(mode="after")
+    def _known_entities(self) -> Policy:
+        from .controls.patterns import PII, SECRETS  # patterns imports this module
+
+        for name, known, cfg in (("pii", PII, self.pii), ("secrets", SECRETS, self.secrets)):
+            unknown = set(cfg.entities) - set(known)
+            if unknown:
+                raise ValueError(f"{name}.entities: unknown {sorted(unknown)}; known: {sorted(known)}")
+        return self
+
     def for_team(self, team: str) -> Policy:
         """Policy with the team's control overrides applied."""
         override = self.teams.get(team)
@@ -209,8 +226,8 @@ _ENV = re.compile(r"\$\{(\w+)(?::-([^}]*))?\}")
 
 
 def _expand_env(text: str) -> str:
-    """${VAR} or ${VAR:-default}, so secrets and per-deployment URLs stay out of the file."""
-    return _ENV.sub(lambda m: os.environ.get(m.group(1), m.group(2) if m.group(2) is not None else ""), text)
+    """${VAR} or ${VAR:-default} (default also when VAR is empty, as in the shell)."""
+    return _ENV.sub(lambda m: os.environ.get(m.group(1)) or (m.group(2) or ""), text)
 
 
 def parse_policy(text: str) -> Policy:
@@ -254,7 +271,10 @@ class PolicyStore:
             self.reloads += 1
             log.info("policy reloaded %s -> %s", old, new.version)
             for cb in self.listeners:
-                cb(old, new)
+                try:
+                    cb(old, new)
+                except Exception as e:  # noqa: BLE001 - a listener failure must not abort the reload
+                    log.error("policy listener failed: %s", e)
         return True
 
     def poll(self) -> None:

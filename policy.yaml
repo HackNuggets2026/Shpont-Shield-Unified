@@ -50,10 +50,10 @@ budgets:
     interns: { tokens_per_day: 20000, usd_per_day: 0.5, requests_per_minute: 10 }
   pricing:
     gpt-4o-mini: { usd_per_1m_input: 0.15, usd_per_1m_output: 0.60 }
-    # Local models cost compute time, not tokens.
-    "llama3.2:1b": { usd_per_compute_second: 0.0004 }
-    "qwen3:0.6b": { usd_per_compute_second: 0.0003 }
-    mock-model: { usd_per_1m_input: 1.0, usd_per_1m_output: 2.0 }
+    # Local models cost compute time, not tokens. Keys may be globs, matching models.allowed.
+    "llama3.2:*": { usd_per_compute_second: 0.0004 }
+    "qwen3:*": { usd_per_compute_second: 0.0003 }
+    "mock-*": { usd_per_1m_input: 1.0, usd_per_1m_output: 2.0 }
   loop_guard: { max_identical_calls: 5, window_seconds: 60 }
 
 # --- Deterministic controls -------------------------------------------------

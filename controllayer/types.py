@@ -51,7 +51,9 @@ class Context:
     model: str | None = None
     tool: str | None = None
     tool_args: dict[str, Any] | None = None
-    channel: str = "api"  # chat | mcp | sdk
+    channel: str = "api"  # chat | mcp | sdk | dashboard
+    # False for re-checks of conversation history: content is inspected, but not charged to budgets.
+    metered: bool = True
     request_id: str = field(default_factory=lambda: uuid.uuid4().hex[:16])
 
 

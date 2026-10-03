@@ -11,7 +11,7 @@ import time
 from dataclasses import dataclass, field
 
 from ..config import Policy, SemanticControl
-from ..decision import Answer, DecisionBackend, DecisionError
+from ..decision import Answer, DecisionBackend
 from ..types import Action, Context, Finding
 from .base import applies, finding
 
@@ -109,7 +109,7 @@ class SemanticGuard:
                 answers.update(deep)
                 tiers.update(dict.fromkeys(deep, "deep"))
                 stats.escalated = sorted(unsure)
-        except (DecisionError, asyncio.TimeoutError) as e:
+        except Exception as e:  # noqa: BLE001 - any engine failure is resolved by fail_mode, never a 500
             stats.error = str(e) or type(e).__name__
             action = Action.BLOCK if eng.fail_mode == "closed" else Action.LOG
             return [

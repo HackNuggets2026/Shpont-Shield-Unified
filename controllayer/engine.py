@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import time
+import unicodedata
+from collections import OrderedDict
+from typing import Any
 
 from .audit import AuditLog
 from .config import Policy, PolicyStore
@@ -11,7 +14,7 @@ from .controls.budget import BudgetLedger
 from .controls.patterns import pii, redact, secrets
 from .controls.semantic import SemanticGuard
 from .decision import DecisionBackend, HeuristicBackend, OllamaSystemOne
-from .types import Action, Context, Direction, Finding, Verdict
+from .types import Action, Context, Direction, Finding, Principal, Verdict
 
 _STATUS = {"auth": 401, "budget": 429}
 
@@ -28,6 +31,8 @@ class ControlLayer:
         self.feed = signatures.SignatureFeed(p.signatures.feed)
         self.feed.load(store.base_dir)
         self._team_cache: dict[tuple[str, str], Policy] = {}
+        # Verdicts for unmetered history re-checks, so a long conversation costs one model call per message.
+        self._seen: OrderedDict[tuple, Verdict] = OrderedDict()
         store.listeners.append(self._on_reload)
 
     @property
@@ -36,10 +41,16 @@ class ControlLayer:
 
     def _on_reload(self, old: str, new: Policy) -> None:
         self._team_cache.clear()
+        self._seen.clear()
         self.audit.store_raw_text = new.audit.store_raw_text
         if new.signatures.feed != self.feed.location:
-            self.feed = signatures.SignatureFeed(new.signatures.feed)
-            self.feed.load(self.store.base_dir)
+            feed = signatures.SignatureFeed(new.signatures.feed)
+            try:
+                feed.load(self.store.base_dir)
+            except Exception as e:  # noqa: BLE001 - a bad feed location must never empty the live feed
+                self.feed.errors = [f"feed {new.signatures.feed!r} failed to load, keeping {self.feed.location!r}: {e}"]
+                return
+            self.feed = feed
 
     def policy_for(self, team: str) -> Policy:
         p = self.store.policy
@@ -61,7 +72,46 @@ class ControlLayer:
         assert self._backend is not None
         return self._backend
 
+    @staticmethod
+    def spans_only(v: Verdict) -> bool:
+        """True when every redaction in the verdict has spans, i.e. can be cut out precisely."""
+        return all(f.spans for f in v.findings if f.action is Action.REDACT)
+
+    def redact_tree(self, obj: Any, principal: Principal, direction: Direction) -> Any:
+        """Apply span redactions to every string in a JSON tree, keeping its shape."""
+        policy = self.policy_for(principal.team)
+
+        def fix(text: str) -> str:
+            ctx = Context(principal, direction, sanitize(text))
+            found = secrets.check(ctx, policy.secrets) + pii.check(ctx, policy.pii)
+            found += signatures.check(ctx, policy.signatures, self.feed)
+            hits = [f for f in found if f.action is Action.REDACT]
+            return redact(ctx.text, [sp for f in hits for sp in f.spans]) if hits else ctx.text
+
+        def walk(o: Any) -> Any:
+            if isinstance(o, dict):
+                return {k: walk(v) for k, v in o.items()}
+            if isinstance(o, list):
+                return [walk(v) for v in o]
+            return fix(o) if isinstance(o, str) else o
+
+        return walk(obj)
+
     async def evaluate(self, ctx: Context, extra: dict | None = None) -> Verdict:
+        ctx.text = sanitize(ctx.text)
+        key = (self.policy.version, ctx.principal.id, ctx.direction, ctx.model, ctx.tool, ctx.text)
+        if not ctx.metered and key in self._seen:
+            self._seen.move_to_end(key)
+            return self._seen[key]
+        verdict = await self._evaluate(ctx, extra)
+        # Budget outcomes depend on the moment, not the content, so they never enter the cache.
+        if not any(f.control == "budget" for f in verdict.findings):
+            self._seen[key] = verdict
+            if len(self._seen) > 10_000:
+                self._seen.popitem(last=False)
+        return verdict
+
+    async def _evaluate(self, ctx: Context, extra: dict | None) -> Verdict:
         policy = self.policy_for(ctx.principal.team)
         t_start = time.perf_counter()
         latency: dict[str, float] = {}
@@ -76,7 +126,7 @@ class ControlLayer:
             findings += access.check_model(ctx, policy) + access.check_tool(ctx, policy)
         t = lap("gates", t_start)
 
-        if not _blocked(findings) and ctx.direction in (Direction.INPUT, Direction.TOOL_CALL):
+        if not _blocked(findings) and ctx.metered and ctx.direction in (Direction.INPUT, Direction.TOOL_CALL):
             findings += self.ledger.pre_check(ctx, policy)
             t = lap("budget", t)
 
@@ -107,6 +157,15 @@ class ControlLayer:
         verdict = _decide(ctx, findings, policy.version, latency)
         self.audit.record(ctx, verdict, extra)
         return verdict
+
+
+_INVISIBLE = dict.fromkeys(c for c in range(0x110000) if unicodedata.category(chr(c)) == "Cf")
+
+
+def sanitize(text: str) -> str:
+    """NFKC plus removal of invisible format characters, so `AKIA\u200b...` or full-width
+    lookalikes cannot slip past the detectors. The sanitized text is what gets forwarded."""
+    return unicodedata.normalize("NFKC", text).translate(_INVISIBLE)
 
 
 def _blocked(findings: list[Finding]) -> bool:

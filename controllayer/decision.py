@@ -58,21 +58,38 @@ class OllamaSystemOne:
             raise DecisionError(f"{model}: {type(e).__name__}: {e}") from e
         if r.status_code != 200:
             raise DecisionError(f"{model}: HTTP {r.status_code}: {r.text[:200]}")
-        data = r.json()
-        answers = {}
-        for name, a in data.get("answers", {}).items():
-            if a.get("type") == "noul":
-                p = float(a["noul"])
-                answers[name] = Answer("noul", p, confidence=a.get("confidence", _noul_confidence(p)))
-            elif a.get("type") == "choice":
-                probs = a.get("probabilities", {})
-                answers[name] = Answer(
-                    "choice", probs.get(a["choice"], 1.0), a["choice"], probs, a.get("confidence", 1.0)
-                )
-        missing = set(questions) - set(answers)
-        if missing:
-            raise DecisionError(f"{model}: no answer for {sorted(missing)}")
-        return DecisionResult(answers, data.get("usage", {}).get("input_tokens", 0))
+        try:
+            return _parse(r.json(), questions)
+        except (ValueError, KeyError, TypeError, AttributeError) as e:
+            raise DecisionError(f"{model}: malformed response: {type(e).__name__}: {e}") from e
+
+
+def _prob(x: Any) -> float:
+    p = float(x)
+    if not 0.0 <= p <= 1.0:  # also rejects NaN
+        raise ValueError(f"probability out of range: {x!r}")
+    return p
+
+
+def _parse(data: dict, questions: dict[str, dict]) -> DecisionResult:
+    """Strict: anything unexpected raises, so the caller's fail_mode decides, never a silent allow."""
+    answers = {}
+    for name, a in data["answers"].items():
+        if name not in questions:
+            continue
+        if a["type"] == "noul":
+            p = _prob(a["noul"])
+            answers[name] = Answer("noul", p, confidence=_prob(a.get("confidence", _noul_confidence(p))))
+        elif a["type"] == "choice":
+            choice = a["choice"]
+            if choice not in questions[name].get("criteria", {}):
+                raise ValueError(f"{name}: unknown option {choice!r}")
+            probs = {k: _prob(v) for k, v in a.get("probabilities", {}).items()}
+            answers[name] = Answer("choice", probs.get(choice, 1.0), choice, probs, _prob(a.get("confidence", 1.0)))
+    missing = set(questions) - set(answers)
+    if missing:
+        raise ValueError(f"no answer for {sorted(missing)}")
+    return DecisionResult(answers, int(data.get("usage", {}).get("input_tokens", 0)))
 
 
 class HeuristicBackend:

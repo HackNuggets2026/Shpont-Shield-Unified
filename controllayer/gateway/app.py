@@ -8,8 +8,10 @@ import csv
 import hmac
 import io
 import json
+import logging
 import os
 import time
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -73,7 +75,10 @@ def create_app(
         last_feed = time.monotonic()
         while True:
             await asyncio.sleep(1)
-            store.poll()
+            try:
+                store.poll()
+            except Exception:  # noqa: BLE001 - the watcher must survive anything a bad edit throws
+                logging.getLogger(__name__).exception("policy poll failed")
             if time.monotonic() - last_feed >= store.policy.signatures.refresh_seconds:
                 last_feed = time.monotonic()
                 try:
@@ -89,6 +94,10 @@ def create_app(
             task.cancel()
 
     app = FastAPI(title="AI Control Layer", lifespan=lifespan)
+
+    @app.exception_handler(BadRequest)
+    async def bad_request(request: Request, exc: BadRequest):
+        return JSONResponse({"error": {"type": "invalid_request", "message": str(exc)}}, status_code=400)
     app.state.layer = layer
     app.state.store = store
 
@@ -108,67 +117,83 @@ def create_app(
 
     @app.post("/v1/chat/completions")
     async def chat(request: Request):
-        body = await request.json()
+        body = await _json_object(request)
         principal = authenticate(store.policy, _api_key(request))
         model = body.get("model")
-        messages = body.get("messages", [])
-        # Only the new turn is inspected; earlier turns were checked when they were sent.
-        last_assistant = max((i for i, m in enumerate(messages) if m.get("role") == "assistant"), default=-1)
-        new = [i for i in range(last_assistant + 1, len(messages)) if messages[i].get("role") in ("user", "tool")]
-        if not new:
-            new = [i for i, m in enumerate(messages) if m.get("role") == "user"][-1:]
+        messages = body.get("messages")
+        if not isinstance(messages, list) or not messages or not all(isinstance(m, dict) for m in messages):
+            raise BadRequest("messages must be a non-empty list of objects")
+        if model is not None and not isinstance(model, str):
+            raise BadRequest("model must be a string")
+        messages = [dict(m) for m in messages]
+
+        # The client owns the history and can forge any of it, so every message (all roles, plus
+        # tool-call arguments) is inspected on every call. Repeats hit the engine's verdict cache;
+        # only the newest message is charged to budgets.
         warnings: list[str] = []
-        input_ctx = None
-        for i in new:
-            m = messages[i]
-            direction = Direction.INPUT if m["role"] == "user" else Direction.TOOL_RESULT
-            ctx = Context(principal, direction, _text(m.get("content")), model=model, channel="chat")
+        metered_ctx: Context | None = None
+        last = len(messages) - 1
+        for i, m in enumerate(messages):
+            direction = Direction.TOOL_RESULT if m.get("role") == "tool" else Direction.INPUT
+            metered = i == last and direction is Direction.INPUT
+            ctx = Context(principal, direction, _text(m.get("content")), model=model, channel="chat", metered=metered)
             v = await layer.evaluate(ctx)
             if v.blocked:
                 return _policy_error(v)
-            if v.action is Action.REDACT:
-                messages[i] = {**m, "content": v.text}
+            if v.text != _text(m.get("content")):
+                m["content"] = v.text
             if v.action is Action.WARN:
                 warnings.append(v.reason)
-            if direction is Direction.INPUT:
-                input_ctx = ctx
-        if input_ctx is None:  # auth/budget/model gates still apply to tool-only turns
-            input_ctx = Context(principal, Direction.INPUT, "", model=model, channel="chat")
-            v = await layer.evaluate(input_ctx)
+            if metered:
+                metered_ctx = ctx
+            for call in m.get("tool_calls") or []:
+                fn = call.get("function") if isinstance(call, dict) else None
+                if not isinstance(fn, dict):
+                    continue
+                args = fn.get("arguments")
+                actx = Context(principal, Direction.INPUT, args if isinstance(args, str) else json.dumps(args),
+                               model=model, channel="chat", metered=False)
+                av = await layer.evaluate(actx)
+                if av.blocked:
+                    return _policy_error(av)
+                if av.text != actx.text:
+                    fn["arguments"] = av.text
+        if metered_ctx is None:  # turn ends in a tool result: gates and budgets still apply
+            metered_ctx = Context(principal, Direction.INPUT, "", model=model, channel="chat")
+            v = await layer.evaluate(metered_ctx)
             if v.blocked:
                 return _policy_error(v)
 
         try:
             completion = await upstream().chat({**body, "messages": messages})
-        except httpx.HTTPError as e:
-            return JSONResponse({"error": {"type": "upstream_error", "message": str(e)}}, status_code=502)
+        except (httpx.HTTPError, ValueError, KeyError, IndexError, TypeError) as e:
+            return JSONResponse({"error": {"type": "upstream_error", "message": f"{type(e).__name__}: {e}"}},
+                                status_code=502)
         cost = layer.ledger.record(
-            input_ctx, layer.policy_for(principal.team), model or "unknown",
+            metered_ctx, layer.policy_for(principal.team), model or "unknown",
             completion.input_tokens, completion.output_tokens, completion.compute_seconds,
         )
 
         out_ctx = Context(principal, Direction.OUTPUT, completion.content, model=model, channel="chat",
-                          request_id=input_ctx.request_id)
+                          request_id=metered_ctx.request_id)
         ov = await layer.evaluate(out_ctx, {"usd": round(cost, 6), "tokens": completion.input_tokens + completion.output_tokens})
-        content, finish = completion.content, "stop"
+        content, finish = ov.text, "stop"
         if ov.blocked:
             content, finish = f"[Response withheld by policy: {ov.reason}]", "content_filter"
-        elif ov.action is Action.REDACT:
-            content = ov.text
         if ov.action is Action.WARN:
             warnings.append(ov.reason)
 
         resp = {
-            "id": f"chatcmpl-{input_ctx.request_id}",
+            "id": f"chatcmpl-{metered_ctx.request_id}",
             "object": "chat.completion",
             "created": int(time.time()),
             "model": model,
             "choices": [{"index": 0, "message": {"role": "assistant", "content": content}, "finish_reason": finish}],
             "usage": {"prompt_tokens": completion.input_tokens, "completion_tokens": completion.output_tokens,
                       "total_tokens": completion.input_tokens + completion.output_tokens},
-            "control": {"input_request_id": input_ctx.request_id, "output_action": ov.action.value, "warnings": warnings},
+            "control": {"input_request_id": metered_ctx.request_id, "output_action": ov.action.value, "warnings": warnings},
         }
-        headers = {"x-control-request-id": input_ctx.request_id, "x-control-action": ov.action.value}
+        headers = {"x-control-request-id": metered_ctx.request_id, "x-control-action": ov.action.value}
         if body.get("stream"):
             # The full reply must be inspected before release, so it is sent as a single chunk.
             chunk = {**resp, "object": "chat.completion.chunk",
@@ -181,72 +206,96 @@ def create_app(
 
     @app.post("/mcp/{server}")
     async def mcp(server: str, request: Request):
-        req = await request.json()
+        def rpc(rid: Any, code: int, message: str, data: dict | None = None) -> JSONResponse:
+            err: dict[str, Any] = {"code": code, "message": message}
+            if data:
+                err["data"] = data
+            return JSONResponse({"jsonrpc": "2.0", "id": rid, "error": err})
+
+        try:
+            req = await request.json()
+        except ValueError:
+            return rpc(None, -32700, "parse error")
+        if not isinstance(req, dict):
+            return rpc(None, -32600, "batch requests are not supported" if isinstance(req, list) else "invalid request")
+        rid, method, params = req.get("id"), req.get("method"), req.get("params", {})
+        params = {} if params is None else params
+        if not isinstance(method, str) or not isinstance(params, dict):
+            return rpc(rid, -32600, "invalid request")
         principal = authenticate(store.policy, _api_key(request))
-        rid = req.get("id")
         target = store.policy.upstream.mcp_servers.get(server)
         if target is None:
-            return JSONResponse({"jsonrpc": "2.0", "id": rid, "error": {"code": -32004, "message": f"unknown MCP server {server!r}"}})
+            return rpc(rid, -32004, f"unknown MCP server {server!r}")
 
-        def rpc_error(v: Verdict) -> JSONResponse:
-            return JSONResponse({"jsonrpc": "2.0", "id": rid, "error": {
-                "code": -32001, "message": f"blocked by policy: {v.reason}",
-                "data": {"request_id": v.request_id, "action": v.action.value}}})
+        def blocked(v: Verdict) -> JSONResponse:
+            return rpc(rid, -32001, f"blocked by policy: {v.reason}", {"request_id": v.request_id, "action": v.action.value})
 
         async def forward(r: dict) -> dict:
             if target == "builtin":
                 return mcp_demo.handle(r)
             resp = await http.post(target, json=r, headers={"accept": "application/json"})
-            return resp.json()
+            data = resp.json()
+            if not isinstance(data, dict):
+                raise ValueError("MCP server returned a non-object")
+            return data
 
-        method = req.get("method")
+        name: str | None = None
+        request_id: str | None = None
         if method == "tools/call":
-            params = req.get("params") or {}
-            name = params.get("name")
-            args = params.get("arguments") or {}
-            ctx = Context(principal, Direction.TOOL_CALL, json.dumps(args), tool=name, tool_args=args, channel="mcp")
+            name, args = params.get("name"), params.get("arguments") or {}
+            if not isinstance(name, str) or not isinstance(args, dict):
+                return rpc(rid, -32602, "tools/call needs a string name and object arguments")
+            ctx = Context(principal, Direction.TOOL_CALL, _flatten(args), tool=name, tool_args=args, channel="mcp")
             v = await layer.evaluate(ctx, {"server": server})
             if v.blocked:
-                return rpc_error(v)
+                return blocked(v)
             if v.action is Action.REDACT:
-                try:
-                    req = {**req, "params": {**params, "arguments": json.loads(v.text)}}
-                except json.JSONDecodeError:
-                    req = {**req, "params": {**params, "arguments": {"redacted": v.text}}}
-            resp = await forward(req)
-            result = resp.get("result")
-            if not result:
-                return JSONResponse(resp)
-            texts = [c.get("text", "") for c in result.get("content", []) if c.get("type") == "text"]
-            rctx = Context(principal, Direction.TOOL_RESULT, "\n".join(texts), tool=name, channel="mcp",
-                           request_id=ctx.request_id)
-            rv = await layer.evaluate(rctx, {"server": server})
-            if rv.blocked:
-                return rpc_error(rv)
-            if rv.action is Action.REDACT:
-                result = {**result, "content": [{"type": "text", "text": rv.text}]}
-            return JSONResponse({**resp, "result": result})
+                if not layer.spans_only(v):
+                    return blocked(v)  # nothing to cut out of the arguments, so the call cannot go ahead
+                req = {**req, "params": {**params, "arguments": layer.redact_tree(args, principal, Direction.TOOL_CALL)}}
+            request_id = ctx.request_id
+        elif not principal.authenticated and store.policy.identity.require_auth:
+            return blocked(await layer.evaluate(Context(principal, Direction.TOOL_CALL, "", channel="mcp")))
 
-        if not principal.authenticated and store.policy.identity.require_auth:
-            ctx = Context(principal, Direction.TOOL_CALL, "", channel="mcp")
-            return rpc_error(await layer.evaluate(ctx))
-        resp = await forward(req)
-        if method == "tools/list" and "result" in resp:
+        try:
+            resp = await forward(req)
+        except (httpx.HTTPError, ValueError) as e:
+            return rpc(rid, -32002, f"MCP server unavailable: {type(e).__name__}: {e}")
+        result = resp.get("result")
+        if not isinstance(result, dict) or method == "initialize":
+            return JSONResponse(resp)
+
+        if method == "tools/list":
             kept = []
-            for tool in resp["result"].get("tools", []):
-                ctx = Context(principal, Direction.TOOL_DESCRIPTION, tool.get("description", ""),
-                              tool=tool.get("name"), channel="mcp")
-                v = await layer.evaluate(ctx, {"server": server})
-                if not v.blocked:
+            for tool in result.get("tools", []):
+                if not isinstance(tool, dict):
+                    continue
+                # Name, description and every schema string: poisoning hides in parameter descriptions too.
+                tctx = Context(principal, Direction.TOOL_DESCRIPTION, _flatten(tool), tool=tool.get("name"), channel="mcp")
+                if not (await layer.evaluate(tctx, {"server": server})).blocked:
                     kept.append(tool)
-            resp = {**resp, "result": {**resp["result"], "tools": kept}}
-        return JSONResponse(resp)
+            return JSONResponse({**resp, "result": {**result, "tools": kept}})
+
+        # Every other result (tool output, resources, prompts) flows back into the agent: inspect all of it.
+        rctx = Context(principal, Direction.TOOL_RESULT, _flatten(result), tool=name, channel="mcp",
+                       request_id=request_id or uuid.uuid4().hex[:16])
+        rv = await layer.evaluate(rctx, {"server": server, "method": method})
+        if rv.blocked:
+            return blocked(rv)
+        if rv.action is Action.REDACT:
+            if layer.spans_only(rv):
+                result = layer.redact_tree(result, principal, Direction.TOOL_RESULT)
+            elif method == "tools/call":
+                result = {"content": [{"type": "text", "text": rv.text}], "isError": False}
+            else:
+                return blocked(rv)
+        return JSONResponse({**resp, "result": result})
 
     # ---- SDK / sidecar check --------------------------------------------------
 
     @app.post("/v1/guard")
     async def guard(request: Request):
-        body = await request.json()
+        body = await _json_object(request)
         principal = authenticate(store.policy, _api_key(request))
         try:
             direction = Direction(body.get("direction", "input"))
@@ -322,7 +371,7 @@ def create_app(
     @app.post("/admin/try")
     async def try_as(request: Request):
         """Dashboard playground: evaluate text as a named principal without handing out their key."""
-        body = await request.json()
+        body = await _json_object(request)
         key = next((k for k, v in store.policy.identity.api_keys.items() if v.principal == body.get("principal")), None)
         principal = authenticate(store.policy, key)
         try:
@@ -359,6 +408,40 @@ def create_app(
         return DASHBOARD.read_text() if DASHBOARD.exists() else "<p>dashboard not built</p>"
 
     return app
+
+
+class BadRequest(Exception):
+    pass
+
+
+async def _json_object(request: Request) -> dict[str, Any]:
+    try:
+        body = await request.json()
+    except ValueError as e:
+        raise BadRequest(f"body is not valid JSON: {e}") from e
+    if not isinstance(body, dict):
+        raise BadRequest("body must be a JSON object")
+    return body
+
+
+def _flatten(obj: Any) -> str:
+    """Every key and scalar in a JSON tree, one per line, so detectors see raw text rather than
+    JSON escapes (in `"x\\nAKIA..."` the escaped newline glues an `n` to the secret)."""
+    out: list[str] = []
+
+    def walk(o: Any) -> None:
+        if isinstance(o, dict):
+            for k, v in o.items():
+                out.append(str(k))
+                walk(v)
+        elif isinstance(o, list):
+            for v in o:
+                walk(v)
+        elif o is not None and not isinstance(o, bool):
+            out.append(str(o))
+
+    walk(obj)
+    return "\n".join(out)
 
 
 def _text(content: Any) -> str:

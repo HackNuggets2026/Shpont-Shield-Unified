@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+from fnmatch import fnmatch
 import time
 from collections import defaultdict, deque
 from dataclasses import dataclass
@@ -94,7 +95,9 @@ class BudgetLedger:
         output_tokens: int,
         compute_seconds: float,
     ) -> float:
-        price = policy.budgets.pricing.get(model)
+        pricing = policy.budgets.pricing
+        # Exact name first, then glob keys, so a model admitted by an allowlist glob is still priced.
+        price = pricing.get(model) or next((p for pat, p in pricing.items() if fnmatch(model, pat)), None)
         usd = 0.0
         if price:
             usd = (
