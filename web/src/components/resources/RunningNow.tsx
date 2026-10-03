@@ -50,7 +50,10 @@ export function RunningNow({ catalog, leasable }: { catalog: Record<string, Cata
   const rows = (d?.open ?? []).filter(
     (l) => (!v.resource || l.resource === v.resource) && (!v.department || !l.department || l.department === v.department) && (!zombies || l.flags.length > 0),
   );
-  const total = d?.open_total ?? null;
+  // A server that ignores limit/offset sends every open lease: page those here.
+  const legacy = !!d && d.open_total === undefined && d.open.length > PAGE;
+  const total = d?.open_total ?? (legacy ? rows.length : null);
+  const shown = legacy ? rows.slice(f.page * PAGE, (f.page + 1) * PAGE) : rows;
 
   return (
     <div>
@@ -111,7 +114,7 @@ export function RunningNow({ catalog, leasable }: { catalog: Record<string, Cata
         {(data) => (
           <>
             <LiveLeases
-              leases={rows}
+              leases={shown}
               fetchedAt={list.dataUpdatedAt}
               catalog={catalog}
               onStop={async (id) => {
@@ -120,7 +123,7 @@ export function RunningNow({ catalog, leasable }: { catalog: Record<string, Cata
                 return r;
               }}
             />
-            <Pager page={f.page} size={PAGE} shown={data.open.length} total={total} hasMore={total !== null ? (f.page + 1) * PAGE < total : data.open.length >= PAGE} onPage={f.setPage} fetching={list.isPlaceholderData} className="border-t border-line" />
+            <Pager page={f.page} size={PAGE} shown={shown.length} total={total} hasMore={total !== null ? (f.page + 1) * PAGE < total : data.open.length >= PAGE} onPage={f.setPage} fetching={list.isPlaceholderData} className="border-t border-line" />
             <RecentReclaims recent={data.recent} catalog={catalog} />
             {data.recent.length > 0 && (
               <details className="border-t border-line">
