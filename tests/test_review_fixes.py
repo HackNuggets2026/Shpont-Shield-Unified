@@ -264,3 +264,25 @@ def test_person_events_include_the_persisted_stream(make_client):
     interesting = c2.get("/me/summary", headers=KEYS["carol"]).json()["events"]
     assert interesting and all(e["action"] != "allow" for e in interesting)
     assert any(a["action"] == "view_events" for a in c2.get("/admin/actions", params={"target": "carol"}).json())
+
+
+def _old_incident(c, days_ago: float = 20) -> str:
+    ts = time.time() - days_ago * 86400
+    inc = {"id": "old-1", "ts": ts, "principal": "frank", "rule": "probing", "severity": "medium", "weight": 30,
+           "detail": "old", "evidence": []}  # fmt: skip
+    c.app.state.layer.usage.add_incident(inc)
+    return inc["id"]
+
+
+def test_incidents_list_includes_history_beyond_the_scoring_window(make_client):
+    _old_incident(make_client())
+    c = make_client()  # the risk engine loads only the last 7 days
+    _incident_on_carol(c)
+    rows = c.get("/admin/incidents").json()["incidents"]
+    by = {r["id"]: r for r in rows}
+    assert by["old-1"]["scored"] is False and any(r["scored"] for r in rows if r["principal"] == "carol")
+    assert rows[0]["ts"] >= rows[-1]["ts"]
+    assert "old-1" not in {r["id"] for r in c.get("/admin/incidents", params={"days": 7}).json()["incidents"]}
+    c.post("/admin/incidents/old-1", json={"status": "resolved", "note": "stale"})
+    resolved = c.get("/admin/incidents", params={"status": "resolved"}).json()["incidents"]
+    assert [r["id"] for r in resolved] == ["old-1"]

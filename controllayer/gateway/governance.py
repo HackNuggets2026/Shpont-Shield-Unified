@@ -316,9 +316,22 @@ def register(
     # ---- admin: incidents and approvals ---------------------------------------------
 
     @app.get("/admin/incidents")
-    async def admin_incidents(status: str | None = None, limit: int = 200):
+    async def admin_incidents(
+        status: str | None = None, limit: int = 200, days: float | None = None, since: float | None = None
+    ):
+        """Newest first, from the store: older incidents than the risk engine's 7-day window come back with
+        `scored: false` (they no longer count toward a risk score)."""
         p = store.policy
-        rows = [i for i in reversed(layer.risk.incidents) if not status or i["status"] == status][:limit]
+        start = since if since is not None else (time.time() - days * DAY if days else 0.0)
+        live = {i["id"]: i for i in layer.risk.incidents}
+        limit = max(1, min(limit, 5000))
+        rows = []
+        for i in usage.incidents(since=start, limit=limit if not status else 5000):
+            i = live.get(i["id"], i)  # the in-memory copy carries the same status, kept in step by set_status
+            if status and i["status"] != status:
+                continue
+            rows.append({**i, "scored": i["id"] in live})
+        rows = rows[:limit]
         return {"incidents": rows, "scores": layer.risk.scores(p), "levels": LEVELS}
 
     @app.post("/admin/incidents/{iid}")
