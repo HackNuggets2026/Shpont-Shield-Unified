@@ -119,14 +119,14 @@ export function Security() {
           }
         />
         <Kpi
-          label="Auto-responses (24h)"
+          label="Auto actions, 24h"
           icon={<IconRadar />}
           tone={autos24.length ? "serious" : undefined}
           value={acts.isPending ? "…" : autos24.length}
           sub={autoKinds.length ? autoKinds.map(([k, n]) => `${n} ${k.replace(/_/g, " ")}`).join(" · ") : "Nothing needed doing"}
         />
         <Kpi
-          label="Access restricted now"
+          label="Restricted now"
           icon={<IconLock />}
           tone={restricted.some((p) => p.status !== "active") ? "bad" : restricted.length ? "warn" : undefined}
           value={people.isPending ? "…" : restricted.length}

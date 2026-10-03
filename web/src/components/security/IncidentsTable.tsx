@@ -2,8 +2,11 @@ import { Link, useNavigate } from "react-router-dom";
 import { ago, dateTime } from "../../lib/format";
 import { ruleLabel, ruleWhat, RULES, type SecIncident } from "../../lib/security";
 import { IncidentStatusPill, SeverityPill } from "../pills";
-import { Empty, Pill, cx } from "../ui";
+import { Empty, cx } from "../ui";
 import { IconTerminal } from "../icons";
+
+const shortStamp = (ts: number) =>
+  new Date(ts * 1000).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
 
 const href = (i: SecIncident) => `/console/incidents/${encodeURIComponent(i.id)}`;
 
@@ -54,13 +57,11 @@ export function IncidentsTable({ incidents, empty, hint }: { incidents: SecIncid
         <table className="tbl">
           <thead>
             <tr>
-              <th>Severity</th>
-              <th>Rule</th>
-              <th>Person</th>
+              <th className="w-[84px]">Severity</th>
+              <th>Incident</th>
               <th>What happened</th>
               <th className="text-right">Weight</th>
               <th>Status</th>
-              <th>When</th>
             </tr>
           </thead>
           <tbody>
@@ -69,40 +70,36 @@ export function IncidentsTable({ incidents, empty, hint }: { incidents: SecIncid
                 <td>
                   <SeverityPill severity={i.severity} />
                 </td>
-                <td className="max-w-[200px]">
-                  <Link to={href(i)} onClick={(e) => e.stopPropagation()} className="block hover:text-accent">
-                    <RuleCell rule={i.rule} />
+                <td className="max-w-[210px]">
+                  <Link to={href(i)} onClick={(e) => e.stopPropagation()} className="flex items-center gap-1.5 font-medium text-ink hover:text-accent" title={ruleWhat(i.rule)}>
+                    {RULES[i.rule]?.cc && <IconTerminal size={12} className="shrink-0 text-cc" />}
+                    <span className="truncate">{ruleLabel(i.rule)}</span>
                   </Link>
-                </td>
-                <td>
                   <Link
                     to={`/console/people/${encodeURIComponent(i.principal)}`}
                     onClick={(e) => e.stopPropagation()}
-                    className="font-medium text-ink hover:text-accent"
+                    className="text-xs font-medium text-ink2 hover:text-accent"
                   >
                     {i.principal}
                   </Link>
                 </td>
-                <td className="max-w-[340px]">
+                <td className="min-w-[180px] max-w-[320px]">
                   <span className="line-clamp-2 text-xs text-ink2" title={i.detail}>
                     {i.detail}
                   </span>
                   {i.note && <span className="mt-0.5 block truncate text-[11px] italic text-muted">“{i.note}”</span>}
                 </td>
                 <td className="tnum text-right">{Math.round(i.weight)}</td>
-                <td>
-                  <div className="flex flex-col items-start gap-1">
-                    <IncidentStatusPill status={i.status} />
-                    {i.archived && (
-                      <Pill tone="neutral" title="Older than the 7-day risk window: listed from the activity log and not counted in risk scores">
-                        archived
-                      </Pill>
-                    )}
+                <td className="whitespace-nowrap">
+                  <IncidentStatusPill status={i.status} />
+                  <div className="mt-1 text-[11px] text-muted" title={dateTime(i.ts)}>
+                    <span className="text-ink2">{ago(i.ts)}</span> · {shortStamp(i.ts)}
                   </div>
-                </td>
-                <td className="whitespace-nowrap text-xs">
-                  <div className="text-ink2">{ago(i.ts)}</div>
-                  <div className="text-[11px] text-muted">{dateTime(i.ts)}</div>
+                  {i.archived && (
+                    <div className="text-[10.5px] text-muted" title="Older than the 7-day risk window: listed from the activity log and not counted in risk scores">
+                      archived · not scored
+                    </div>
+                  )}
                 </td>
               </tr>
             ))}

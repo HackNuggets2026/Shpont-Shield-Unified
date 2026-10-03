@@ -87,7 +87,7 @@ function EventRow({ e, incidentId, origin }: { e: ActivityEvent; incidentId: str
           {detection ? (e.detail as { detail?: string } | null)?.detail : reason ?? describe(e)}
         </div>
         <div className="mt-1 flex flex-wrap gap-1">
-          {!detection && <Chip k="model" v={e.model} />}
+          {!detection && (reason || !e.kind.startsWith("check.")) && <Chip k="model" v={e.model} />}
           <Chip k="tool" v={e.tool} />
           <Chip k="workflow" v={e.workflow === "(none)" ? "unattributed" : e.workflow} />
           <Chip k="resource" v={e.resource && e.resource !== e.model ? e.resource : null} />

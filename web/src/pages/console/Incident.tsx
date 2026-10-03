@@ -238,7 +238,7 @@ export function IncidentPage() {
             {shown.length === 0 ? (
               <Empty title="No events in the window" hint="The evidence may have aged out of the activity store." />
             ) : (
-              <div className="max-h-[680px] overflow-y-auto">
+              <div className="xl:max-h-[680px] xl:overflow-y-auto">
                 <EvidenceTimeline items={shown} incidentId={inc.id} origin={inc.ts} />
               </div>
             )}
