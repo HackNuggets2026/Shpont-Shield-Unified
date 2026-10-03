@@ -80,6 +80,13 @@ Admin endpoints need `x-admin-token` (or `?token=`), set with `identity.admin_to
 
 ## Performance
 
-Run `python demo/bench.py` to benchmark the in-process pipeline with the heuristic backend. On a 2-vCPU VM it measured about 1 ms in-layer p50 and 5 ms HTTP round trip p50, at roughly 1100 decisions/s. With real decision models, latency is dominated by tev1. Deterministic blocks skip the model call, and only uncertain answers reach nimble.
+`python demo/bench.py` measures the pipeline in-process, with budgets lifted and the heuristic backend. Add `--gateway http://127.0.0.1:8787` to measure over real HTTP. On a busy 2-vCPU VM:
+
+| Mode | Decisions/s | In-layer p50 / p95 | Round trip p50 |
+|---|---|---|---|
+| In-process (ASGI) | ~1000 | 1.1 / 1.4 ms | 6 ms |
+| HTTP to a running gateway | ~450 | 1.3 / 3.0 ms | 13 ms |
+
+With real decision models, latency is dominated by tev1. Deterministic blocks skip the model call, and only uncertain answers reach nimble.
 
 See [docs/architecture.md](docs/architecture.md) for design decisions and the OWASP mapping.
