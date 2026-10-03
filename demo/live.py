@@ -108,7 +108,7 @@ def main() -> None:
     tool("alice", "create_vm", wf="ui_qa", task="QA-901")
     if sims and sims[0].startswith("started"):
         tool("alice", "shutdown_simulator", {"id": sims[0].split()[1]})
-    print("   (judy's seeded VM has been idle ~26 min; the sweep flags and reclaims it at 30)")
+    print("   (judy's seeded VM has been idle ~26 min; the sweep flags it at 30 and reclaims it at 33)")
 
     beat("4. Access grants: prod data needs one", "Requests, then Resources -> grants")
     tool("bob", "query_prod_db", {"sql": "select count(*) from invoices"}, wf="data_analysis")

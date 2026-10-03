@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import calendar
 import hmac
+import math
 import time
 from collections.abc import Awaitable, Callable
 from fnmatch import fnmatch
@@ -44,6 +45,39 @@ def _day_start(now: float) -> float:
     return calendar.timegm((t.tm_year, t.tm_mon, t.tm_mday, 0, 0, 0))
 
 
+def _audit_shape(e: dict[str, Any], direction: str) -> dict[str, Any]:
+    """A persisted check event in the audit log's shape (its text is not persisted: `text` is None)."""
+    d = e.get("detail") or {}
+    findings = []
+    for f in d.get("findings") or []:
+        head, _, action = str(f).rpartition(":")
+        control, _, category = head.partition("/")
+        findings.append({"control": control, "category": category, "action": action, "proposed": action,
+                         "score": None, "tier": None, "shadow": False, "detail": ""})  # fmt: skip
+    return {
+        "ts": e["ts"],
+        "request_id": e["request_id"],
+        "channel": d.get("channel") or e.get("source"),
+        "direction": direction,
+        "principal": e["principal"],
+        "team": e["team"],
+        "role": None,
+        "model": e.get("model"),
+        "tool": e.get("tool"),
+        "action": e.get("decision"),
+        "status_code": None,
+        "reason": d.get("reason") or "",
+        "policy_version": None,
+        "latency_ms": {},
+        "text_sha256": None,
+        "text": None,
+        "findings": findings,
+        "workflow": e.get("workflow"),
+        "task": e.get("task"),
+        "source": "stored",
+    }
+
+
 def register(
     app: FastAPI,
     store: PolicyStore,
@@ -66,8 +100,16 @@ def register(
     def menu_view(policy: Policy, who: Principal | None = None) -> list[dict[str, Any]]:
         since = time.time() - 30 * DAY
         rows = []
+        paused = None
+        if who is not None:
+            pp = policy.principal(who.id)
+            if pp.status == "revoked":
+                paused = f"paused: access revoked ({pp.reason or 'by an administrator'})"
+            elif pp.status == "quarantined":
+                tools = ", ".join(policy.quarantine.tools)
+                paused = f"paused: quarantined, only {tools} tools ({pp.reason or 'by an administrator'})"
         for name, wf in policy.menu.workflows.items():
-            why = workflows.availability(policy, name, wf, who.id, who.team, who.role) if who else None
+            why = paused or (workflows.availability(policy, name, wf, who.id, who.team, who.role) if who else None)
             rows.append(
                 {
                     "name": name,
@@ -123,12 +165,28 @@ def register(
             "leases": len(layer.leases.held(p.id)),
         }
 
+    def person_actions(pid: str, limit: int = 100) -> list[dict]:
+        """Admin actions about a person: on them, and on their incidents (status changes target the incident)."""
+        incidents = [i["id"] for i in usage.incidents(principal=pid, limit=5000)]
+        return usage.admin_actions([pid, *incidents], limit)
+
     def events_of(pid: str, limit: int = 100, interesting: bool = False) -> list[dict]:
-        out = [
+        """One person's policy checks, newest first: the audit ring (with masked text) merged with the
+        persisted event stream, which survives restarts and holds seeded history (no text there)."""
+        ring = [
             e
             for e in reversed(layer.audit.events)
             if e["principal"] == pid and (not interesting or e["action"] != "allow")
         ]
+        seen = {(e["request_id"], e["direction"]) for e in ring}
+        stored = []
+        kinds = [f"check.{d.value}" for d in Direction]
+        for e in usage.events(principal=pid, kind=kinds, limit=limit + len(ring)):
+            direction = e["kind"].removeprefix("check.")
+            if (e["request_id"], direction) in seen or (interesting and e["decision"] == "allow"):
+                continue
+            stored.append(_audit_shape(e, direction))
+        out = sorted([*ring, *stored], key=lambda e: e["ts"], reverse=True)
         return out[:limit]
 
     # ---- admin: usage and forecasts ---------------------------------------------
@@ -201,7 +259,9 @@ def register(
         if not reason:
             return err("a reason is required; it is shown to the employee")
         if body.get("clear"):
-            resp = _write(request, {"principals": {pid: None}}, "clear_restrictions", pid, reason)
+            # Restrictions go; what was approved for them (grants, workflows) stays: revoking is its own action.
+            reset = dict.fromkeys(("status", "budget_scale", "reason", "by", "since"))
+            resp = _write(request, {"principals": {pid: reset}}, "clear_restrictions", pid, reason)
         else:
             patch: dict[str, Any] = {k: body[k] for k in ("status", "budget_scale", "approved_workflows") if k in body}
             if not patch:
@@ -261,9 +321,22 @@ def register(
     # ---- admin: incidents and approvals ---------------------------------------------
 
     @app.get("/admin/incidents")
-    async def admin_incidents(status: str | None = None, limit: int = 200):
+    async def admin_incidents(
+        status: str | None = None, limit: int = 200, days: float | None = None, since: float | None = None
+    ):
+        """Newest first, from the store: older incidents than the risk engine's 7-day window come back with
+        `scored: false` (they no longer count toward a risk score)."""
         p = store.policy
-        rows = [i for i in reversed(layer.risk.incidents) if not status or i["status"] == status][:limit]
+        start = since if since is not None else (time.time() - days * DAY if days else 0.0)
+        live = {i["id"]: i for i in layer.risk.incidents}
+        limit = max(1, min(limit, 5000))
+        rows = []
+        for i in usage.incidents(since=start, limit=limit if not status else 5000):
+            i = live.get(i["id"], i)  # the in-memory copy carries the same status, kept in step by set_status
+            if status and i["status"] != status:
+                continue
+            rows.append({**i, "scored": i["id"] in live})
+        rows = rows[:limit]
         return {"incidents": rows, "scores": layer.risk.scores(p), "levels": LEVELS}
 
     @app.post("/admin/incidents/{iid}")
@@ -276,6 +349,27 @@ def register(
             return err("no such incident", 404)
         usage.log_admin(actor(request), f"incident_{status}", iid, str(body.get("note", "")))
         return {"ok": True}
+
+    @app.get("/admin/detections")
+    async def admin_detections():
+        """The detection settings the console shows, without the whole policy."""
+        d = store.policy.detections
+        r = d.response
+        return {
+            "enabled": d.enabled,
+            "half_life_minutes": d.half_life_minutes,
+            "response": {
+                "alert": r.alert,
+                "tighten": r.tighten,
+                "quarantine": r.quarantine,
+                "tighten_budget_scale": r.tighten_budget_scale,
+                "auto": r.auto,
+            },  # fmt: skip
+            "rules": {
+                n: {"enabled": x.enabled, "weight": x.weight, "window_minutes": x.window_minutes}
+                for n, x in d.rules.items()
+            },
+        }
 
     @app.get("/admin/requests")
     async def admin_requests(status: str | None = None):
@@ -307,13 +401,23 @@ def register(
             elif req["kind"] == "workflow":
                 patch = {"approved_workflows": sorted({*pp.approved_workflows, req["workflow"]})}
             else:
-                patch = {"budget_scale": float(req["scale"] or 2.0)}
-            patch |= {"reason": f"request {rid} approved: {req['reason']}", "by": actor(request), "since": time.time()}
+                # Never lowers the person's scale; a quarantine still caps what applies (Policy.budget_scale).
+                patch = {"budget_scale": max(pp.budget_scale, float(req["scale"] or 2.0))}
+            if pp.status == "active":
+                patch |= {"reason": f"request {rid} approved: {req['reason']}", "by": actor(request)}
+                patch["since"] = time.time()
+            # Quarantined or revoked: the restriction's reason, author and start stay as they were.
             resp = _write(request, {"principals": {req["principal"]: patch}}, "approve_request", req["principal"], note)
             if resp.status_code != 200:
                 return resp
+        else:
+            usage.log_admin(
+                actor(request), "deny_request", req["principal"], note, {"request": rid, "kind": req["kind"]}
+            )
         usage.decide_request(rid, "approved" if decision == "approve" else "denied", actor(request), note)
-        return {"ok": True}
+        p = store.policy
+        return {"ok": True, "status": p.principal(req["principal"]).status,
+                "budget_scale": p.budget_scale(req["principal"])}  # fmt: skip
 
     # ---- admin: charts, adherence, evidence, people, activity ---------------------------
 
@@ -333,11 +437,21 @@ def register(
             "totals": [round(sum(v[i] for v in ordered.values()), 6) for i in range(days)],
         }
 
-    def timeseries(metric: str, by: str | None, days: int, principal: str | None):
+    def hidden_from(principal: str | None) -> tuple[str, ...]:
+        """Event sources an employee does not see about themselves: incidents, unless the policy shows risk."""
+        return () if principal is None or store.policy.privacy.show_risk_to_employee else ("detections",)
+
+    def timeseries(metric: str, by: str | None, days: int, principal: str | None, own: bool = False):
         days = max(1, min(int(days), 120))
         now = time.time()
         try:
-            rows = usage.timeseries(metric, by or None, _day_start(now) - (days - 1) * DAY, principal)
+            rows = usage.timeseries(
+                metric,
+                by or None,
+                _day_start(now) - (days - 1) * DAY,
+                principal,
+                exclude_sources=hidden_from(principal) if own else (),
+            )
         except ValueError as e:
             return err(str(e))
         return {"metric": metric, "by": by, **pivot(rows, days, now)}
@@ -375,18 +489,25 @@ def register(
             if e["id"] in seen:
                 continue
             seen.add(e["id"])
-            timeline.append({**e, "evidence": e.get("request_id") in ids or e["id"] in ids})
+            # The detection's own `incident` event names the last evidence id but is not evidence itself.
+            hit = e.get("kind") != "incident" and (e.get("request_id") in ids or e["id"] in ids)
+            timeline.append({**e, "evidence": hit})
         p = store.policy
-        score = layer.risk.score(inc["principal"], p)
-        actions = [a for a in usage.admin_actions(inc["principal"]) if a["ts"] >= inc["ts"] - 60]
+        pid = inc["principal"]
+        score = layer.risk.score(pid, p)
+        about = usage.admin_actions([pid, iid], limit=200)
+        actions = sorted((a for a in about if a["ts"] >= inc["ts"] - 60), key=lambda a: a["ts"])
+        ident = p.identity_of(pid)
         return {
             "incident": inc,
             "timeline": timeline,
             "principal": {
-                "id": inc["principal"],
+                "id": pid,
+                "team": ident.team if ident else None,
                 "risk": score,
                 "level": layer.risk.level(score, p),
-                "status": p.principal(inc["principal"]).status,
+                "status": p.principal(pid).status,
+                "budget_scale": p.budget_scale(pid),
             },  # fmt: skip
             "actions": actions,
         }
@@ -414,8 +535,21 @@ def register(
             "grants": [{**g.model_dump(), "live": g.live(now)} for g in p.principal(pid).grants],
             "leases": layer.leases.snapshot(p, pid),
             "requests": usage.requests(principal=pid),
-            "admin_actions": usage.admin_actions(pid),
+            "admin_actions": person_actions(pid),
         }
+
+    def value(by: str, days: float, principal: str | None):
+        since = time.time() - max(1, min(days, 400)) * DAY
+        try:
+            rows = usage.value(by, since, principal)
+        except ValueError as e:
+            return err(str(e))
+        return {"by": by, "days": days, "rows": rows}
+
+    @app.get("/admin/value")
+    async def admin_value(by: str = "workflow", days: float = 30):
+        """Spend against Claude Code's value metrics (commits, PRs, lines, sessions) per workflow/person/team."""
+        return value(by, days, None)
 
     @app.get("/admin/activity")
     async def admin_activity(
@@ -425,10 +559,11 @@ def register(
         kind: str | None = None,
         principal: str | None = None,
         severity: str | None = None,
+        decision: str | None = None,
     ):
         """The live feed: newest events first (no content; masked text stays in the audit log)."""
         return usage.events(limit=max(1, min(limit, 500)), before=before, source=source, kind=kind,
-                            principal=principal, severity=severity)  # fmt: skip
+                            principal=principal, severity=severity, decision=decision)  # fmt: skip
 
     # ---- employees ---------------------------------------------------------------------
 
@@ -454,6 +589,7 @@ def register(
         score = layer.risk.score(who.id, p)
         leases = layer.leases.snapshot(p, who.id)
         by_workflow = usage.breakdown(["workflow"], week, who.id)
+        runs = usage.breakdown(["workflow", "task"], week, who.id)
         out: dict[str, Any] = {
             "principal": who.id,
             "team": who.team,
@@ -477,12 +613,16 @@ def register(
             "by_workflow": by_workflow,
             "by_resource": usage.breakdown(["resource"], week, who.id),
             "by_model": usage.breakdown(["model"], week, who.id),
-            "runs": usage.breakdown(["workflow", "task"], week, who.id)[:30],
+            "runs": runs[:30],
+            "runs_total": len(runs),
             "leases": leases,
             "menu": menu_view(p, who),
             "events": events_of(who.id, 50, interesting=True),
             "requests": usage.requests(principal=who.id),
-            "admin_activity": usage.admin_actions(who.id),
+            # Status changes of their incidents too, unless the policy keeps risk from employees.
+            "admin_activity": person_actions(who.id)
+            if p.privacy.show_risk_to_employee
+            else usage.admin_actions(who.id),
             "tips": tips(p, who, leases, by_workflow, now),
             "collected": [
                 "who, team, role; model and tool used; workflow and task labels",
@@ -491,10 +631,19 @@ def register(
                 "client IP and user agent, to detect a stolen key",
             ],
         }
+        if pp.status == "quarantined":
+            out["quarantine"] = {"tools": p.quarantine.tools, "budget_scale": p.quarantine.budget_scale}
         if p.privacy.show_risk_to_employee:
+            r = p.detections.response
             out["risk"] = {
                 "score": score,
                 "level": layer.risk.level(score, p),
+                "thresholds": {
+                    "alert": r.alert,
+                    "tighten": r.tighten,
+                    "quarantine": r.quarantine,
+                    "half_life_minutes": p.detections.half_life_minutes,
+                },  # fmt: skip
                 "incidents": [i for i in reversed(layer.risk.incidents) if i["principal"] == who.id][:20],
             }
         return out
@@ -551,14 +700,31 @@ def register(
         who = me(request)
         if who is None:
             return err("your API key is required", 401)
-        return timeseries(metric, by, days, who.id)
+        return timeseries(metric, by, days, who.id, own=True)
 
     @app.get("/me/activity")
-    async def me_activity(request: Request, limit: int = 50, before: float | None = None):
+    async def me_activity(
+        request: Request,
+        limit: int = 50,
+        before: float | None = None,
+        source: str | None = None,
+        kind: str | None = None,
+        severity: str | None = None,
+        decision: str | None = None,
+    ):
         who = me(request)
         if who is None:
             return err("your API key is required", 401)
-        return usage.events(principal=who.id, limit=max(1, min(limit, 500)), before=before)
+        return usage.events(principal=who.id, limit=max(1, min(limit, 2000)), before=before,
+                            exclude_sources=hidden_from(who.id), source=source, kind=kind, severity=severity,
+                            decision=decision)  # fmt: skip
+
+    @app.get("/me/value")
+    async def me_value(request: Request, by: str = "workflow", days: float = 30):
+        who = me(request)
+        if who is None:
+            return err("your API key is required", 401)
+        return value(by, days, who.id)
 
     @app.post("/me/requests")
     async def me_request(request: Request):
@@ -579,6 +745,8 @@ def register(
                 minutes = float(body.get("minutes") or (r.grant.max_minutes if r.grant else 60))
             except (TypeError, ValueError):
                 return err("minutes must be a number")
+            if not math.isfinite(minutes) or minutes <= 0:
+                return err("minutes must be a positive number")
             detail = {"resource": body["resource"], "minutes": minutes}
             if isinstance(body.get("actions"), list):
                 detail["actions"] = [a for a in body["actions"] if isinstance(a, str)]

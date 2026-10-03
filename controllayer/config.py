@@ -243,6 +243,7 @@ class Resource(_Strict):
     max_concurrent_per_principal: int | None = None
     idle_minutes: float | None = 15  # idle longer than this = zombie
     auto_reclaim: bool = False  # stop zombies and over-time leases by calling the first stop tool
+    reclaim_after_minutes: float = Field(3, ge=0)  # grace between flagging a lease and reclaiming it
 
 
 # ---- Resource catalog -----------------------------------------------------------------
@@ -272,6 +273,7 @@ class Lease(_Strict):
     max_concurrent_per_principal: int | None = None
     idle_minutes: float | None = 15  # idle longer than this = zombie
     auto_reclaim: bool = False  # stop zombies and over-time leases by calling the first stop tool
+    reclaim_after_minutes: float = Field(3, ge=0)  # grace between flagging a lease and reclaiming it
 
 
 class GrantSpec(_Strict):

@@ -15,9 +15,11 @@ FinOps FOCUS / Backstage exports.
 from __future__ import annotations
 
 import hmac
+import math
 import time
 import uuid
 from collections.abc import Awaitable, Callable
+from fnmatch import fnmatch
 from typing import Any
 
 import yaml
@@ -84,10 +86,13 @@ def register(
             minutes = float(body.get("minutes") or r.grant.max_minutes)
         except (TypeError, ValueError):
             return "minutes must be a number"
-        if minutes <= 0:
-            return "minutes must be positive"
+        if not math.isfinite(minutes) or minutes <= 0:
+            return "minutes must be a positive number"
         minutes = min(minutes, r.grant.max_minutes)
-        actions = [a for a in body.get("actions") or [] if isinstance(a, str)]
+        raw = body.get("actions") or []
+        actions = (
+            [raw] if isinstance(raw, str) else [a for a in raw if isinstance(a, str)] if isinstance(raw, list) else []
+        )
         if r.actions and set(actions) - set(r.actions):
             return f"{name} supports actions {r.actions}"
         wf = body.get("workflow") or None
@@ -108,6 +113,26 @@ def register(
         # Expired grants stay a week for the record, then drop out of the overlay.
         keep = [x for x in policy.principal(pid).grants if x.live(now - 7 * DAY)]
         return [x.model_dump() for x in [*keep, g]]
+
+    def workflows_using(policy: Policy, name: str, r: Any) -> dict[str, str]:
+        """Workflows that use a resource, and how: they list it, their model globs cover it, or their tool
+        globs cover its tools. A workflow with no model or tool limit is not counted as using everything."""
+
+        def overlap(mine: list[str], theirs: list[str]) -> bool:
+            return any(fnmatch(a, b) or fnmatch(b, a) for a in mine for b in theirs)
+
+        tools = list(r.tools)
+        if r.lease:  # a workflow that can only keep someone else's lease busy does not use the resource
+            tools += r.lease.start_tools
+        out: dict[str, str] = {}
+        for w, wf in policy.menu.workflows.items():
+            if name in wf.resources:
+                out[w] = "resources"
+            elif r.models and wf.models and overlap(r.models, wf.models):
+                out[w] = "models"
+            elif tools and wf.tools and overlap(tools, wf.tools):
+                out[w] = "tools"
+        return out
 
     def write(request: Request, patch: dict, action: str, target: str, reason: str, by: str | None = None):
         try:
@@ -131,6 +156,7 @@ def register(
         rows = []
         for name, r in p.catalog.items():
             u = used.get(name, {})
+            via = workflows_using(p, name, r)
             rows.append(
                 {
                     "name": name,
@@ -144,7 +170,8 @@ def register(
                     },
                     "live_leases": sum(1 for x in leases if x["resource"] == name),
                     "live_grants": sum(1 for g in grants if g["resource"] == name and g["live"]),
-                    "workflows": [w for w, wf in p.menu.workflows.items() if name in wf.resources],
+                    "workflows": list(via),
+                    "workflows_via": via,
                 }
             )
         return {
@@ -167,13 +194,22 @@ def register(
         reason = str(body.get("reason") or "").strip()
         if not reason:
             return err("a reason is required; it is shown to the employee")
-        grants = new_grant(store.policy, pid, body, actor(request), reason)
+        p = store.policy
+        if pid not in known(p) and pid not in p.principals and not usage.breakdown(["principal"], 0, pid):
+            return err(f"no such person {pid!r}", 404)
+        grants = new_grant(p, pid, body, actor(request), reason)
         if isinstance(grants, str):
             return err(grants)
         resp = write(request, {"principals": {pid: {"grants": grants}}}, "grant", pid, reason)
-        if resp.status_code == 200:
-            return JSONResponse({"ok": True, "grant": grants[-1]})
-        return resp
+        if resp.status_code != 200:
+            return resp
+        g = grants[-1]
+        out: dict[str, Any] = {"ok": True, "grant": g}
+        asked = body.get("minutes")
+        granted = (g["expires"] - g["granted_at"]) / 60
+        if asked and float(asked) > granted + 1e-6:  # new_grant validated it as a number
+            out["clamped_from"] = float(asked)
+        return JSONResponse(out)
 
     @app.post("/admin/principals/{pid}/grants/{gid}/revoke")
     async def admin_revoke(pid: str, gid: str, request: Request):

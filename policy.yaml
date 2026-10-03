@@ -226,6 +226,7 @@ catalog:
   gpt-4o:
     class: consumable
     urn: urn:shield:ai_model:openai:gpt-4o
+    owner: ai-platform
     title: GPT-4o
     category: ai_model
     provider: openai
@@ -235,6 +236,7 @@ catalog:
   gpt-4o-mini:
     class: consumable
     urn: urn:shield:ai_model:openai:gpt-4o-mini
+    owner: ai-platform
     title: GPT-4o mini
     category: ai_model
     provider: openai
@@ -244,6 +246,7 @@ catalog:
   llama:
     class: consumable
     urn: urn:shield:ai_model:local:llama3.2
+    owner: ai-platform
     title: Llama 3.2 (on-prem GPU)
     category: ai_model
     provider: local
@@ -253,6 +256,7 @@ catalog:
   qwen:
     class: consumable
     urn: urn:shield:ai_model:local:qwen3
+    owner: ai-platform
     title: Qwen 3 (on-prem GPU)
     category: ai_model
     provider: local
@@ -262,6 +266,7 @@ catalog:
   mock:
     class: consumable
     urn: urn:shield:ai_model:demo:mock
+    owner: ai-platform
     title: Mock model (demo upstream)
     category: ai_model
     provider: demo
@@ -271,6 +276,7 @@ catalog:
   claude_code:
     class: consumable
     urn: urn:shield:ai_model:anthropic:claude-code
+    owner: ai-platform
     title: Claude Code subscription usage
     category: ai_model
     provider: anthropic
@@ -280,6 +286,7 @@ catalog:
   ci_minutes:
     class: consumable
     urn: urn:shield:ci:github:actions-minutes
+    owner: devops
     title: CI runner minutes
     category: ci
     provider: github
@@ -289,6 +296,7 @@ catalog:
   cloud:
     class: consumable
     urn: urn:shield:compute:aws:account
+    owner: finops
     title: Cloud bill (FOCUS import)
     category: compute
     provider: aws
@@ -298,6 +306,7 @@ catalog:
   simulator:
     class: leasable
     urn: urn:shield:device:apple:ios-simulator
+    owner: dev-productivity
     title: iOS simulator
     category: device
     provider: apple
@@ -317,6 +326,7 @@ catalog:
   vm:
     class: leasable
     urn: urn:shield:compute:internal:sandbox-vm
+    owner: dev-productivity
     title: Sandbox VM
     category: compute
     unit: minute

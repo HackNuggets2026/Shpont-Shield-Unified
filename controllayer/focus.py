@@ -9,6 +9,7 @@ from __future__ import annotations
 import csv
 import io
 import json
+import math
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -55,6 +56,12 @@ SERVICE_CATEGORY = {
 }
 
 
+def _qty(x: Any) -> str:
+    """A quantity in full: `:g` would round 1234567 tokens to 1.23457e+06."""
+    x = float(x or 0)
+    return str(int(x)) if x.is_integer() else repr(x)
+
+
 def _iso(d: datetime) -> str:
     return d.strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -90,7 +97,7 @@ def export_csv(policy: Policy, rows: list[dict[str, Any]], account: str = "shpon
                 "BilledCost": f"{r['usd'] or 0:.8f}",
                 "EffectiveCost": f"{r['usd'] or 0:.8f}",
                 "ListCost": f"{r['usd'] or 0:.8f}",
-                "ConsumedQuantity": f"{qty or 0:g}",
+                "ConsumedQuantity": _qty(qty),
                 "ConsumedUnit": unit,
                 "ProviderName": entry.provider if entry else "",
                 "PublisherName": entry.provider if entry else "",
@@ -139,6 +146,9 @@ def parse_csv(policy: Policy, text: str, default_resource: str = "cloud") -> lis
             )
             unit = row.get("ConsumedUnit") or ""
             qty = float(row.get("ConsumedQuantity") or 0)
+            usd = float(row.get("BilledCost") or 0)  # negative is a credit or refund
+            if not (math.isfinite(qty) and math.isfinite(usd)):
+                raise ValueError("BilledCost and ConsumedQuantity must be finite numbers")
             out.append(
                 {
                     "ts": _ts(row["ChargePeriodStart"]) + 1,  # inside the charge period's day
@@ -151,7 +161,7 @@ def parse_csv(policy: Policy, text: str, default_resource: str = "cloud") -> lis
                     "input_tokens": int(qty) if unit == "token" else 0,
                     "quantity": 0.0 if unit == "token" else qty,
                     "unit": unit,
-                    "usd": float(row.get("BilledCost") or 0),
+                    "usd": usd,
                 }
             )
         except (KeyError, ValueError, json.JSONDecodeError) as e:

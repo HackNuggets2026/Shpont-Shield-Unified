@@ -150,11 +150,12 @@ def _event(name: str, a: dict[str, Any], who: dict[str, Any], ts: float | None) 
     return e
 
 
-def metric_events(payload: dict[str, Any], last: dict[tuple, float]) -> list[dict[str, Any]]:
+def metric_events(payload: dict[str, Any], last: Any) -> list[dict[str, Any]]:
     """OTLP metrics to `metric.*` events with the increment as `value`.
 
     Delta temporality (OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE=delta) is used as sent; cumulative
-    series are differenced against `last`, which the caller keeps between exports."""
+    series are differenced against `last` (a mapping with get and item assignment), which the caller
+    keeps between exports."""
     out = []
     for rm in payload.get("resourceMetrics") or []:
         res = attrs((rm.get("resource") or {}).get("attributes"))

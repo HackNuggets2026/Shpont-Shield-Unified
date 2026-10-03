@@ -45,9 +45,11 @@ def register(app: FastAPI, store: PolicyStore, layer: ControlLayer, api_key: Cal
             events = [from_cloudevent(ce) for ce in batch]
         except (ValueError, TypeError) as e:
             return err(f"invalid CloudEvent: {e}")
-        ids = []
+        ids, duplicates = [], 0
         for e in events:
             if who.authenticated:
                 e.update(principal=who.id, team=who.team, email=None)  # an employee reports only their own usage
-            ids.append(layer.ingestor.ingest(e, p)["id"])
-        return {"ok": True, "accepted": len(ids), "ids": ids}
+            row = layer.ingestor.ingest(e, p, dedupe=True)
+            duplicates += bool(row.get("duplicate"))
+            ids.append(row["id"])
+        return {"ok": True, "accepted": len(ids), "ids": ids, "duplicates": duplicates}

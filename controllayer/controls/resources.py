@@ -26,6 +26,7 @@ from ..config import Policy, Resource
 from ..types import Action, Context, Direction, Finding, Principal
 from ..usage import UsageStore
 from .budget import BudgetLedger
+from .workflows import availability
 
 Signal = Callable[[str, str, str, list[str]], None]  # rule, principal, detail, evidence
 
@@ -61,7 +62,7 @@ def resolve(policy: Policy, ref: str) -> str | None:
 def authorize(
     policy: Policy,
     principal: Principal,
-    action: str,
+    action: str | None,
     resource: str,
     workflow: str | None = None,
     ledger: BudgetLedger | None = None,
@@ -69,7 +70,7 @@ def authorize(
 ) -> Decision:
     """May `principal` perform `action` on `resource` (a catalog name) within `workflow`?"""
     r = policy.catalog[resource]
-    d = Decision(True, resource, r.urn, r.class_, action, "allowed")
+    d = Decision(True, resource, r.urn, r.class_, action or "use", "allowed")
 
     def deny(category: str, reason: str) -> Decision:
         d.allow, d.category, d.reason = False, category, reason
@@ -78,9 +79,14 @@ def authorize(
     pp = policy.principal(principal.id)
     if pp.status == "revoked":
         return deny("revoked", f"access revoked: {pp.reason or 'by an administrator'}")
-    if r.actions and action not in r.actions and action != "use":
+    if r.actions and action is not None and action not in r.actions and action != "use":
         return deny("unknown_action", f"{resource} supports {r.actions}, not {action!r}")
     wf = policy.menu.workflows.get(workflow or "")
+    if wf is not None:
+        # A workflow the principal may not order (team, role, approval, disabled) includes nothing for them.
+        why = availability(policy, workflow or "", wf, principal.id, principal.team, principal.role)
+        if why:
+            return deny("workflow_not_available", f"workflow {workflow!r}: {why}")
     in_wf = wf is not None and resource in wf.resources
 
     if r.class_ == "consumable":
@@ -96,6 +102,8 @@ def authorize(
 
     if r.class_ == "leasable":
         if action == "start":
+            if pp.status == "quarantined":
+                return deny("quarantined", f"{principal.id!r} is quarantined; no new {resource} leases")
             if wf is not None and not in_wf:
                 return deny("resource_not_in_workflow", f"workflow {workflow!r} does not lease {resource}")
             caps = [r.lease.max_concurrent_per_principal if r.lease else None]
@@ -130,8 +138,9 @@ def check_grants(ctx: Context, policy: Policy) -> list[Finding]:
     declared = ctx.workflow if ctx.workflow_source == "declared" else None
     out = []
     for name in policy.grant_resources(ctx.tool):
-        r = policy.catalog[name]
-        d = authorize(policy, ctx.principal, r.actions[0] if r.actions else "use", name, declared)
+        # Tools are not mapped to actions, so any live grant on the resource covers its tools (as in
+        # `covering_grant`, which lifts the role and irreversible limits for the same call).
+        d = authorize(policy, ctx.principal, None, name, declared)
         if not d.allow:
             out.append(_block("access_grant", d.category, d.reason))
     return out
@@ -145,6 +154,7 @@ class LeaseTracker:
             lease["id"]: lease for lease in store.leases(open_only=True, limit=10_000)
         }
         self.on_signal: Signal = lambda *a: None
+        self._tried: dict[str, float] = {}  # lease id -> last reclaim attempt
         self.urns: dict[str, str] = {}  # resource name -> URN, refreshed by the engine on policy load
 
     def _event(self, kind: str, lease: dict, urn: str | None, ts: float, **extra: Any) -> None:
@@ -228,6 +238,7 @@ class LeaseTracker:
             "end_reason": None,
             "usd": 0.0,
             "flags": [],
+            "flagged_at": None,
         }
         self.open[lease["id"]] = lease
         self.store.save_lease(lease)
@@ -245,6 +256,7 @@ class LeaseTracker:
 
     def close(self, lease_id: str, policy: Policy, reason: str, now: float | None = None) -> dict | None:
         lease = self.open.pop(lease_id, None)
+        self._tried.pop(lease_id, None)
         if lease is None:
             return None
         now = now or time.time()
@@ -268,7 +280,11 @@ class LeaseTracker:
     # ---- background: zombies and over-time leases -------------------------------
 
     def sweep(self, policy: Policy, now: float | None = None) -> list[dict[str, Any]]:
-        """Flag zombie and over-time leases; returns the ones to reclaim (still open, caller stops them)."""
+        """Flag zombie and over-time leases; returns the ones to reclaim (still open, caller stops them).
+
+        A flagged lease is reclaimed only after the resource's `reclaim_after_minutes`, so the zombie is
+        visible (and its holder can still release it) before it is stopped. A failed reclaim is retried a
+        minute later."""
         now = now or time.time()
         reclaim = []
         for lease in list(self.open.values()):
@@ -284,19 +300,28 @@ class LeaseTracker:
             if cap and cap.max_minutes and now - lease["started"] > cap.max_minutes * 60:
                 if "over_time" not in lease["flags"]:
                     new.append("over_time")
-            if not new:
-                continue
-            lease["flags"] = [*lease["flags"], *new]
-            self.store.save_lease(lease)
-            self._event("lease.flag", lease, policy_urn(self.urns, lease["resource"], lease["handle"]), now,
-                        severity="low", detail={"flags": new, "idle_minutes": round(idle / 60, 1)})  # fmt: skip
-            detail = (
-                f"{lease['resource']} {lease['handle'] or lease['id']}: {', '.join(new)} ({idle / 60:.0f} min idle)"
-            )
-            self.on_signal("zombie_resource", lease["principal"], detail, [lease["id"]])
-            if r.auto_reclaim:
+            if new:
+                lease["flags"] = [*lease["flags"], *new]
+                lease["flagged_at"] = lease.get("flagged_at") or now
+                self.store.save_lease(lease)
+                self._event("lease.flag", lease, policy_urn(self.urns, lease["resource"], lease["handle"]), now,
+                            severity="low", detail={"flags": new, "idle_minutes": round(idle / 60, 1)})  # fmt: skip
+                detail = (
+                    f"{lease['resource']} {lease['handle'] or lease['id']}: {', '.join(new)} ({idle / 60:.0f} min idle)"
+                )
+                self.on_signal("zombie_resource", lease["principal"], detail, [lease["id"]])
+            due = self.reclaim_at(lease, policy)
+            if due is not None and now >= due and now - self._tried.get(lease["id"], 0.0) >= 60:
+                self._tried[lease["id"]] = now
                 reclaim.append(lease)
         return reclaim
+
+    def reclaim_at(self, lease: dict, policy: Policy) -> float | None:
+        """When a flagged lease of an auto-reclaimed resource gets stopped, else None."""
+        r = policy.resources.get(lease["resource"])
+        if r is None or not r.auto_reclaim or not lease.get("flagged_at"):
+            return None
+        return lease["flagged_at"] + r.reclaim_after_minutes * 60
 
     def reclaim_request(self, lease: dict, policy: Policy) -> dict | None:
         """The MCP call that stops a lease's resource, or None when there is no way to address it."""
@@ -325,6 +350,8 @@ class LeaseTracker:
                     "minutes": round(minutes, 1),
                     "idle_minutes": round((now - lease["last_activity"]) / 60, 1),
                     "running_usd": round(minutes * (r.usd_per_minute if r else 0.0), 4),
+                    "flagged_at": lease.get("flagged_at"),
+                    "reclaim_at": self.reclaim_at(lease, policy),
                 }
             )
         return sorted(out, key=lambda x: x["started"])

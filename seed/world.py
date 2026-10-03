@@ -466,7 +466,7 @@ class Seeder:
 
     def running_now(self) -> None:
         """Leases still open when the demo starts: an active simulator, and a VM idle for 26 of its 30 allowed
-        minutes, which the sweep flags and reclaims a few minutes into the demo."""
+        minutes: the sweep flags it a few minutes into the demo and reclaims it 3 minutes later."""
         alice = next(p for p in ORG if p.id == "alice")
         judy = next(p for p in ORG if p.id == "judy")
         self.lease(alice, "simulator", "boot_simulator", "sim", self.now - 9 * 60, 0, "ui_qa", "QA-512", open_=True)

@@ -11,6 +11,7 @@ against today's budgets; the gateway meters its own calls directly and only mirr
 
 from __future__ import annotations
 
+import math
 import time
 from datetime import datetime
 from typing import Any
@@ -67,10 +68,24 @@ def verdict_event(ctx: Context, v: Verdict, policy: Policy) -> dict[str, Any]:
     }
 
 
+def amount(value: Any, name: str) -> float:
+    """A cost, token count or quantity: a finite number, never negative (a negative or NaN spend would
+    lower or poison the budgets it is charged to)."""
+    try:
+        x = float(value or 0)
+    except (TypeError, ValueError):
+        raise ValueError(f"{name} must be a number") from None
+    if not math.isfinite(x) or x < 0:
+        raise ValueError(f"{name} must be a finite, non-negative number")
+    return x
+
+
 def _ts(value: Any) -> float | None:
     if value is None or value == "":
         return None
     if isinstance(value, int | float):
+        if not math.isfinite(value):
+            raise ValueError("time must be a finite number")
         return float(value) / (1e9 if value > 1e14 else 1e3 if value > 1e11 else 1)  # ns, ms or s
     return datetime.fromisoformat(str(value).replace("Z", "+00:00")).timestamp()
 
@@ -93,8 +108,8 @@ def from_cloudevent(ce: dict[str, Any]) -> dict[str, Any]:
 
     kind = str(ce["type"])
     kind = kind[len(CE_PREFIX) :] if kind.startswith(CE_PREFIX) else kind
-    inp = int(pick("gen_ai.usage.input_tokens", "input_tokens") or 0)
-    out = int(pick("gen_ai.usage.output_tokens", "output_tokens") or 0)
+    inp = int(amount(pick("gen_ai.usage.input_tokens", "input_tokens"), "input_tokens"))
+    out = int(amount(pick("gen_ai.usage.output_tokens", "output_tokens"), "output_tokens"))
     known = {
         "gen_ai.request.model", "model", "gen_ai.usage.input_tokens", "input_tokens", "gen_ai.usage.output_tokens",
         "output_tokens", "gen_ai.tool.name", "tool", "BilledCost", "usd", "cost_usd", "ConsumedQuantity", "quantity",
@@ -119,10 +134,10 @@ def from_cloudevent(ce: dict[str, Any]) -> dict[str, Any]:
         "tool": pick("gen_ai.tool.name", "tool"),
         "decision": pick("decision"),
         "severity": pick("severity"),
-        "usd": float(pick("BilledCost", "usd", "cost_usd") or 0),
+        "usd": amount(pick("BilledCost", "usd", "cost_usd"), "usd"),
         "input_tokens": inp,
         "output_tokens": out,
-        "quantity": float(pick("ConsumedQuantity", "quantity") or 0),
+        "quantity": amount(pick("ConsumedQuantity", "quantity"), "quantity"),
         "unit": pick("ConsumedUnit", "unit") or "",
         "meter": bool(data.get("meter", True)),
         "detail": {k: v for k, v in data.items() if k not in known} or None,
@@ -138,10 +153,13 @@ class Ingestor:
         self.policies = policies
         self.listeners: list[Any] = []  # callables(event) - detections hook in here
 
-    def ingest(self, evt: dict[str, Any], policy: Policy | None = None) -> dict[str, Any]:
+    def ingest(self, evt: dict[str, Any], policy: Policy | None = None, dedupe: bool = False) -> dict[str, Any]:
+        """With `dedupe`, an event whose id this producer already sent for this person is not counted again
+        (CloudEvents delivery is at-least-once: retries resend the same id)."""
         p = policy or self.policies.policy
         e = dict(evt)
-        e["ts"] = e.get("ts") or time.time()
+        ts = e.get("ts")
+        e["ts"] = ts if isinstance(ts, int | float) and math.isfinite(ts) and ts > 0 else time.time()
         e["source"] = e.get("source") or "gateway"
         # Identity join: an id or an email from the directory; telemetry may only know one of them.
         ident = p.identity_of(e.get("principal"), e.get("email"))
@@ -150,6 +168,8 @@ class Ingestor:
             e["team"] = e.get("team") or ident.team
         e["principal"] = e.get("principal") or "unattributed"
         e["team"] = e.get("team") or "unattributed"
+        if dedupe and e.get("id") and self.store.has_event(e["id"], e["source"], e["principal"], e.get("client")):
+            return {**e, "duplicate": True}
         # Resource by name, URN or model.
         ref = e.get("resource")
         name = resolve(p, ref) if isinstance(ref, str) and ref else None
@@ -161,9 +181,15 @@ class Ingestor:
             e["urn"] = ref if str(ref).startswith("urn:") else None
         if e.get("task") and not e.get("workflow"):
             e["workflow"] = self.store.workflow_of_task(e["principal"], e["task"])
-        inp, out = int(e.get("input_tokens") or 0), int(e.get("output_tokens") or 0)
-        e["tokens"] = e.get("tokens") or (inp + out) or None
-        e["usd"] = float(e.get("usd") or 0) or None
+        # Every producer (telemetry, CloudEvents, hooks) passes through here: refuse amounts that would
+        # lower or poison a budget before anything is written.
+        inp, out = (
+            int(amount(e.get("input_tokens"), "input_tokens")),
+            int(amount(e.get("output_tokens"), "output_tokens")),
+        )
+        e["quantity"] = amount(e.get("quantity"), "quantity") or None
+        e["tokens"] = int(amount(e.get("tokens"), "tokens")) or (inp + out) or None
+        e["usd"] = amount(e.get("usd"), "usd") or None
         if e.get("meter") and (e["usd"] or inp or out or e.get("quantity")):
             entry = p.catalog.get(name or "")
             usd = e["usd"] or 0.0

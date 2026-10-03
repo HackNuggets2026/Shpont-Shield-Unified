@@ -46,6 +46,10 @@ CREATE TABLE IF NOT EXISTS events (
 CREATE INDEX IF NOT EXISTS events_ts ON events(ts);
 CREATE INDEX IF NOT EXISTS events_who ON events(principal, ts);
 CREATE INDEX IF NOT EXISTS events_req ON events(request_id);
+CREATE INDEX IF NOT EXISTS events_id ON events(id);
+CREATE TABLE IF NOT EXISTS metric_baselines (
+    key TEXT PRIMARY KEY, value REAL, ts REAL
+);
 CREATE TABLE IF NOT EXISTS admin_actions (
     ts REAL, actor TEXT, action TEXT, target TEXT, reason TEXT, detail TEXT
 );
@@ -59,7 +63,12 @@ EVENT_FILTERS = {"source", "kind", "principal", "team", "session", "task", "work
                  "request_id", "resource", "tool", "model"}  # fmt: skip
 
 # Columns added after a table was first created: (table, column, type).
-MIGRATIONS = [("usage", "source", "TEXT"), ("usage", "client", "TEXT"), ("requests", "detail", "TEXT")]
+MIGRATIONS = [
+    ("usage", "source", "TEXT"),
+    ("usage", "client", "TEXT"),
+    ("requests", "detail", "TEXT"),
+    ("leases", "flagged_at", "REAL"),
+]
 
 GROUPS = {"workflow", "task", "team", "principal", "resource", "model", "day", "source"}
 
@@ -377,11 +386,29 @@ class UsageStore:
                 tuple(row.values()))  # fmt: skip
         return {**row, "detail": detail}
 
+    def has_event(self, eid: str, source: str, principal: str, client: str | None) -> bool:
+        """An event already recorded under this id from the same producer for the same person."""
+        return bool(
+            self._q(
+                "SELECT 1 FROM events WHERE id=? AND source=? AND principal=? AND client IS ? LIMIT 1",
+                (eid, source, principal, client),
+            )
+        )
+
     def events(
-        self, since: float = 0, until: float | None = None, limit: int = 200, before: float | None = None, **eq: Any
+        self,
+        since: float = 0,
+        until: float | None = None,
+        limit: int = 200,
+        before: float | None = None,
+        exclude_sources: tuple[str, ...] = (),
+        **eq: Any,
     ) -> list[dict[str, Any]]:
         """Newest first. `eq` filters on columns (EVENT_FILTERS); a list value matches any of its items."""
         where, args = ["ts>=?"], [since]
+        if exclude_sources:
+            where.append(f"COALESCE(source, '') NOT IN ({', '.join('?' * len(exclude_sources))})")
+            args.extend(exclude_sources)
         if until is not None:
             where.append("ts<?")
             args.append(until)
@@ -427,7 +454,12 @@ class UsageStore:
         )
 
     def timeseries(
-        self, metric: str, by: str | None, since: float, principal: str | None = None
+        self,
+        metric: str,
+        by: str | None,
+        since: float,
+        principal: str | None = None,
+        exclude_sources: tuple[str, ...] = (),
     ) -> list[dict[str, Any]]:
         """Daily totals of usd | tokens (usage ledger) or events (activity stream), split by one column."""
         if metric in ("usd", "tokens"):
@@ -442,6 +474,9 @@ class UsageStore:
         else:
             raise ValueError("metric must be usd, tokens or events")
         args: list[Any] = [since]
+        if exclude_sources and table == "events":
+            where += f" AND COALESCE(source, '') NOT IN ({', '.join('?' * len(exclude_sources))})"
+            args.extend(exclude_sources)
         if principal:
             where += " AND principal=?"
             args.append(principal)
@@ -475,18 +510,91 @@ class UsageStore:
             o["adherence"] = round((o["allow"] + o["log"]) / o["total"], 4) if o["total"] else None
         return sorted(out.values(), key=lambda o: o["key"])
 
+    VALUE_GROUPS = ("workflow", "principal", "team")
+
+    def value(self, by: str, since: float, principal: str | None = None) -> list[dict[str, Any]]:
+        """Spend next to what Claude Code reports it produced (commits, PRs, lines, sessions), per `by`.
+
+        usd is all metered spend; claude_code_usd the part Claude Code's telemetry reported. lines_per_usd
+        counts lines added."""
+        if by not in self.VALUE_GROUPS:
+            raise ValueError(f"group by one of {list(self.VALUE_GROUPS)}")
+        who, args = ("", [since]) if principal is None else (" AND principal=?", [since, principal])
+        out: dict[str, dict[str, Any]] = {}
+
+        counts = ("commits", "pull_requests", "lines_added", "lines_removed", "sessions")
+
+        def row(key: str) -> dict[str, Any]:
+            return out.setdefault(key, {"key": key, "usd": 0.0, "claude_code_usd": 0.0, **dict.fromkeys(counts, 0)})
+
+        for r in self._q(
+            f"SELECT COALESCE({by}, '(none)') key, COALESCE(SUM(usd), 0) usd,"
+            " COALESCE(SUM(CASE WHEN source='claude_code' THEN usd ELSE 0 END), 0) cc"
+            f" FROM usage WHERE ts>=? AND metered=1{who} GROUP BY key",
+            tuple(args),
+        ):
+            o = row(r["key"])
+            o["usd"], o["claude_code_usd"] = round(r["usd"], 6), round(r["cc"], 6)
+        metrics = {"metric.commit": "commits", "metric.pull_request": "pull_requests", "metric.session": "sessions"}
+        for r in self._q(
+            f"SELECT COALESCE({by}, '(none)') key, kind, decision,"
+            " COALESCE(SUM(json_extract(detail, '$.value')), 0) v FROM events WHERE ts>=?"
+            " AND kind IN ('metric.commit', 'metric.pull_request', 'metric.session', 'metric.lines_of_code')"
+            f"{who} GROUP BY key, kind, decision",
+            tuple(args),
+        ):
+            o, v = row(r["key"]), r["v"] or 0
+            if r["kind"] == "metric.lines_of_code":
+                field = {"added": "lines_added", "removed": "lines_removed"}.get(r["decision"] or "")
+                if field:
+                    o[field] += v
+            else:
+                o[metrics[r["kind"]]] += v
+        for o in out.values():
+            for k in counts:
+                o[k] = int(o[k]) if float(o[k]).is_integer() else round(o[k], 2)
+            o["usd_per_commit"] = round(o["usd"] / o["commits"], 4) if o["commits"] else None
+            o["lines_per_usd"] = round(o["lines_added"] / o["usd"], 2) if o["usd"] else None
+        return sorted(out.values(), key=lambda o: (-o["usd"], o["key"]))
+
+    # ---- cumulative telemetry baselines (OTLP cumulative sums are differenced against these) ----
+
+    def baseline(self, key: str) -> float | None:
+        rows = self._q("SELECT value FROM metric_baselines WHERE key=?", (key,))
+        return rows[0]["value"] if rows else None
+
+    def set_baseline(self, key: str, value: float, ts: float | None = None) -> None:
+        self._x("INSERT OR REPLACE INTO metric_baselines VALUES (?,?,?)", (key, value, ts or time.time()))
+
+    def prune_baselines(self, before: float) -> None:
+        self._x("DELETE FROM metric_baselines WHERE ts<?", (before,))
+
     # ---- admin actions (who changed what, and who looked at whose content) -------
 
     def log_admin(
         self, actor: str, action: str, target: str, reason: str, detail: Any = None, ts: float | None = None
     ) -> None:
+        """`detail` is stored flat: an overlay patch for one person (`{"principals": {target: {...}}}`) or one
+        workflow (`{"menu": {"workflows": {target: {...}}}}`) is stored as its inner `{...}`."""
+        if isinstance(detail, dict) and len(detail) == 1:
+            inner = detail.get("principals") or (detail.get("menu") or {}).get("workflows")
+            if isinstance(inner, dict) and set(inner) == {target}:
+                detail = inner[target]
         self._x(
             "INSERT INTO admin_actions VALUES (?,?,?,?,?,?)",
             (ts or time.time(), actor, action, target, reason, json.dumps(detail) if detail is not None else None),
         )
 
-    def admin_actions(self, target: str | None = None, limit: int = 100) -> list[dict]:
-        if target:
+    def admin_actions(self, target: str | list[str] | None = None, limit: int = 100) -> list[dict]:
+        """Newest first; `target` may be a list (a person and their incident ids)."""
+        if isinstance(target, list):
+            if not target:
+                return []
+            marks = ", ".join("?" * len(target))
+            rows = self._q(
+                f"SELECT * FROM admin_actions WHERE target IN ({marks}) ORDER BY ts DESC LIMIT ?", (*target, limit)
+            )
+        elif target:
             rows = self._q("SELECT * FROM admin_actions WHERE target=? ORDER BY ts DESC LIMIT ?", (target, limit))
         else:
             rows = self._q("SELECT * FROM admin_actions ORDER BY ts DESC LIMIT ?", (limit,))
