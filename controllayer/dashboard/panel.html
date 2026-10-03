@@ -6,6 +6,12 @@
 <title>AI Control Layer</title>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@primer/css@21.5.1/dist/primer.css">
 <link rel="stylesheet" href="/ui/core.css">
+<script>
+  // Optional alternative look: ?theme=flat (no borders or outlines). Only allowlisted names load.
+  if (new URLSearchParams(location.search).get("theme") === "flat") {
+    document.write('<link rel="stylesheet" href="/ui/themes/flat.css">');
+  }
+</script>
 </head>
 <body class="color-bg-default color-fg-default">
 <div id="acl-root"></div>

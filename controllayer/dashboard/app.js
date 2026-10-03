@@ -21,9 +21,9 @@
   ACL.withToken = (url) => (TOKEN ? url + (url.includes("?") ? "&" : "?") + "token=" + encodeURIComponent(TOKEN) : url);
 
   // ---- URL state ------------------------------------------------------------------------
-  // The URL is the state: ?view=people&team=sales, ?person=alice. `period` and `token` survive navigation.
+  // The URL is the state: ?view=people&team=sales, ?person=alice. `period`, `token` and `theme` survive navigation.
 
-  const KEEP = ["token", "period"];
+  const KEEP = ["token", "period", "theme"];
   ACL.params = () => Object.fromEntries(new URLSearchParams(location.search));
   ACL.href = (patch, reset = true) => {
     const cur = ACL.params();
