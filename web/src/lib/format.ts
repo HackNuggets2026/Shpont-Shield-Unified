@@ -4,9 +4,7 @@ export function usd(v: number | null | undefined, opts: { compact?: boolean } = 
   if (v === null || v === undefined || Number.isNaN(v)) return "—";
   const a = Math.abs(v);
   if (a === 0) return "$0";
-  if (opts.compact && a >= 1000) {
-    return "$" + new Intl.NumberFormat("en-US", { notation: "compact", maximumFractionDigits: 1 }).format(v);
-  }
+  if (opts.compact && a >= 1000) return money(v);
   if (a >= 100) return "$" + v.toLocaleString("en-US", { maximumFractionDigits: 0 });
   if (a >= 1) return "$" + v.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   if (a >= 0.01) return "$" + v.toFixed(3).replace(/0$/, "");
@@ -109,4 +107,107 @@ export function countdown(ts: number | null | undefined, now = Date.now() / 1000
 
 export function titleCase(s: string): string {
   return s.replace(/[_-]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+// ---- enterprise-scale formatting -------------------------------------------------------------
+// Numbers on the console are read at a glance: three significant digits, compact suffixes.
+
+function sig3(a: number): string {
+  // 4.12, 41.2, 412 — trailing zeros after the point dropped.
+  const d = a >= 100 ? 0 : a >= 10 ? 1 : 2;
+  return a.toFixed(d).replace(/\.0+$/, "").replace(/(\.\d*?)0+$/, "$1");
+}
+
+function compactParts(a: number): [number, string] {
+  if (a >= 1e12) return [a / 1e12, "T"];
+  if (a >= 1e9) return [a / 1e9, "B"];
+  if (a >= 1e6) return [a / 1e6, "M"];
+  return [a / 1e3, "k"];
+}
+
+const NEXT_SUFFIX: Record<string, string> = { k: "M", M: "B", B: "T", T: "T" };
+
+/** |a| >= 1000 as three significant digits plus suffix; 999.96k rolls over to 1M. */
+function compactNum(a: number): string {
+  const [n, suf] = compactParts(a);
+  const s = sig3(n);
+  if (Number(s) >= 1000 && suf !== "T") return sig3(n / 1000) + NEXT_SUFFIX[suf];
+  return s + suf;
+}
+
+/** Compact currency: $412k, $41.2k, $1.21M. Below $1,000 falls back to `usd` (cents and fractions). */
+export function money(v: number | null | undefined): string {
+  if (v === null || v === undefined || Number.isNaN(v)) return "—";
+  const a = Math.abs(v);
+  if (a < 1000) return usd(v);
+  return (v < 0 ? "-$" : "$") + compactNum(a);
+}
+
+/** Money per unit, whole dollars once past $10: "$106", "$4.20", "$0.031". */
+export function unitMoney(v: number | null | undefined): string {
+  if (v === null || v === undefined || Number.isNaN(v)) return "—";
+  const a = Math.abs(v);
+  if (a >= 10000) return money(v);
+  if (a >= 10) return "$" + Math.round(v).toLocaleString("en-US");
+  return usd(v);
+}
+
+/** Compact counts: 5,012 stays exact, 18.3k, 1.83M. */
+export function count(v: number | null | undefined): string {
+  if (v === null || v === undefined || Number.isNaN(v)) return "—";
+  const a = Math.abs(v);
+  if (a < 10000) return Math.round(v).toLocaleString("en-US");
+  return (v < 0 ? "-" : "") + compactNum(a);
+}
+
+/**
+ * Percent with precision where it matters: 42%, 7.5%, 98.7%, 99.93% (so 99.96% never reads as 100%).
+ * Ratios are 0..1.
+ */
+export function pctAuto(v: number | null | undefined): string {
+  if (v === null || v === undefined || Number.isNaN(v)) return "—";
+  const p = v * 100;
+  const a = Math.abs(p);
+  if (a === 0) return "0%";
+  if (a < 0.1) return p < 0 ? ">-0.1%" : "<0.1%";
+  if (a >= 99.995 && a < 100) return "99.99%";
+  if (a >= 99 && a < 100) return p.toFixed(2) + "%";
+  if (a >= 90 && a < 100) return p.toFixed(1) + "%";
+  if (a >= 10) return p.toFixed(0) + "%";
+  return p.toFixed(1) + "%";
+}
+
+export type DeltaDir = "up" | "down" | "flat" | "new";
+
+/** Relative change cur vs prev, ready to print: "▲ 8.5%", "▼ 3.1%", "– 0%", "new". */
+export function delta(cur: number | null | undefined, prev: number | null | undefined): { dir: DeltaDir; ratio: number | null; text: string } {
+  if (cur === null || cur === undefined || prev === null || prev === undefined) return { dir: "flat", ratio: null, text: "—" };
+  if (!prev) return cur ? { dir: "new", ratio: null, text: "new" } : { dir: "flat", ratio: 0, text: "– 0%" };
+  const r = (cur - prev) / Math.abs(prev);
+  if (Math.abs(r) < 0.0005) return { dir: "flat", ratio: r, text: "– 0%" };
+  const a = Math.abs(r) * 100;
+  const body = a >= 1000 ? times(r + 1) : a >= 100 ? `${a.toFixed(0)}%` : a >= 10 ? `${a.toFixed(0)}%` : `${a.toFixed(1)}%`;
+  return { dir: r > 0 ? "up" : "down", ratio: r, text: `${r > 0 ? "▲" : "▼"} ${body}` };
+}
+
+/** Change in percentage points, for rates such as adherence: "▲ 0.4 pp". */
+export function deltaPp(cur: number | null | undefined, prev: number | null | undefined): { dir: DeltaDir; text: string } {
+  if (cur === null || cur === undefined || prev === null || prev === undefined) return { dir: "flat", text: "—" };
+  const d = (cur - prev) * 100;
+  if (Math.abs(d) < 0.05) return { dir: "flat", text: "– 0 pp" };
+  return { dir: d > 0 ? "up" : "down", text: `${d > 0 ? "▲" : "▼"} ${Math.abs(d).toFixed(Math.abs(d) >= 10 ? 0 : 1)} pp` };
+}
+
+/** "3.4×" for ratios such as spend vs team median. */
+export function times(v: number | null | undefined): string {
+  if (v === null || v === undefined || Number.isNaN(v)) return "—";
+  return (v >= 100 ? Math.round(v).toString() : v >= 10 ? v.toFixed(0) : v.toFixed(1)) + "×";
+}
+
+/** Axis ticks for counts: 0, 500, 1.2k, 18k, 1.8M. */
+export function countTick(v: number): string {
+  const a = Math.abs(v);
+  if (a < 1000) return String(Math.round(v * 100) / 100);
+  const [n, suf] = compactParts(a);
+  return (v < 0 ? "-" : "") + (n >= 10 ? Math.round(n) : Math.round(n * 10) / 10) + suf;
 }
