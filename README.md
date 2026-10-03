@@ -53,14 +53,25 @@ Without Docker, set `ACL_SEMANTIC=ollama ACL_UPSTREAM=ollama` before starting th
 
 | URL | Who | What |
 |---|---|---|
-| `/me` | Employees (their own key; with `identity.panel_demo: true` a "viewing as" switch instead) | Usage, a monitoring notice, recent activity of themselves and their agents, and **company resources**: grant or revoke each of their agents' access to servers, credentials, SaaS and MCP servers, with scope and expiry (a scope click keeps the expiry; an expired grant is renewed explicitly) |
+| `/me` | Employees (their own key; with `identity.panel_demo: true` a "viewing as" switch instead) | Usage, a monitoring notice, recent activity of themselves and their agents, and **company resources**: grant or revoke each of their agents' access to company services and MCP servers, with scopes and expiry (a scope click keeps the expiry; an expired grant is renewed explicitly) |
 | `/security` (also `/`) | Security staff (`?token=`) | Posture, threats, controls, budgets, latency, audit trail, **insider risk** (scores; per person AUTO or an override to normal/watch/restricted), **silent alerts**, all agent grants (revoke), resource catalog (suspend) |
 
 Both panels are plain HTML on [Primer CSS](https://primer.style/css) (loaded from jsDelivr): `panel.html` loads `core.js`, which fetches the data, composes the page and handles every action. Most actions are a single click: risk levels and filters are segmented controls, suspension is a toggle, and an agent's grant is edited by clicking its scopes.
 
 ## Company resources for agents
 
-Security defines a catalog in `policy.yaml` (`resources:`) with who is entitled to each resource and the longest grant allowed. Employees delegate entitled resources to their agents in `/me`. Agents use them through the gateway's built-in `company` MCP server (`list_resources`, `call_api`, `run_command`). The gateway checks the live grant on every call, including expiry, the owner's entitlement and suspension. It then performs the call and **injects the credential itself**, so agents never hold secrets. Results still pass through every content check.
+Security defines a catalog in `policy.yaml` (`resources:`) with who is entitled to each resource, which scopes may be granted and the longest grant allowed. Employees delegate entitled resources to their agents in `/me`. Agents use them through the gateway's built-in `company` MCP server, which offers each service's own tools:
+
+| Area | Services (tools) |
+|---|---|
+| Engineering | GitHub (`github_list_issues`, `github_get_file`, `github_create_issue`, `github_merge_pull_request`), Linear, Heroku (`heroku_get_logs`, `heroku_restart_dyno`, `heroku_scale_formation`, ...), Vercel |
+| Data | PostgreSQL prod read replica (`postgres_query`: one SELECT, writes and DDL rejected), Snowflake, Supabase (`supabase_select`, `supabase_insert`), Upstash Redis, AWS S3 (`s3_get_object`, ...) |
+| Revenue | Stripe (`stripe_list_charges`, `stripe_refund`, ...), Salesforce, HubSpot, Zendesk (`zendesk_get_ticket`, `zendesk_reply`, ...) |
+| Collaboration, ops | Slack (`slack_post_message`, ...), Notion, Google Drive, Datadog, PagerDuty, Zapier (`zapier_trigger_zap`), SendGrid |
+
+That is 20 services and 55 tools (`controllayer/services.py`). Each tool needs one scope: `read`, `write`, `admin` or `exec`. `tools/list` returns only the tools the caller can use right now (an agent: its live grants and their scopes; an employee: their entitlements), plus `list_resources`. Every `tools/call` is checked against the live grant for that tool's scope, including expiry, the owner's entitlement and suspension. The gateway then performs the call and **injects the credential itself** from the variable named in the catalog (`connection.secret_env`), so agents never hold secrets. Results still pass through every content check: a card number pasted into a Zendesk ticket is redacted (blocked for finance), a planted instruction in a ticket or a Notion page is blocked, and a key leaked into a file is blocked.
+
+The backends are deterministic mocks with realistic records (`controllayer/services.yaml`): writes answer like the real API but change nothing, and an unset credential variable falls back to a fixed demo value.
 
 ## Insider risk
 

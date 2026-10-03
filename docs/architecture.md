@@ -21,13 +21,15 @@ The directions are `input`, `output`, `tool_call`, `tool_result` and `tool_descr
 
 API keys map to principals of kind `human` or `agent`, and every agent has an owner. The resource catalog (`resources:` in the policy) is security-owned and lists who is entitled to each resource. Grants are runtime state in `data/state.json`, written atomically and changed only through the panels. Security edits the policy; employees edit grants.
 
-A broker call has a resource and a scope. It passes the gate only if all of these hold at that moment:
+Each catalog entry of `type: service` names one service in `controllayer/services.py` (`connection.service`) and the environment variable holding its credential (`connection.secret_env`). A service is catalogued at most once, so a tool name identifies the resource it uses. Each tool declares the scope it needs, and the catalog's `scopes` must be a subset of the scopes the service's tools use: a scope left out keeps its tools from every grant. The policy loader rejects an unknown service, a scope no tool uses and a service catalogued twice.
+
+A broker call has a resource and a scope, both given by the tool. It passes the gate only if all of these hold at that moment:
 - the agent holds a grant with that scope;
 - the grant has not expired;
 - the owner is still entitled;
 - the resource is not suspended.
 
-Such decisions are never cached, because expiry depends on time. A grant's expiry is set once, when it is created or when an expired grant is renewed. Changing its scopes (`PATCH /me/api/grants/{agent}/{resource}`) keeps the expiry and works only on an active grant. A new grant over a live one is refused. Reaching a catalogued MCP server needs a grant too, but per-tool RBAC and the irreversible-tool rule still apply on that server. Agents cannot reach uncatalogued servers at all.
+Such decisions are never cached, because expiry depends on time. `tools/list` applies the same rules, so it shows only the tools the caller can use now. The tool's arguments are validated against its schema (unknown keys, types, enums, ranges) before the backend runs. SQL tools accept one `SELECT` or `WITH ... SELECT` statement with no write, DDL or session keyword outside literals, quoted names and comments, and run it on a read-only database with a statement timeout. A grant's expiry is set once, when it is created or when an expired grant is renewed. Changing its scopes (`PATCH /me/api/grants/{agent}/{resource}`) keeps the expiry and works only on an active grant. A new grant over a live one is refused. Reaching a catalogued MCP server needs a grant too, but per-tool RBAC and the irreversible-tool rule still apply on that server. Agents cannot reach uncatalogued servers at all.
 
 ## Insider risk
 
@@ -97,7 +99,7 @@ Monitoring employees' AI use is personal-data processing. In the EU that means G
 ## Known gaps
 
 - No approval workflow yet: irreversible tools are simply blocked.
-- `run_command` on server resources is simulated; production would hand off to a bastion or SSH CA.
+- The company services are in-process mocks. A production backend would call each real API with the injected credential.
 - Risk scores live in memory and reset on restart; manual levels and grants persist.
 - The Privacy Filter sidecar and real decision models have not been run on the build VM; their contracts are tested against mocks.
 - Budgets and metrics are in-memory, so a restart resets them. Multiple replicas would need Redis for shared counters.
