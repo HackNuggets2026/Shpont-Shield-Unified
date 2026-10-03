@@ -7,6 +7,8 @@ import { useNow } from "../lib/useNow";
 import { ReasonDialog } from "./Dialog";
 import { SensitivityPill } from "./pills";
 import { Button, Chips, Empty, Field, Pill, TableWrap } from "./ui";
+import { OrgLine, PersonPicker } from "./opsKit";
+import type { OrgFields } from "../opsApi";
 
 export function GrantsTable({
   grants,
@@ -14,7 +16,7 @@ export function GrantsTable({
   onRevoke,
   empty = "No grants",
 }: {
-  grants: Grant[];
+  grants: (Grant & OrgFields)[];
   showPerson?: boolean;
   onRevoke?: (g: Grant, reason: string) => Promise<unknown>;
   empty?: string;
@@ -50,9 +52,12 @@ export function GrantsTable({
                   {showPerson && (
                     <td>
                       {g.principal ? (
-                        <Link className="hover:text-accent" to={`/console/people/${encodeURIComponent(g.principal)}`}>
-                          {g.principal}
-                        </Link>
+                        <>
+                          <Link className="font-medium hover:text-accent" to={`/console/people/${encodeURIComponent(g.principal)}`}>
+                            {g.name || g.principal}
+                          </Link>
+                          <OrgLine team={g.team} department={g.department} />
+                        </>
                       ) : (
                         "—"
                       )}
@@ -129,7 +134,6 @@ export function GrantDialog({
 }) {
   const qc = useQueryClient();
   const catalog = useQuery({ queryKey: ["admin", "catalog"], queryFn: admin.catalog, enabled: open });
-  const people = useQuery({ queryKey: ["admin", "principals"], queryFn: admin.principals, enabled: open && !principal });
   const menu = useQuery({ queryKey: ["admin", "menu"], queryFn: admin.menu, enabled: open });
   const resources = useMemo(() => catalog.data?.classes.access_grant ?? [], [catalog.data]);
 
@@ -169,16 +173,10 @@ export function GrantDialog({
       }}
     >
       {!principal && (
-        <Field label="Person">
-          <select className="input" value={who} onChange={(e) => setWho(e.target.value)}>
-            <option value="">Choose…</option>
-            {(people.data ?? []).map((p) => (
-              <option key={p.principal} value={p.principal}>
-                {p.principal} ({p.team})
-              </option>
-            ))}
-          </select>
-        </Field>
+        <div className="block">
+          <span className="mb-1 block text-xs font-medium text-ink2">Person</span>
+          <PersonPicker value={who} onChange={setWho} />
+        </div>
       )}
       <Field label="Resource">
         {resources.length === 0 && !catalog.isPending ? (

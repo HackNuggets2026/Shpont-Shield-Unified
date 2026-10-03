@@ -1,6 +1,8 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import type { Lease } from "../api";
+import type { OrgFields } from "../opsApi";
+import { OrgLine } from "./opsKit";
 import { ago, dateTime, minutes, usd } from "../lib/format";
 import { Button, Empty, ErrorBox, Pill, TableWrap } from "./ui";
 import { IconStop } from "./icons";
@@ -13,7 +15,7 @@ export function LeasesTable({
   closed = false,
   empty = "Nothing running",
 }: {
-  leases: Lease[];
+  leases: (Lease & OrgFields)[];
   onStop?: (id: string) => Promise<{ ok: boolean; stopped: boolean }>;
   showPerson?: boolean;
   closed?: boolean;
@@ -72,9 +74,9 @@ export function LeasesTable({
                   {showPerson && (
                     <td>
                       <Link className="hover:text-accent" to={`/console/people/${encodeURIComponent(l.principal)}`}>
-                        {l.principal}
+                        {l.name || l.principal}
                       </Link>
-                      <div className="text-[11px] text-muted">{l.team}</div>
+                      <OrgLine team={l.team} department={l.department} />
                     </td>
                   )}
                   <td className="text-xs">

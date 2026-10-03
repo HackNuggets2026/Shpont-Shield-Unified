@@ -95,3 +95,37 @@ export function grantLength(m: number | undefined): string {
   if (!m) return "—";
   return m >= 60 ? `${+(m / 60).toFixed(1)} h` : `${m} min`;
 }
+
+// ---- plain wording for the simplified Resources page -------------------------------------------------
+
+/** The section a catalog entry belongs to, in plain words. */
+export type Section = "spend" | "running" | "access";
+export const sectionOf = (r: CatalogItem): Section => (r.class === "leasable" ? "running" : r.class === "access_grant" ? "access" : "spend");
+
+/** The price as a person would say it: "$2.50 in · $10 out per million tokens", "$0.01 per minute held". */
+export function plainPrice(r: CatalogItem): string {
+  const p = r.price;
+  const parts: string[] = [];
+  if (p.usd_per_1m_input || p.usd_per_1m_output) parts.push(`${usd(p.usd_per_1m_input)} in · ${usd(p.usd_per_1m_output)} out per million tokens`);
+  if (p.usd_per_compute_second) parts.push(`${unitUsd(p.usd_per_compute_second)} per GPU-second`);
+  if (p.usd_per_unit) {
+    if (r.unit === "usd") parts.push(r.meter === "billing_export" ? "at cost, from the cloud bill" : "at cost");
+    else parts.push(`${unitUsd(p.usd_per_unit)} per ${r.class === "leasable" && r.unit === "minute" ? "minute held" : unitWord(r.unit)}`);
+  }
+  if (parts.length) return parts.join(" · ");
+  if (r.meter === "telemetry") return "subscription; cost as Claude Code reports it";
+  return r.class === "access_grant" ? "no cost" : "free";
+}
+
+/** 30-day volume, compact at enterprise scale: "9.1B tokens · 1.2M calls". */
+export function usageShort(r: CatalogItem): string {
+  const u = r.usage;
+  const c = new Intl.NumberFormat("en-US", { notation: "compact", maximumFractionDigits: 1 });
+  const n = (v: number) => (v < 10_000 ? Math.round(v).toLocaleString("en-US") : c.format(v).replace("K", "k"));
+  const bits: string[] = [];
+  if (u.tokens) bits.push(`${tokens(u.tokens)} tokens`);
+  if (u.minutes) bits.push(`${n(u.minutes)} min${r.class === "leasable" ? " held" : ""}`);
+  if (u.requests) bits.push(`${n(u.requests)} ${r.class === "access_grant" ? "uses" : "calls"}`);
+  if (!bits.length && u.usd > 0) return r.meter === "billing_export" ? "from the cloud bill" : "cost only";
+  return bits.join(" · ") || "no usage";
+}

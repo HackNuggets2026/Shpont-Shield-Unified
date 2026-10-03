@@ -1,12 +1,14 @@
 import { useNavigate } from "react-router-dom";
 import type { Incident } from "../api";
+import type { OrgFields } from "../opsApi";
 import { ago, dateTime } from "../lib/format";
-import { ruleLabel } from "../lib/security";
+import { ruleLabel, severityFirst } from "../lib/security";
 import { IncidentStatusPill, SeverityPill } from "./pills";
 import { Empty, TableWrap, cx } from "./ui";
 
-export function IncidentTable({ incidents, showPerson = true, empty = "No incidents" }: { incidents: Incident[]; showPerson?: boolean; empty?: string }) {
+export function IncidentTable({ incidents, showPerson = true, empty = "No incidents" }: { incidents: (Incident & OrgFields)[]; showPerson?: boolean; empty?: string }) {
   const nav = useNavigate();
+  incidents = [...incidents].sort(severityFirst);
   if (!incidents.length) return <Empty title={empty} hint="Detections raise incidents when usage looks like an attack." />;
   return (
     <TableWrap>
@@ -33,7 +35,12 @@ export function IncidentTable({ incidents, showPerson = true, empty = "No incide
                 <SeverityPill severity={i.severity} />
               </td>
               <td className="whitespace-nowrap font-medium text-ink">{ruleLabel(i.rule)}</td>
-              {showPerson && <td className="font-medium">{i.principal}</td>}
+              {showPerson && (
+                <td>
+                  <div className="font-medium">{i.name || i.principal}</div>
+                  {(i.team || i.department) && <div className="text-[11px] text-muted">{[i.team, i.department].filter(Boolean).join(" · ")}</div>}
+                </td>
+              )}
               <td className="max-w-[360px]">
                 <span className="line-clamp-2 text-xs text-ink2" title={i.detail}>
                   {i.detail}

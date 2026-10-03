@@ -1,6 +1,8 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import type { CatalogItem, Lease } from "../../api";
+import type { OrgFields } from "../../opsApi";
+import { OrgLine } from "../opsKit";
 import { ago, dateTime, minutes, usd } from "../../lib/format";
 import { useNow } from "../../lib/useNow";
 import { unitUsd } from "./catalogInfo";
@@ -17,7 +19,7 @@ export function LiveLeases({
   catalog,
   onStop,
 }: {
-  leases: Lease[];
+  leases: (Lease & OrgFields)[];
   fetchedAt: number; // ms, when `leases` was fetched
   catalog: Record<string, CatalogItem>;
   onStop: (id: string) => Promise<{ ok: boolean; stopped: boolean }>;
@@ -86,9 +88,9 @@ export function LiveLeases({
                 <tr key={l.id} className={cx(zombie && "bg-warn/[0.08]")}>
                   <td>
                     <Link className="font-medium hover:text-accent" to={`/console/people/${encodeURIComponent(l.principal)}`}>
-                      {l.principal}
+                      {l.name || l.principal}
                     </Link>
-                    <div className="text-[11px] text-muted">{l.team}</div>
+                    <OrgLine team={l.team} department={l.department} />
                   </td>
                   <td>
                     <div className="font-medium text-ink">{title}</div>
@@ -159,7 +161,7 @@ export function RecentReclaims({ recent, catalog, withinMin = 30 }: { recent: Le
         <li key={l.id} className="flex flex-wrap items-center gap-x-2 gap-y-1 px-4 py-2 text-xs">
           <Pill tone="warn">auto-reclaimed</Pill>
           <span className="text-ink">
-            <b>{l.principal}</b>'s {catalog[l.resource]?.title ?? l.resource} <span className="font-mono text-muted">{l.handle}</span>
+            <b>{(l as Lease & OrgFields).name || l.principal}</b>'s {catalog[l.resource]?.title ?? l.resource} <span className="font-mono text-muted">{l.handle}</span>
           </span>
           <span className="text-muted">
             {l.end_reason?.replace(/^reclaimed: ?/, "") || "zombie"} · {usd(l.usd)} total · {ago(l.ended, now)}
