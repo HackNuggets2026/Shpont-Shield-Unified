@@ -18,10 +18,19 @@ identity:
     fin-bob-key: { principal: bob, team: finance, role: analyst, email: bob@acme.example }
     ops-agent-key: { principal: ops-agent, team: platform, role: automation }
     intern-key: { principal: carol, team: interns, role: intern, email: carol@acme.example }
+    # The rest of the demo org (seed/ writes their history)
+    dev-dan-key: { principal: dan, team: engineering, role: developer, email: dan@acme.example }
+    dev-erin-key: { principal: erin, team: engineering, role: developer, email: erin@acme.example }
+    dev-frank-key: { principal: frank, team: engineering, role: developer, email: frank@acme.example }
+    dev-judy-key: { principal: judy, team: engineering, role: developer, email: judy@acme.example }
+    fin-grace-key: { principal: grace, team: finance, role: analyst, email: grace@acme.example }
+    fin-mallory-key: { principal: mallory, team: finance, role: analyst, email: mallory@acme.example }
+    ops-heidi-key: { principal: heidi, team: platform, role: developer, email: heidi@acme.example }
+    intern-ivan-key: { principal: ivan, team: interns, role: intern, email: ivan@acme.example }
 
 models:
   # Glob patterns. Requests naming any other model are refused before reaching it.
-  allowed: ["llama3.2:*", "qwen3:*", "gpt-4o-mini", "mock-*"]
+  allowed: ["llama3.2:*", "qwen3:*", "gpt-4o", "gpt-4o-mini", "mock-*"]
 
 upstream:
   backend: ${ACL_UPSTREAM:-mock}   # ollama | openai | mock (canned replies; no model needed)
@@ -43,10 +52,11 @@ semantic:
 budgets:
   enabled: true
   shadow: false
-  global: { tokens_per_day: 2000000, usd_per_day: 50 }
-  per_principal: { requests_per_minute: 60, tokens_per_day: 200000 }
+  global: { tokens_per_day: 20000000, usd_per_day: 400 }
+  per_principal: { requests_per_minute: 60, tokens_per_day: 400000 }
   per_team:
-    engineering: { tokens_per_day: 1000000, usd_per_day: 20 }
+    engineering: { tokens_per_day: 8000000, usd_per_day: 200 }
+    finance: { tokens_per_day: 2000000, usd_per_day: 40 }
     interns: { tokens_per_day: 20000, usd_per_day: 0.5, requests_per_minute: 10 }
   loop_guard: { max_identical_calls: 5, window_seconds: 60 }
   downgrade:                 # past 80% of a daily budget, answer with a cheaper model instead of refusing
@@ -213,6 +223,15 @@ menu:
 # Workflows on the menu list the resources they include; grants are approved per person (RFC 9396 shape).
 
 catalog:
+  gpt-4o:
+    class: consumable
+    urn: urn:shield:ai_model:openai:gpt-4o
+    title: GPT-4o
+    category: ai_model
+    provider: openai
+    unit: token
+    models: [gpt-4o]
+    price: { usd_per_1m_input: 2.50, usd_per_1m_output: 10.00 }
   gpt-4o-mini:
     class: consumable
     urn: urn:shield:ai_model:openai:gpt-4o-mini

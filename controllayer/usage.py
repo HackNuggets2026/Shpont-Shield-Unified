@@ -357,10 +357,10 @@ class UsageStore:
             r["detail"] = json.loads(r["detail"]) if r.get("detail") else None
         return rows
 
-    def decide_request(self, rid: str, status: str, actor: str, note: str) -> dict | None:
+    def decide_request(self, rid: str, status: str, actor: str, note: str, ts: float | None = None) -> dict | None:
         self._x(
             "UPDATE requests SET status=?, decided_by=?, decided_at=?, note=? WHERE id=? AND status='pending'",
-            (status, actor, time.time(), note, rid),
+            (status, actor, ts or time.time(), note, rid),
         )
         rows = self._q("SELECT * FROM requests WHERE id=?", (rid,))
         return rows[0] if rows else None
@@ -477,10 +477,12 @@ class UsageStore:
 
     # ---- admin actions (who changed what, and who looked at whose content) -------
 
-    def log_admin(self, actor: str, action: str, target: str, reason: str, detail: Any = None) -> None:
+    def log_admin(
+        self, actor: str, action: str, target: str, reason: str, detail: Any = None, ts: float | None = None
+    ) -> None:
         self._x(
             "INSERT INTO admin_actions VALUES (?,?,?,?,?,?)",
-            (time.time(), actor, action, target, reason, json.dumps(detail) if detail is not None else None),
+            (ts or time.time(), actor, action, target, reason, json.dumps(detail) if detail is not None else None),
         )
 
     def admin_actions(self, target: str | None = None, limit: int = 100) -> list[dict]:
