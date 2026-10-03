@@ -300,7 +300,7 @@ export function Security() {
                 </span>
               </span>
             }
-            subtitle="Open first, newest first. Filtered and paged on the server; click one for its evidence."
+            subtitle="High severity first, then open before acknowledged, then newest. Click one for its evidence."
           >
             <div className="flex flex-wrap items-center gap-2 border-b border-line px-4 py-2">
               <Select

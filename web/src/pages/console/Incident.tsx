@@ -13,7 +13,7 @@ import { EvidenceTimeline, buildTimeline, isEvidence } from "../../components/se
 import { RiskMeter } from "../../components/security/RiskMeter";
 import { ViewContentButton } from "../../components/security/ViewContent";
 import { ago, dateTime, pct } from "../../lib/format";
-import { RULES, detectionPolicy, isAuto, responseLabel, ruleLabel, ruleWhat, triageOrder } from "../../lib/security";
+import { RULES, detectionPolicy, isAuto, responseLabel, ruleLabel, ruleWhat, severityFirst } from "../../lib/security";
 
 type Next = "acknowledged" | "resolved" | "dismissed" | "open";
 
@@ -81,7 +81,9 @@ function PeersCard({
   if (!team && !department) return null;
   const others = (q: PeersQ) => (q.data?.rows ?? []).filter((i) => i.principal !== self);
   const people = (q: PeersQ) => new Set(others(q).map((i) => i.principal)).size;
-  const teamRows = others(teamQ).filter((i) => i.id !== incidentId);
+  const teamRows = others(teamQ)
+    .filter((i) => i.id !== incidentId)
+    .sort(severityFirst);
   // Matching incidents not about this person: the server's total minus this person's rows on the page.
   const count = (q: PeersQ) => (q.data ? (q.data.total ?? q.data.rows.length) - (q.data.rows.length - others(q).length) : null);
   const line = (label: string, q: PeersQ, n: number | null, to: string) => (
@@ -231,7 +233,7 @@ export function IncidentPage() {
 
   const autos = actions.filter(isAuto).sort((a, b) => a.ts - b.ts);
   const humans = actions.filter((a) => !isAuto(a));
-  const others = (person.data?.incidents ?? []).filter((i) => i.id !== inc.id).sort(triageOrder);
+  const others = (person.data?.incidents ?? []).filter((i) => i.id !== inc.id).sort(severityFirst);
   const scale = row?.budget_scale ?? 1;
   const restricted = principal.status !== "active" || scale < 1;
 

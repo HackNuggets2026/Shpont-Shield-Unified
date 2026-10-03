@@ -1,6 +1,6 @@
 import { Link, useNavigate } from "react-router-dom";
 import { ago, dateTime } from "../../lib/format";
-import { ruleLabel, ruleWhat, RULES, type SecIncident } from "../../lib/security";
+import { ruleLabel, ruleWhat, RULES, severityFirst, type SecIncident } from "../../lib/security";
 import type { OrgFields } from "../../opsApi";
 import { IncidentStatusPill, SeverityPill } from "../pills";
 import { Empty, cx } from "../ui";
@@ -33,12 +33,17 @@ export function IncidentsTable({ incidents, empty, hint }: { incidents: Row[]; e
   const nav = useNavigate();
   if (!incidents.length) return <Empty title={empty} hint={hint} />;
   const org = incidents.some((i) => i.department || i.team);
-  const hot = (i: Row) => i.status === "open" && i.severity === "high";
+  // The server pages in this order too; sorting the page keeps it right even if it does not.
+  incidents = [...incidents].sort(severityFirst);
+  const live = (i: Row) => i.status === "open" || i.status === "acknowledged";
+  const hot = (i: Row) => live(i) && i.severity === "high";
+  const rowCls = (i: Row) =>
+    cx(hot(i) ? "bg-bad/[0.07] shadow-[inset_3px_0_0_rgb(var(--bad))]" : live(i) && i.severity === "medium" && "shadow-[inset_3px_0_0_rgb(var(--serious))]");
   return (
     <>
       <ul className="divide-y divide-line/70 md:hidden">
         {incidents.map((i) => (
-          <li key={i.id} className={cx(hot(i) && "bg-bad/[0.05]")}>
+          <li key={i.id} className={rowCls(i)}>
             <Link to={href(i)} className="block px-4 py-3 active:bg-raised">
               <div className="flex items-start justify-between gap-2">
                 <RuleCell rule={i.rule} />
@@ -73,14 +78,14 @@ export function IncidentsTable({ incidents, empty, hint }: { incidents: Row[]; e
           </thead>
           <tbody>
             {incidents.map((i) => (
-              <tr key={i.id} className={cx("row-link", hot(i) && "bg-bad/[0.05]")} onClick={() => nav(href(i))}>
+              <tr key={i.id} className={cx("row-link", rowCls(i))} onClick={() => nav(href(i))}>
                 <td>
                   <SeverityPill severity={i.severity} />
                 </td>
                 <td className="max-w-[210px]">
                   <Link to={href(i)} onClick={(e) => e.stopPropagation()} className="flex items-center gap-1.5 font-medium text-ink hover:text-accent" title={ruleWhat(i.rule)}>
                     {RULES[i.rule]?.cc && <IconTerminal size={12} className="shrink-0 text-cc" />}
-                    <span className="truncate">{ruleLabel(i.rule)}</span>
+                    <span className={cx("truncate", hot(i) && "font-semibold text-bad")}>{ruleLabel(i.rule)}</span>
                   </Link>
                   <Link
                     to={`/console/people/${encodeURIComponent(i.principal)}`}

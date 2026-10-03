@@ -45,6 +45,8 @@ export interface IncidentFilters {
   /** Free-text person search (id, name or email). */
   q?: string;
   days?: number;
+  /** `severity` (default): high first, then open before acknowledged, then newest. `ts`: newest first. */
+  sort?: "severity" | "ts";
   limit?: number;
   offset?: number;
 }
@@ -190,7 +192,7 @@ export const ops = {
   incidents: async (f: IncidentFilters): Promise<IncidentsPage> => {
     const status = f.status === "active" ? "open,acknowledged" : f.status;
     const r = await get<{ incidents: OrgIncident[]; total?: number; scores: Record<string, number> }>(
-      `${A}/incidents${qs({ ...f, status })}`,
+      `${A}/incidents${qs({ sort: "severity", ...f, status })}`,
     );
     return { ...page(r.incidents ?? [], r.total, f.limit, f.offset), scores: r.scores ?? {} };
   },
