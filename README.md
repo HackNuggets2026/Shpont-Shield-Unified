@@ -33,7 +33,8 @@ The same pipeline runs in both directions. Prompts and tool calls are checked on
 ```bash
 python -m venv .venv && .venv/bin/pip install -e '.[dev]'
 .venv/bin/python -m pytest              # full self-test suite, ~5 s
-.venv/bin/python -m controllayer        # gateway on http://127.0.0.1:8787
+.venv/bin/python -m controllayer        # gateway on http://127.0.0.1:8787, state in ./data
+.venv/bin/python -m controllayer --data-dir data/fresh   # same policy, empty state (or ACL_DATA_DIR)
 .venv/bin/python demo/agent.py          # scripted agent: benign steps + attacks
 open 'http://127.0.0.1:8787/?token=demo-admin-token'   # dashboard
 ```
@@ -56,6 +57,8 @@ Without Docker, set `ACL_SEMANTIC=ollama ACL_UPSTREAM=ollama` before starting th
 | App/agent → model | Point any OpenAI client at `http://gateway:8787/v1`, using a control-layer API key as the bearer token |
 | Agent → MCP tools | Point the MCP client at `http://gateway:8787/mcp/<server>` (servers are configured in `upstream.mcp_servers`) |
 | Anything else | `controllayer.sdk.Guard`: `guard.enforce(text, direction)` or the `@guard.tool` decorator |
+| Ask before acting | `POST /v1/authorize` `{action, resource, context}` returns Allow/Deny for a catalogued resource, without doing anything |
+| Usage from elsewhere | `POST /v1/events` (CloudEvents 1.0, one or a batch), `POST /v1/usage` (a quantity of a resource), `POST /v1/import/focus` (a cloud bill as FOCUS CSV) |
 
 ## Policy
 
@@ -75,6 +78,9 @@ All controls, thresholds, allowed models, budgets and team overrides live in [`p
 | `/me` | Employee dashboard (their own API key): usage, quota, menu, runs, leases, blocked events, admin activity about them |
 | `/admin/overview`, `/admin/usage?by=workflow,task`, `/admin/menu`, `/admin/leases`, `/admin/incidents`, `/admin/principals`, `/admin/requests`, `/admin/actions` | Governance JSON; POST variants change restrictions |
 | `/admin/audit/export?format=jsonl\|csv` | Audit log for security teams. Detected PII and secrets are masked in every event, whatever the action; the SHA-256 of the original is kept |
+| `/admin/catalog`, `/admin/grants` | The resource catalog by class, with usage, live leases and live grants |
+| `/admin/export/focus?days=30` | AI spend as a FinOps FOCUS 1.1 CSV, ready for finance tools |
+| `/admin/export/backstage` | The catalog as Backstage `kind: Resource` entities |
 | `/admin/summary`, `/admin/events` | JSON for other tools |
 | `/metrics` | Prometheus: decisions, findings, latency per stage, spend |
 
@@ -99,6 +105,36 @@ open 'http://127.0.0.1:8787/me?key=intern-key'
 ```
 
 Usage, leases, incidents and approvals are stored in SQLite (`usage.path`), so budgets and history survive restarts.
+
+## Resource catalog
+
+Everything an agent can touch is an entry under `catalog:` in `policy.yaml`. An entry might be a model, a subscription, a simulator, a VM, CI minutes, a cloud account, the production database, a deploy or external email. Each one is named by a URN (`urn:shield:<category>:<provider>:<type>`) and belongs to one of three classes, each measured and limited differently:
+
+| Class | Examples | Measured in | Limited by |
+|---|---|---|---|
+| `consumable` | LLM tokens, Claude Code usage, CI minutes, cloud spend | a quantity in a unit | daily budgets per person, team and workflow; a cheaper model past 80% |
+| `leasable` | iOS simulators, sandbox VMs, browsers | minutes held | concurrent leases, maximum duration, idle shutdown |
+| `access_grant` | prod database, prod deploy, external email | uses | a time-boxed grant approved by an admin, or a workflow that includes it |
+
+There is one evaluator for all three classes (`controls/resources.py: authorize`), in Cedar's shape: a principal, an action, a resource and a context. The gateway uses it on every tool call, and `POST /v1/authorize` exposes it to other systems. Employees request a grant from `/me`, and admins approve it or grant it directly (`POST /admin/principals/{id}/grants`). A grant is stored in the shape of an OAuth RAR (RFC 9396) `authorization_details` entry: resource, URN locations, actions, an optional workflow and an expiry. While it is live, it also lets the tool past the role list and the irreversible list. Each grant is logged and shown to the employee.
+
+The catalog is built on existing standards rather than a home-grown format:
+
+| Concern | Standard |
+|---|---|
+| Decisions | Cedar's principal / action / resource / context |
+| Identity | URNs (like AWS ARNs), with wildcards |
+| Catalog | Kubernetes-style entries, exported to Backstage |
+| Events | CloudEvents 1.0, with OpenTelemetry GenAI attributes |
+| Cost records | FinOps FOCUS 1.1 export and import |
+| Grants | OAuth RAR `authorization_details` |
+| Quota signalling | IETF `RateLimit-Policy` / `RateLimit` headers |
+
+Older policies with `resources:` and `budgets.pricing` still load: they are folded into the catalog.
+
+## One event stream
+
+Gateway checks, lease starts and stops, incidents, usage reports, CloudEvents and imported bills all land in the `events` table, with one set of fields: source, kind, who (principal, team, client, session), what for (workflow, task), on what (resource, URN, model, tool), the decision, severity and cost. Telemetry that names a person by email is joined to the directory through `identity.api_keys.*.email`. Events that carry cost are also written to the usage ledger and count against today's budgets. A missing price is taken from the catalog.
 
 ## Performance
 
