@@ -111,7 +111,7 @@ export function PortalHome() {
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <Kpi label="Spend today" value={usd(s.spend.today)} />
         <Kpi label="Month to date" value={usd(s.spend.month_to_date)} />
-        <Kpi label="Tasks this week" value={runsWeek} sub={`${s.by_workflow.length} workflows`} to="/portal/activity" />
+        <Kpi label="Tasks this week" value={runsWeek >= 30 ? "30+" : runsWeek} sub={`${s.by_workflow.length} workflows`} to="/portal/activity" />
         <Kpi label="Running now" value={s.leases.length} tone={s.leases.some((l) => l.flags.length) ? "warn" : undefined} sub={s.leases.length ? "see below" : "nothing running"} />
       </div>
 

@@ -216,7 +216,7 @@ export function Resources() {
 
       <Card title="Recently stopped" flush>
         <Q q={leases} rows={3}>
-          {(d) => <LeasesTable leases={d.recent.slice(0, 15)} closed empty="No leases have ended yet" />}
+          {(d) => <LeasesTable leases={d.recent.slice(0, 10)} closed empty="No leases have ended yet" />}
         </Q>
       </Card>
 
