@@ -17,7 +17,7 @@ export function usd(v: number | null | undefined, opts: { compact?: boolean } = 
 export function usdTick(v: number): string {
   const a = Math.abs(v);
   if (a === 0) return "$0";
-  if (a >= 1000) return "$" + new Intl.NumberFormat("en-US", { notation: "compact", maximumFractionDigits: 1 }).format(v);
+  if (a >= 1000) return (v < 0 ? "-$" : "$") + countTick(a);
   if (a >= 1) return "$" + (Number.isInteger(v) ? v : v.toFixed(1));
   if (a >= 0.01) return "$" + v.toFixed(2);
   if (a >= 0.001) return "$" + v.toFixed(3);

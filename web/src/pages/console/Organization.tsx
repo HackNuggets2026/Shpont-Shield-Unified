@@ -199,7 +199,7 @@ export function Organization() {
           <Q q={map} rows={8}>
             {(d) => (
               <>
-                <TeamTreemap teams={d.rows} mode={mapMode} orgAdherence={o.data?.totals.adherence ?? null} />
+                <TeamTreemap teams={d.rows} mode={mapMode} orgAdherence={o.data?.totals.adherence ?? null} height={420} />
                 {d.total > d.rows.length && (
                   <div className="mt-1 text-[11px] text-muted">
                     Showing the {d.rows.length} highest-spend teams of {count(d.total)}.
@@ -212,7 +212,7 @@ export function Organization() {
         <div id="outliers" className="scroll-mt-4">
           <Card title="Outliers" subtitle={department ? `People in ${department}` : "Individuals worth a look, across the org"} flush className="h-full">
             <Q q={outliers} rows={8}>
-              {(d) => <OutliersList cost={d.cost} risk={d.risk} growth={d.growth} days={Math.min(days, 30)} />}
+              {(d) => <OutliersList cost={d.cost} risk={d.risk} growth={d.growth} days={Math.min(days, 30)} limit={8} />}
             </Q>
           </Card>
         </div>
@@ -236,7 +236,7 @@ export function Organization() {
                   order={order}
                   onSort={onSort}
                   sortable={Object.keys(SERVER_SORT) as UnitSortKey[]}
-                  totalUsd={o.data?.totals.usd}
+                  compact
                   empty="No teams"
                 />
                 <Pager offset={offset} limit={PAGE} total={d.total} onChange={setOffset} />

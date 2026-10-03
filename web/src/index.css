@@ -134,6 +134,12 @@ body {
   @apply sticky top-0 z-[1] bg-panel px-3 py-2 text-left text-[11px] font-medium uppercase tracking-wide text-muted;
   border-bottom: 1px solid rgb(var(--line));
 }
+.tbl th.text-right {
+  text-align: right;
+}
+.tbl th.text-right > button {
+  justify-content: flex-end;
+}
 .tbl td {
   @apply px-3 py-2 align-middle;
   border-bottom: 1px solid rgb(var(--line) / 0.6);

@@ -405,6 +405,7 @@ function CompactUnitTable({
                   {color(r) && <DeptDot color={color(r)} />}
                   <span className="truncate font-medium text-ink">{r.name}</span>
                 </div>
+                {kind === "team" && r.department && <div className="truncate pl-[18px] text-[11px] text-muted">{r.department}</div>}
               </td>
               <td className="tnum text-right">
                 {count(r.headcount)}
