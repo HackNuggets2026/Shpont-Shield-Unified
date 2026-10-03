@@ -115,7 +115,18 @@ export function GrantsTable({
 }
 
 /** Admin: give a person time-boxed access to an access_grant resource. */
-export function GrantDialog({ open, onClose, principal }: { open: boolean; onClose: () => void; principal?: string }) {
+export function GrantDialog({
+  open,
+  onClose,
+  principal,
+  resource,
+}: {
+  open: boolean;
+  onClose: () => void;
+  principal?: string;
+  /** Preselect this access_grant resource (catalog name). */
+  resource?: string;
+}) {
   const qc = useQueryClient();
   const catalog = useQuery({ queryKey: ["admin", "catalog"], queryFn: admin.catalog, enabled: open });
   const people = useQuery({ queryKey: ["admin", "principals"], queryFn: admin.principals, enabled: open && !principal });
@@ -132,16 +143,18 @@ export function GrantDialog({ open, onClose, principal }: { open: boolean; onClo
     if (open) {
       setWho(principal ?? "");
       setWf("");
+      if (resource) setRes(resource);
     }
-  }, [open, principal]);
+  }, [open, principal, resource]);
   useEffect(() => {
     if (!res && resources.length) setRes(resources[0].name);
   }, [resources, res]);
   const r = resources.find((x) => x.name === res);
+  // Keyed on the name, not the object: a catalog refetch must not reset the admin's choices.
   useEffect(() => {
     setActions(r?.actions ?? []);
     if (r?.grant) setMins((m) => Math.min(m, r.grant!.max_minutes));
-  }, [r]);
+  }, [r?.name]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <ReasonDialog
@@ -185,6 +198,11 @@ export function GrantDialog({ open, onClose, principal }: { open: boolean; onClo
           <span className="font-mono">{r.urn}</span>
           <SensitivityPill s={r.sensitivity} />
           {r.owner && <span>owner {r.owner}</span>}
+        </div>
+      )}
+      {r?.grant?.approval === "workflow" && r.workflows.length > 0 && (
+        <div className="rounded-md bg-info/10 px-3 py-2 text-xs text-info">
+          Agents already reach this inside {r.workflows.join(", ")}; a grant is only needed outside {r.workflows.length > 1 ? "those" : "it"}.
         </div>
       )}
       <div className="grid grid-cols-2 gap-3">
