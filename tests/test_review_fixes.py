@@ -373,3 +373,15 @@ def test_granting_to_an_unknown_person_is_a_404_and_clamping_is_reported(client)
     )
     r = client.post("/admin/principals/carol/grants", json={"resource": "prod_db", "minutes": 30, "reason": "x"})
     assert "clamped_from" not in r.json()
+
+
+def test_a_failed_reclaim_is_retried_a_minute_later_not_every_sweep(client):
+    mcp(client, "tools/call", {"name": "boot_simulator", "arguments": {}}, who="alice")
+    layer = client.app.state.layer
+    lease = next(iter(layer.leases.open.values()))
+    lease["last_activity"] -= 11 * 60
+    t = time.time()
+    layer.leases.sweep(layer.policy, now=t)
+    assert layer.leases.sweep(layer.policy, now=t + 181) == [lease]
+    assert layer.leases.sweep(layer.policy, now=t + 191) == []  # still open (reclaim failed): wait
+    assert layer.leases.sweep(layer.policy, now=t + 242) == [lease]

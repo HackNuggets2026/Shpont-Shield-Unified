@@ -63,7 +63,12 @@ EVENT_FILTERS = {"source", "kind", "principal", "team", "session", "task", "work
                  "request_id", "resource", "tool", "model"}  # fmt: skip
 
 # Columns added after a table was first created: (table, column, type).
-MIGRATIONS = [("usage", "source", "TEXT"), ("usage", "client", "TEXT"), ("requests", "detail", "TEXT")]
+MIGRATIONS = [
+    ("usage", "source", "TEXT"),
+    ("usage", "client", "TEXT"),
+    ("requests", "detail", "TEXT"),
+    ("leases", "flagged_at", "REAL"),
+]
 
 GROUPS = {"workflow", "task", "team", "principal", "resource", "model", "day", "source"}
 

@@ -1,5 +1,9 @@
 """Usage governance: workflow menu, attribution, per-run limits, resource leases, restrictions, detections."""
 
+import time
+
+import pytest
+
 from controllayer.gateway import mcp_demo
 
 from .conftest import KEYS
@@ -179,8 +183,11 @@ def test_zombie_is_flagged_and_reclaimed(client):
     layer = client.app.state.layer
     lease = next(iter(layer.leases.open.values()))
     lease["last_activity"] -= 11 * 60
-    reclaim = layer.leases.sweep(layer.policy)
-    assert [x["id"] for x in reclaim] == [lease["id"]] and lease["flags"] == ["idle"]
+    assert layer.leases.sweep(layer.policy) == [] and lease["flags"] == ["idle"]  # flagged, visible first
+    row = next(x for x in client.get("/admin/leases").json()["open"] if x["id"] == lease["id"])
+    assert row["reclaim_at"] == pytest.approx(row["flagged_at"] + 3 * 60)
+    reclaim = layer.leases.sweep(layer.policy, now=time.time() + 3 * 60 + 1)
+    assert [x["id"] for x in reclaim] == [lease["id"]]
     assert client.get("/admin/overview").json()["zombies"] == 1
     assert any(i["rule"] == "zombie_resource" for i in client.get("/admin/incidents").json()["incidents"])
     r = client.post(f"/admin/leases/{lease['id']}/release").json()

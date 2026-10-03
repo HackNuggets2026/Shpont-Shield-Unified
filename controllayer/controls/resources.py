@@ -154,6 +154,7 @@ class LeaseTracker:
             lease["id"]: lease for lease in store.leases(open_only=True, limit=10_000)
         }
         self.on_signal: Signal = lambda *a: None
+        self._tried: dict[str, float] = {}  # lease id -> last reclaim attempt
         self.urns: dict[str, str] = {}  # resource name -> URN, refreshed by the engine on policy load
 
     def _event(self, kind: str, lease: dict, urn: str | None, ts: float, **extra: Any) -> None:
@@ -237,6 +238,7 @@ class LeaseTracker:
             "end_reason": None,
             "usd": 0.0,
             "flags": [],
+            "flagged_at": None,
         }
         self.open[lease["id"]] = lease
         self.store.save_lease(lease)
@@ -254,6 +256,7 @@ class LeaseTracker:
 
     def close(self, lease_id: str, policy: Policy, reason: str, now: float | None = None) -> dict | None:
         lease = self.open.pop(lease_id, None)
+        self._tried.pop(lease_id, None)
         if lease is None:
             return None
         now = now or time.time()
@@ -277,7 +280,11 @@ class LeaseTracker:
     # ---- background: zombies and over-time leases -------------------------------
 
     def sweep(self, policy: Policy, now: float | None = None) -> list[dict[str, Any]]:
-        """Flag zombie and over-time leases; returns the ones to reclaim (still open, caller stops them)."""
+        """Flag zombie and over-time leases; returns the ones to reclaim (still open, caller stops them).
+
+        A flagged lease is reclaimed only after the resource's `reclaim_after_minutes`, so the zombie is
+        visible (and its holder can still release it) before it is stopped. A failed reclaim is retried a
+        minute later."""
         now = now or time.time()
         reclaim = []
         for lease in list(self.open.values()):
@@ -293,19 +300,28 @@ class LeaseTracker:
             if cap and cap.max_minutes and now - lease["started"] > cap.max_minutes * 60:
                 if "over_time" not in lease["flags"]:
                     new.append("over_time")
-            if not new:
-                continue
-            lease["flags"] = [*lease["flags"], *new]
-            self.store.save_lease(lease)
-            self._event("lease.flag", lease, policy_urn(self.urns, lease["resource"], lease["handle"]), now,
-                        severity="low", detail={"flags": new, "idle_minutes": round(idle / 60, 1)})  # fmt: skip
-            detail = (
-                f"{lease['resource']} {lease['handle'] or lease['id']}: {', '.join(new)} ({idle / 60:.0f} min idle)"
-            )
-            self.on_signal("zombie_resource", lease["principal"], detail, [lease["id"]])
-            if r.auto_reclaim:
+            if new:
+                lease["flags"] = [*lease["flags"], *new]
+                lease["flagged_at"] = lease.get("flagged_at") or now
+                self.store.save_lease(lease)
+                self._event("lease.flag", lease, policy_urn(self.urns, lease["resource"], lease["handle"]), now,
+                            severity="low", detail={"flags": new, "idle_minutes": round(idle / 60, 1)})  # fmt: skip
+                detail = (
+                    f"{lease['resource']} {lease['handle'] or lease['id']}: {', '.join(new)} ({idle / 60:.0f} min idle)"
+                )
+                self.on_signal("zombie_resource", lease["principal"], detail, [lease["id"]])
+            due = self.reclaim_at(lease, policy)
+            if due is not None and now >= due and now - self._tried.get(lease["id"], 0.0) >= 60:
+                self._tried[lease["id"]] = now
                 reclaim.append(lease)
         return reclaim
+
+    def reclaim_at(self, lease: dict, policy: Policy) -> float | None:
+        """When a flagged lease of an auto-reclaimed resource gets stopped, else None."""
+        r = policy.resources.get(lease["resource"])
+        if r is None or not r.auto_reclaim or not lease.get("flagged_at"):
+            return None
+        return lease["flagged_at"] + r.reclaim_after_minutes * 60
 
     def reclaim_request(self, lease: dict, policy: Policy) -> dict | None:
         """The MCP call that stops a lease's resource, or None when there is no way to address it."""
@@ -334,6 +350,8 @@ class LeaseTracker:
                     "minutes": round(minutes, 1),
                     "idle_minutes": round((now - lease["last_activity"]) / 60, 1),
                     "running_usd": round(minutes * (r.usd_per_minute if r else 0.0), 4),
+                    "flagged_at": lease.get("flagged_at"),
+                    "reclaim_at": self.reclaim_at(lease, policy),
                 }
             )
         return sorted(out, key=lambda x: x["started"])
