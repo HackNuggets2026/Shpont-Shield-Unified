@@ -118,6 +118,15 @@ def test_top_spender_and_agent_pages_render_and_links_land(org):
     assert "agent of" in page_of(org, agent).html
 
 
+def test_heavy_pages_fit_two_viewports(org, seeded):
+    layout = pytest.importorskip("tests.layout")
+    top = org.get("/admin/analytics/people?per_page=1&sort=-usd").json()["rows"][0]["id"]
+    for pid in (top, owner_of(org, seeded["agent"])):
+        page = page_of(org, pid)
+        assert not page.inspection
+        assert page.height <= layout.BUDGET, (pid, page.height)
+
+
 def test_unknown_person_is_a_message_not_a_failure(org):
     page = page_of(org, "no.such.person")
     assert 'No person or agent "no.such.person"' in page.html
@@ -130,9 +139,11 @@ def test_grant_pill_grants_the_first_scope_for_the_resource_maximum(org, seeded)
     page = page_of(org, owner_of(org, agent))
     btn = next(b for b in buttons(page.html, "grant") if b["agent"] == agent)
     assert btn["rid"] not in grants(org, agent)
+    res = next(r for r in org.get(f"/admin/analytics/person/{agent}").json()["resources"] if r["id"] == btn["rid"])
+    hours = res["max_grant_hours"]
+    assert btn["scopes"] == res["scopes"][0] and btn["hours"] == ("" if hours is None else f"{hours:g}")
     page.act(btn)
     assert not page.errors(), page.errors()
-    hours = float(btn["hours"]) if btn["hours"] else None
     assert page.sent == [
         ("POST", "/admin/grants", {"agent": agent, "resource": btn["rid"], "scopes": [btn["scopes"]], "hours": hours})
     ]

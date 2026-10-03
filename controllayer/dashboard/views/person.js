@@ -78,7 +78,7 @@
       return it.kind + (viaAgents && agents > 0 ? ` · ${h.pct(agents / it.usd)} by agents` : "");
     };
     const top = d.items.slice(0, TOP_ITEMS), rest = d.items.slice(TOP_ITEMS);
-    const rows = top.map((it) => ({ label: it.name, value: it.usd, color: col[it.key], sub: sub(it),
+    const rows = top.map((it) => ({ label: it.name, icon: logo(it.key), value: it.usd, color: col[it.key], sub: sub(it),
       href: ACL.href({ view: "people", item: it.key, sort: "-item" }) }));
     if (rest.length) rows.push({ label: `Other (${rest.length})`, value: rest.reduce((a, it) => a + it.usd, 0), color: c.OTHER });
     return c.hbars(rows) + `<div class="f6 color-fg-muted mt-1">Bars link to everyone using the item.</div>`;
