@@ -389,6 +389,10 @@ def register(
             resp = _write(request, {"principals": {req["principal"]: patch}}, "approve_request", req["principal"], note)
             if resp.status_code != 200:
                 return resp
+        else:
+            usage.log_admin(
+                actor(request), "deny_request", req["principal"], note, {"request": rid, "kind": req["kind"]}
+            )
         usage.decide_request(rid, "approved" if decision == "approve" else "denied", actor(request), note)
         p = store.policy
         return {"ok": True, "status": p.principal(req["principal"]).status,

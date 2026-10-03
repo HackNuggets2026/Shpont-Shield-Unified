@@ -569,6 +569,12 @@ class UsageStore:
     def log_admin(
         self, actor: str, action: str, target: str, reason: str, detail: Any = None, ts: float | None = None
     ) -> None:
+        """`detail` is stored flat: an overlay patch for one person (`{"principals": {target: {...}}}`) or one
+        workflow (`{"menu": {"workflows": {target: {...}}}}`) is stored as its inner `{...}`."""
+        if isinstance(detail, dict) and len(detail) == 1:
+            inner = detail.get("principals") or (detail.get("menu") or {}).get("workflows")
+            if isinstance(inner, dict) and set(inner) == {target}:
+                detail = inner[target]
         self._x(
             "INSERT INTO admin_actions VALUES (?,?,?,?,?,?)",
             (ts or time.time(), actor, action, target, reason, json.dumps(detail) if detail is not None else None),

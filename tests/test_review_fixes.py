@@ -334,3 +334,15 @@ def test_incident_detail_and_person_views_show_incident_status_changes(client):
     assert "incident_acknowledged" in {a["action"] for a in mine}
     person = client.get("/admin/people/carol").json()["admin_actions"]
     assert "incident_acknowledged" in {a["action"] for a in person}
+
+
+def test_denials_are_logged_and_admin_action_detail_is_flat(client):
+    rid = _quota_request(client, "carol", 3.0)
+    client.post(f"/admin/requests/{rid}", json={"decision": "deny", "note": "not this week"})
+    acts = {a["action"]: a for a in client.get("/admin/actions", params={"target": "carol"}).json()}
+    assert acts["deny_request"]["reason"] == "not this week" and acts["deny_request"]["detail"]["request"] == rid
+    client.post("/admin/principals/carol", json={"status": "quarantined", "reason": "x"})
+    client.post("/admin/principals/carol/grants", json={"resource": "prod_db", "reason": "y"})
+    acts = {a["action"]: a for a in client.get("/admin/actions", params={"target": "carol"}).json()}
+    assert acts["restrict"]["detail"]["status"] == "quarantined" and "principals" not in acts["restrict"]["detail"]
+    assert acts["grant"]["detail"]["grants"][0]["resource"] == "prod_db"
