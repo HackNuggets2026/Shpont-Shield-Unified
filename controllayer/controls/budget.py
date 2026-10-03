@@ -123,7 +123,7 @@ class BudgetLedger:
                 "requests": u.requests,
                 "tokens": u.tokens,
                 "usd": round(u.usd, 6),
-                "compute_seconds": round(u.compute_seconds, 3),
+                "compute_seconds": round(u.compute_seconds, 6),
                 "tokens_limit": limits.tokens_per_day if limits else None,
                 "usd_limit": limits.usd_per_day if limits else None,
             }
@@ -132,7 +132,7 @@ class BudgetLedger:
         rows += [row("team", t, lim) for t, lim in b.per_team.items()]
         rows += [row("principal", k, b.per_principal) for (s, k, d) in self.usage if s == "principal" and d == day]
         models = [
-            {"model": m, "requests": u.requests, "tokens": u.tokens, "usd": round(u.usd, 6), "compute_seconds": round(u.compute_seconds, 3)}
+            {"model": m, "requests": u.requests, "tokens": u.tokens, "usd": round(u.usd, 6), "compute_seconds": round(u.compute_seconds, 6)}
             for (m, d), u in self.by_model.items()
             if d == day
         ]
