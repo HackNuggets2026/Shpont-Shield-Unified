@@ -164,7 +164,9 @@ def create_app(
 
     app.state.layer = layer
     app.state.store = store
-    app.state.admin_cache = governance.org_api.AdminCache()
+    cache = app.state.admin_cache = governance.org_api.AdminCache()
+    store.listeners.append(cache.clear)
+    layer.risk.listeners.append(cache.clear)
 
     @app.middleware("http")
     async def admin_guard(request: Request, call_next):
@@ -173,9 +175,21 @@ def create_app(
             given = request.headers.get("x-admin-token") or request.query_params.get("token") or ""
             if not hmac.compare_digest(given, token):
                 return JSONResponse({"error": "admin token required"}, status_code=401)
+        path = request.url.path
+        if request.method == "GET" and path in governance.org_api.CACHED_PATHS and cache.ttl > 0:
+            key = (path, tuple(sorted((k, v) for k, v in request.query_params.multi_items() if k != "token")))
+            body = cache.peek(key)
+            if body is not None:
+                return Response(body, media_type="application/json", headers={"x-cache": "hit"})
+            response = await call_next(request)
+            if response.status_code != 200:
+                return response
+            body = b"".join([chunk async for chunk in response.body_iterator])
+            cache.put(key, body)
+            return Response(body, media_type="application/json", headers={"x-cache": "miss"})
         response = await call_next(request)
-        if request.method == "POST" and request.url.path.startswith("/admin"):
-            app.state.admin_cache.clear()  # an admin change shows on the next read, not 15 s later
+        if request.method == "POST" and path.startswith("/admin"):
+            cache.clear()  # an admin change shows on the next read, not 15 s later
         return response
 
     def upstream() -> UpstreamClient:

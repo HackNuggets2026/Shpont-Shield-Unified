@@ -83,7 +83,8 @@ def main() -> None:
 
     def status(who: str) -> None:
         time.sleep(0.3)
-        c = next((p for p in http.get("/admin/principals", headers=admin).json() if p["principal"] == who), {})
+        rows = http.get("/admin/people", params={"q": who}, headers=admin).json()["rows"]
+        c = next((p for p in rows if p["principal"] == who), {})
         print(
             f"   >> {who}: risk {c.get('risk')} ({c.get('level')}), {c.get('status')}, budget x{c.get('budget_scale')}"
         )

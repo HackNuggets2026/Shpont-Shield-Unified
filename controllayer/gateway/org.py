@@ -31,8 +31,17 @@ PEOPLE_SORTS = ("risk", "usd", "tokens", "name")
 STATUSES = ("active", "quarantined", "revoked", "limited")
 
 
+# Aggregate GETs answered from the cache (the whole response body, per query string).
+CACHED_PATHS = frozenset({
+    "/admin/org", "/admin/org/teams", "/admin/org/unit", "/admin/people", "/admin/outliers",
+    "/admin/incidents/summary", "/admin/timeseries", "/admin/adherence", "/admin/usage", "/admin/value",
+    "/admin/overview", "/admin/catalog", "/admin/menu", "/admin/principals",
+})  # fmt: skip
+
+
 class AdminCache:
-    """Aggregate GETs for `ACL_ADMIN_CACHE_SECONDS` (15 s), dropped whenever an admin POST changes something."""
+    """Aggregate GETs for `ACL_ADMIN_CACHE_SECONDS` (15 s). Dropped whenever an admin POST changes something,
+    the policy reloads (an automatic response) or a detection opens an incident."""
 
     def __init__(self, ttl: float | None = None):
         self._ttl = ttl
@@ -63,7 +72,17 @@ class AdminCache:
             self.data[key] = (now, value)
         return value
 
-    def clear(self) -> None:
+    def peek(self, key: Any) -> Any | None:
+        hit = self.data.get(key)
+        return hit[1] if hit and time.monotonic() - hit[0] < self.ttl else None
+
+    def put(self, key: Any, value: Any) -> None:
+        with self.lock:
+            if len(self.data) > 500:
+                self.data.clear()
+            self.data[key] = (time.monotonic(), value)
+
+    def clear(self, *_: Any) -> None:
         with self.lock:
             self.data.clear()
 
@@ -139,14 +158,20 @@ class OrgView:
         }
 
     def risk(self, policy: Policy) -> tuple[dict[str, float], dict[str, int], set[str]]:
-        """Scores, open incidents per person (all time), and the people at risk: an open incident, or a score
-        at or above the alert threshold."""
+        """Scores, open incidents per person (all time), and the people at risk: an open or acknowledged
+        incident, or a score at or above the alert threshold."""
         scores = self.layer.risk.scores(policy)
-        open_ = defaultdict(int)
-        for r in self.usage._q("SELECT principal, COUNT(*) n FROM incidents WHERE status='open' GROUP BY principal"):
-            open_[r["principal"]] = r["n"]
+        open_: dict[str, int] = defaultdict(int)
+        live = set()
+        for r in self.usage._q(
+            "SELECT principal, status, COUNT(*) n FROM incidents WHERE status IN ('open', 'acknowledged')"
+            " GROUP BY principal, status"
+        ):
+            live.add(r["principal"])
+            if r["status"] == "open":
+                open_[r["principal"]] = r["n"]
         alert = policy.detections.response.alert
-        at_risk = {p for p, s in scores.items() if s >= alert} | set(open_)
+        at_risk = {p for p, s in scores.items() if s >= alert} | live
         return scores, open_, at_risk
 
     # ---- per unit ---------------------------------------------------------------------------
@@ -300,23 +325,25 @@ class OrgView:
         growth.sort(key=lambda r: -r["growth"])
         return {"cost": cost[:limit], "risk": risk[:limit], "growth": growth[:limit]}
 
+    def cached_snapshot(self, cache, days: int) -> dict:
+        d = window(days, time.time())[0]
+        return cache(("org-snapshot", d), lambda: self.snapshot(d))
+
 
 def _who(m: dict) -> dict[str, Any]:
     return {"principal": m["principal"], "name": m["name"], "team": m["team"], "department": m["department"]}
 
 
-def register(app: FastAPI, store: PolicyStore, layer: ControlLayer, cached, principal_row) -> OrgView:
-    """`cached(key, fn)` memoizes an aggregate for the TTL; `principal_row(policy, principal_id)` is the
-    per-person row of /admin/principals."""
-    view = OrgView(store, layer)
+def register(app: FastAPI, store: PolicyStore, layer: ControlLayer, cached, principal_row, view: OrgView) -> None:
+    """`cached(key, fn)` memoizes an aggregate for the TTL; `principal_row(policy, principal_id, team, role)` is
+    the per-person row of /admin/principals."""
     usage = layer.usage
 
     def err(msg: str, code: int = 400) -> JSONResponse:
         return JSONResponse({"error": msg}, status_code=code)
 
     def snap(days: int) -> dict:
-        d = window(days, time.time())[0]
-        return cached(("org-snapshot", d), lambda: view.snapshot(d))
+        return view.cached_snapshot(cached, days)
 
     def totals(s: dict) -> dict[str, Any]:
         ev = list(s["events"].values())
@@ -461,8 +488,6 @@ def register(app: FastAPI, store: PolicyStore, layer: ControlLayer, cached, prin
     @app.get("/admin/outliers")
     async def admin_outliers(days: int = 7, limit: int = 10, department: str | None = None, team: str | None = None):
         return view.outliers(snap(days), max(1, min(limit, 100)), department or None, team or None)
-
-    return view
 
 
 def pivot(rows: list[dict[str, Any]], labels: list[str]) -> dict[str, Any]:

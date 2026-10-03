@@ -37,6 +37,14 @@ DAY = 86400.0
 CLASSES = ("consumable", "leasable", "access_grant")
 
 
+def grant_event(usage, pid: str, g: dict[str, Any], by: str) -> None:
+    """A grant in the activity feed."""
+    minutes = round(((g.get("expires") or 0) - (g.get("granted_at") or 0)) / 60, 1) if g.get("expires") else None
+    usage.add_event({"ts": g.get("granted_at"), "source": "admin", "kind": "grant", "principal": pid,
+                     "resource": g["resource"], "workflow": g.get("workflow"), "decision": "approved",
+                     "severity": "low", "detail": {"grant": g["id"], "minutes": minutes, "by": by}})  # fmt: skip
+
+
 def register(
     app: FastAPI,
     store: PolicyStore,
@@ -183,10 +191,45 @@ def register(
             ],
         }
 
+    def with_unit(g: dict[str, Any]) -> dict[str, Any]:
+        person = usage.person(g["principal"]) or {}
+        team = person.get("team")
+        return {**g, "department": usage.department_of(g["principal"], team), "team": team,
+                "name": person.get("name") or g["principal"]}  # fmt: skip
+
     @app.get("/admin/grants")
-    async def admin_grants(live: bool = False):
-        rows = all_grants(store.policy, time.time())
-        return [g for g in rows if g["live"]] if live else rows
+    async def admin_grants(
+        live: bool = False,
+        envelope: bool = False,
+        limit: int = 200,
+        offset: int = 0,
+        department: str | None = None,
+        resource: str | None = None,
+    ):
+        """Every grant, live first. The plain array keeps its shape; `envelope=1` adds paging, filters, a total
+        and a summary: {total, grants, summary: {live, expiring_1h, by_resource}}."""
+        now = time.time()
+        rows = [with_unit(g) for g in all_grants(store.policy, now)]
+        if not envelope:
+            return [g for g in rows if g["live"]] if live else rows
+        live_rows = [g for g in rows if g["live"]]
+        by_resource: dict[str, int] = {}
+        for g in live_rows:
+            by_resource[g["resource"]] = by_resource.get(g["resource"], 0) + 1
+        shown = [g for g in rows if (not live or g["live"]) and (not department or g["department"] == department)
+                 and (not resource or g["resource"] == resource)]  # fmt: skip
+        limit, offset = max(1, min(limit, 1000)), max(0, offset)
+        return {
+            "total": len(shown),
+            "grants": shown[offset : offset + limit],
+            "summary": {
+                "live": len(live_rows),
+                "expiring_1h": sum(1 for g in live_rows if g["expires"] is not None and g["expires"] - now <= 3600),
+                "by_resource": [
+                    {"resource": k, "live": v} for k, v in sorted(by_resource.items(), key=lambda kv: -kv[1])
+                ],
+            },
+        }
 
     @app.post("/admin/principals/{pid}/grants")
     async def admin_grant(pid: str, request: Request):
@@ -195,7 +238,12 @@ def register(
         if not reason:
             return err("a reason is required; it is shown to the employee")
         p = store.policy
-        if pid not in known(p) and pid not in p.principals and not usage.breakdown(["principal"], 0, pid):
+        if (
+            pid not in known(p)
+            and pid not in p.principals
+            and usage.person(pid) is None
+            and not usage.breakdown(["principal"], 0, pid)
+        ):
             return err(f"no such person {pid!r}", 404)
         grants = new_grant(p, pid, body, actor(request), reason)
         if isinstance(grants, str):
@@ -204,6 +252,7 @@ def register(
         if resp.status_code != 200:
             return resp
         g = grants[-1]
+        grant_event(usage, pid, g, actor(request))
         out: dict[str, Any] = {"ok": True, "grant": g}
         asked = body.get("minutes")
         granted = (g["expires"] - g["granted_at"]) / 60
