@@ -96,7 +96,8 @@ def build(policy: Policy, people: int, days: int, seed: int, now: float) -> dict
                     "team": team,
                     "role": role,
                     "cap": round(base * seniority * 2) / 2,
-                    "drive": rng.lognormvariate(0, 0.8),  # how heavily this person uses AI
+                    # How heavily this person uses AI; a few power users run well past their budget.
+                    "drive": rng.lognormvariate(0, 0.8) * (3 if rng.random() < 0.04 else 1),
                 }
             )
     humans = humans[:people]
