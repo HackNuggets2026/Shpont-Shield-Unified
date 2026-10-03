@@ -1,7 +1,9 @@
 import { useMemo, useState, type ReactNode } from "react";
 import { Link, useParams } from "react-router-dom";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient, type UseQueryResult } from "@tanstack/react-query";
 import { admin, type AdminAction } from "../../api";
+import { ops, type OrgFields, type OrgIncident } from "../../opsApi";
+import { countC } from "../../lib/compact";
 import { ReasonDialog } from "../../components/Dialog";
 import { IncidentStatusPill, LevelPill, PersonStatusPill, SeverityPill } from "../../components/pills";
 import { RestrictActions } from "../../components/RestrictActions";
@@ -54,11 +56,85 @@ function Legend({ cls, children }: { cls: string; children: ReactNode }) {
   );
 }
 
+type PeersQ = UseQueryResult<{ rows: OrgIncident[]; total: number | null; hasMore: boolean }>;
+
+/** Is this a one-off or a pattern? Others in the same team and department hit by the same rule in 30 days. */
+function PeersCard({
+  rule,
+  self,
+  incidentId,
+  team,
+  department,
+  teamQ,
+  deptQ,
+  link,
+}: {
+  rule: string;
+  self: string;
+  incidentId: string;
+  team: string;
+  department: string;
+  teamQ: PeersQ;
+  deptQ: PeersQ;
+  link: (p: Record<string, string>) => string;
+}) {
+  if (!team && !department) return null;
+  const others = (q: PeersQ) => (q.data?.rows ?? []).filter((i) => i.principal !== self);
+  const people = (q: PeersQ) => new Set(others(q).map((i) => i.principal)).size;
+  const teamRows = others(teamQ).filter((i) => i.id !== incidentId);
+  // Matching incidents not about this person: the server's total minus this person's rows on the page.
+  const count = (q: PeersQ) => (q.data ? (q.data.total ?? q.data.rows.length) - (q.data.rows.length - others(q).length) : null);
+  const line = (label: string, q: PeersQ, n: number | null, to: string) => (
+    <Link to={to} className="flex items-baseline justify-between gap-3 px-4 py-2 text-xs hover:bg-raised/60">
+      <span className="min-w-0 truncate text-ink2">
+        in <b className="text-ink">{label}</b>
+      </span>
+      <span className="tnum shrink-0 text-muted">
+        {q.isPending ? "…" : q.isError ? "unavailable" : n ? (
+          <>
+            <b className={cx("text-ink", n > 0 && "text-serious")}>{countC(n)}</b> incident{n === 1 ? "" : "s"} · {countC(people(q))}
+            {q.data?.hasMore ? "+" : ""} {people(q) === 1 && !q.data?.hasMore ? "person" : "people"}
+          </>
+        ) : (
+          "nobody else"
+        )}
+      </span>
+    </Link>
+  );
+  return (
+    <Card title={`${ruleLabel(rule)} nearby`} subtitle="Others hit by the same rule in the last 30 days: a one-off, or a pattern?" flush>
+      <div className="divide-y divide-line/60 border-b border-line">
+        {team && line(`team ${team}`, teamQ, count(teamQ), link({ rule, team, ...(department ? { department } : {}) }))}
+        {department && line(department, deptQ, count(deptQ), link({ rule, department }))}
+      </div>
+      {teamRows.length > 0 && (
+        <ul className="divide-y divide-line/60">
+          {teamRows.slice(0, 6).map((o) => (
+            <li key={o.id}>
+              <Link to={`/console/incidents/${encodeURIComponent(o.id)}`} className="flex items-center justify-between gap-2 px-4 py-2 hover:bg-raised/60">
+                <div className="min-w-0">
+                  <div className="truncate text-sm font-medium text-ink">{o.name || o.principal}</div>
+                  <div className="text-[11px] text-muted" title={dateTime(o.ts)}>
+                    {ago(o.ts)} · weight {Math.round(o.weight)}
+                  </div>
+                </div>
+                <div className="flex shrink-0 items-center gap-1">
+                  <SeverityPill severity={o.severity} />
+                  <IncidentStatusPill status={o.status} />
+                </div>
+              </Link>
+            </li>
+          ))}
+        </ul>
+      )}
+    </Card>
+  );
+}
+
 export function IncidentPage() {
   const { id = "" } = useParams();
   const qc = useQueryClient();
   const q = useQuery({ queryKey: ["admin", "incident", id], queryFn: () => admin.incident(id), refetchInterval: 5_000 });
-  const people = useQuery({ queryKey: ["admin", "principals"], queryFn: admin.principals, refetchInterval: 10_000 });
   // Status changes are logged against the incident id, not the person, so the detail endpoint misses them.
   const own = useQuery({ queryKey: ["admin", "actions", id], queryFn: () => admin.actions(id), refetchInterval: 10_000 });
   const pol = useQuery({ queryKey: ["admin", "policy", "detections"], queryFn: detectionPolicy, staleTime: 60_000 });
@@ -67,6 +143,24 @@ export function IncidentPage() {
     queryKey: ["admin", "person", pid, 30],
     queryFn: () => admin.person(pid!, 30),
     enabled: !!pid,
+    refetchInterval: 15_000,
+  });
+  // Org context: the directory fields ride on the incident; the person's profile fills in for older servers.
+  const inc0 = q.data?.incident as OrgIncident | undefined;
+  const pd = person.data as (typeof person.data & OrgFields) | undefined;
+  const team = inc0?.team || pd?.team || "";
+  const department = inc0?.department || pd?.department || "";
+  const rule = inc0?.rule ?? "";
+  const peersTeam = useQuery({
+    queryKey: ["admin", "incidents", "peers", "team", rule, team],
+    queryFn: () => ops.incidents({ rule, team, days: 30, limit: 12 }),
+    enabled: !!rule && !!team,
+    refetchInterval: 15_000,
+  });
+  const peersDept = useQuery({
+    queryKey: ["admin", "incidents", "peers", "dept", rule, department],
+    queryFn: () => ops.incidents({ rule, department, days: 30, limit: 100 }),
+    enabled: !!rule && !!department,
     refetchInterval: 15_000,
   });
   const [next, setNext] = useState<Next | null>(null);
@@ -82,10 +176,29 @@ export function IncidentPage() {
     });
   }, [q.data, own.data]);
 
+  const sec = (p: Record<string, string>) => `/console/security?${new URLSearchParams({ status: "all", ...p })}`;
   const back = (
-    <Link to="/console/security" className="inline-flex items-center gap-1 hover:text-ink">
-      <IconArrowLeft size={12} /> Security
-    </Link>
+    <nav aria-label="Breadcrumb" className="flex flex-wrap items-center gap-1">
+      <Link to="/console/security" className="inline-flex items-center gap-1 hover:text-ink">
+        <IconArrowLeft size={12} /> Security
+      </Link>
+      {department && (
+        <>
+          <span aria-hidden>›</span>
+          <Link to={sec({ department })} className="hover:text-ink" title={`All incidents in ${department}`}>
+            {department}
+          </Link>
+        </>
+      )}
+      {team && (
+        <>
+          <span aria-hidden>›</span>
+          <Link to={sec(department ? { department, team } : { team })} className="hover:text-ink" title={`All incidents in team ${team}`}>
+            {team}
+          </Link>
+        </>
+      )}
+    </nav>
   );
   if (q.isPending)
     return (
@@ -103,7 +216,8 @@ export function IncidentPage() {
     );
 
   const { incident: inc, timeline, principal } = q.data;
-  const row = people.data?.find((r) => r.principal === principal.id);
+  const row = person.data;
+  const who = inc0?.name || principal.id;
   const th = pol.data?.response ?? null;
   const halfLife = pol.data?.half_life_minutes ?? null;
   const live = inc.status === "open" || inc.status === "acknowledged";
@@ -140,9 +254,11 @@ export function IncidentPage() {
         subtitle={
           <span className="flex flex-wrap items-center gap-x-1.5">
             <Link to={`/console/people/${encodeURIComponent(principal.id)}`} className="font-medium text-ink hover:text-accent">
-              {principal.id}
+              {who}
             </Link>
-            {row && <span>· {row.team}</span>}
+            {who !== principal.id && <span className="font-mono text-[11px]">({principal.id})</span>}
+            {team && <span>· {team}</span>}
+            {department && department !== team && <span>· {department}</span>}
             <span title={dateTime(inc.ts)}>
               · {dateTime(inc.ts)} ({ago(inc.ts)})
             </span>
@@ -255,13 +371,14 @@ export function IncidentPage() {
             }
           >
             <div className="mb-1 flex flex-wrap items-center gap-2">
-              <span className="text-base font-semibold text-ink">{principal.id}</span>
+              <span className="text-base font-semibold text-ink">{who}</span>
               <PersonStatusPill status={principal.status} scale={row?.budget_scale} />
               <LevelPill level={principal.level} />
             </div>
             {row && (
               <div className="mb-3 text-xs text-muted">
-                {row.team} · {row.role} · {row.open_incidents} open incident{row.open_incidents === 1 ? "" : "s"}
+                {who !== principal.id && <span className="font-mono">{principal.id} · </span>}
+                {[team, department !== team ? department : "", row.role].filter(Boolean).join(" · ")} · {row.open_incidents} open incident{row.open_incidents === 1 ? "" : "s"}
               </div>
             )}
             <div className="mb-1 text-[11px] font-medium uppercase tracking-wide text-muted">Risk score</div>
@@ -302,7 +419,7 @@ export function IncidentPage() {
             )}
           </Card>
 
-          <Card title={`Other incidents for ${principal.id}`} flush>
+          <Card title={`Other incidents for ${who}`} flush>
             {person.isPending ? (
               <div className="p-4">
                 <Loading rows={3} />
@@ -334,6 +451,17 @@ export function IncidentPage() {
               </ul>
             )}
           </Card>
+
+          <PeersCard
+            rule={inc.rule}
+            self={principal.id}
+            incidentId={inc.id}
+            team={team}
+            department={department}
+            teamQ={peersTeam}
+            deptQ={peersDept}
+            link={sec}
+          />
         </div>
       </div>
 
