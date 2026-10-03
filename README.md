@@ -64,7 +64,7 @@ Security defines a catalog in `policy.yaml` (`resources:`) with who is entitled 
 
 ## Insider risk
 
-Every finding adds points to the person's score, which decays with a 24 h half-life. An agent's points also count half against its owner. At `watch` the person gets a stricter policy (`insider_risk.watch_controls`) and full-text capture. At `restricted` everything is blocked until security clears it. Level changes, blocks while watched and selected categories (exfiltration, malware, leaked keys) raise **silent alerts** to the console, a JSONL file or a SIEM webhook. The employee's response is unchanged. Monitoring itself is disclosed (GDPR, Polish Labour Code art. 22³).
+Every finding adds points to the person's score, which decays with a 24 h half-life. An agent's points also count half against its owner. At `watch` the person gets a stricter policy (`insider_risk.watch_controls`) and full-text capture. At `restricted` everything is blocked. Security can override a person's level in either direction, or leave it on auto (score-based); an agent is never less restricted than its owner. Level changes, blocks while watched and selected categories (exfiltration, malware, leaked keys) raise **silent alerts** to the console, a JSONL file or a SIEM webhook. The employee's response is unchanged. Monitoring itself is disclosed (GDPR, Polish Labour Code art. 22³).
 
 ## Contextual PII (OpenAI Privacy Filter)
 

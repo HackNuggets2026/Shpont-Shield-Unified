@@ -45,14 +45,20 @@ class RiskEngine:
         s, lv = self.score(policy, pid), policy.insider_risk.levels
         return "restricted" if s >= lv.restricted else "watch" if s >= lv.watch else "normal"
 
-    def level(self, policy: Policy, principal: Principal) -> str:
-        """Effective level: the higher of the score-based and the manually set level. An agent is
-        at least as restricted as its owner."""
+    def own_level(self, policy: Policy, pid: str, manual: bool = True) -> str:
+        """A level set by security overrides the score-based one, in either direction."""
+        if manual and pid in self.state.watch:
+            return self.state.watch[pid]["level"]
+        return self.computed_level(policy, pid)
+
+    def level(self, policy: Policy, principal: Principal, manual: bool = True) -> str:
+        """Effective level. An agent is at least as restricted as its owner. `manual=False` gives
+        what the principal's own level would be without its override (the owner's still applies)."""
         if not policy.insider_risk.enabled or not principal.authenticated:
             return "normal"
-        ids = [principal.id] + ([principal.owner] if principal.owner else [])
-        found = [self.computed_level(policy, i) for i in ids]
-        found += [self.state.watch[i]["level"] for i in ids if i in self.state.watch]
+        found = [self.own_level(policy, principal.id, manual)]
+        if principal.owner:
+            found.append(self.own_level(policy, principal.owner))
         return max(found, key=LEVELS.index)
 
     def reset(self, pid: str) -> None:
@@ -162,6 +168,7 @@ class RiskEngine:
                     "score": round(self.score(policy, k.principal), 2),
                     "computed": self.computed_level(policy, k.principal),
                     "manual": self.state.watch.get(k.principal),
+                    "auto": self.level(policy, principal, manual=False),
                     "level": self.level(policy, principal),
                 }
             )

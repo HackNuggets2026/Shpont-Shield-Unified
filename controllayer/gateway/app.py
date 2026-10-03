@@ -851,15 +851,15 @@ def create_app(
 
     @app.post("/admin/risk/{pid}")
     async def risk_set(pid: str, request: Request):
-        """Set a manual floor level (`normal` clears it), and optionally reset the score after review."""
+        """Override the score-based level (`auto` clears the override), optionally resetting the score."""
         body = await _json_object(request)
         level = body.get("level")
-        if level not in ("normal", "watch", "restricted"):
-            raise BadRequest("level must be normal, watch or restricted")
+        if level not in ("auto", "normal", "watch", "restricted"):
+            raise BadRequest("level must be auto, normal, watch or restricted")
         if not any(k.principal == pid for k in store.policy.identity.api_keys.values()):
             return JSONResponse({"error": f"unknown principal {pid!r}"}, status_code=404)
         reason = str(body.get("reason") or "")
-        if level == "normal":
+        if level == "auto":
             layer.state.watch.pop(pid, None)
         else:
             layer.state.watch[pid] = {"level": level, "reason": reason, "at": time.time()}

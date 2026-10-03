@@ -31,7 +31,7 @@ Such decisions are never cached, because expiry depends on time. Reaching a cata
 
 ## Insider risk
 
-`RiskEngine` keeps a decaying score per principal. Points come from each finding's *proposed* action, so shadowed and capped findings still count as intent, plus category weights. Rate limits, outages and auth failures are not evidence. The effective level is the highest of: the score-based level, a manual level set by security, and the owner's level (for agents). The level selects the policy variant (`watch_controls`), turns on raw capture, or blocks (`restricted`). It is part of the verdict cache key.
+`RiskEngine` keeps a decaying score per principal. Points come from each finding's *proposed* action, so shadowed and capped findings still count as intent, plus category weights. Rate limits, outages and auth failures are not evidence. A person's own level is the one security set manually if any (an override, in either direction), otherwise the score-based one. The effective level is the higher of that and, for agents, the owner's effective level. The level selects the policy variant (`watch_controls`), turns on raw capture, or blocks (`restricted`). It is part of the verdict cache key.
 
 ## Contextual PII
 

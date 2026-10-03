@@ -57,15 +57,58 @@ def test_restricted_blocks_everything_until_cleared(client):
     assert r.status_code == 200
     rr = chat(client, "hello")
     assert rr.status_code == 403 and "insider_risk/restricted" in rr.json()["error"]["message"]
-    client.post("/admin/risk/alice", json={"level": "normal", "reset_score": True})
+    client.post("/admin/risk/alice", json={"level": "auto", "reset_score": True})
     assert chat(client, "hello again").status_code == 200
+    assert client.app.state.layer.state.watch == {}
+
+
+def _blocks(client, n, who="alice"):
+    for i in range(n):
+        client.post("/v1/guard", json={"text": f"key AKIAIOSFODNN7EXAM{i:02d}A"}, headers=KEYS[who])
+
+
+def test_manual_level_overrides_a_higher_score(client):
+    _blocks(client, 4)  # 40 points: watch
+    client.post("/admin/risk/alice", json={"level": "normal"})
+    assert guard(client, CARD).json()["action"] == "redact"  # normal policy, not watch_controls
+    row = score(client, "alice")
+    assert (row["computed"], row["auto"], row["level"]) == ("watch", "watch", "normal")
+
+
+def test_manual_level_below_computed_wins(client):
+    _blocks(client, 13)  # 130 points: restricted
+    assert score(client, "alice")["computed"] == "restricted"
+    client.post("/admin/risk/alice", json={"level": "watch"})
+    assert score(client, "alice")["level"] == "watch"
+    assert guard(client, CARD).json()["action"] == "block"  # watch_controls, not restricted's blanket block
+    assert chat(client, "hello").status_code == 200
+
+
+def test_auto_returns_to_the_score_based_level(client):
+    _blocks(client, 4)
+    client.post("/admin/risk/alice", json={"level": "restricted"})
+    assert score(client, "alice")["level"] == "restricted"
+    assert client.post("/admin/risk/alice", json={"level": "auto"}).status_code == 200
+    row = score(client, "alice")
+    assert row["manual"] is None and row["level"] == "watch"
+
+
+def test_agent_override_cannot_go_below_its_owner(client):
+    client.post("/admin/risk/alice", json={"level": "restricted"})
+    client.post("/admin/risk/alice-coder", json={"level": "normal"})
+    r = client.post("/v1/guard", json={"text": "hi"}, headers={"x-api-key": "alice-agent-key"})
+    assert r.status_code == 403
+    row = score(client, "alice-coder")
+    assert (row["auto"], row["level"]) == ("restricted", "restricted")
+    client.post("/admin/risk/alice", json={"level": "normal"})
+    assert client.post("/v1/guard", json={"text": "hi"}, headers={"x-api-key": "alice-agent-key"}).status_code == 200
 
 
 def test_agent_inherits_owner_level_and_owner_shares_agent_risk(client):
     client.post("/admin/risk/alice", json={"level": "restricted"})
     r = client.post("/v1/guard", json={"text": "hi"}, headers={"x-api-key": "alice-agent-key"})
     assert r.status_code == 403
-    client.post("/admin/risk/alice", json={"level": "normal"})
+    client.post("/admin/risk/alice", json={"level": "auto"})
     client.post("/v1/guard", json={"text": "key AKIAIOSFODNN7EXAMPLE"}, headers={"x-api-key": "alice-agent-key"})
     assert score(client, "alice-coder")["score"] == 10
     assert score(client, "alice")["score"] == 5
