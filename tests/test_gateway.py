@@ -2,6 +2,8 @@
 
 import json
 
+import pytest
+
 from .conftest import chat, mcp, reply
 
 
@@ -109,9 +111,16 @@ def test_audit_file_written(client, policy_dir):
     assert json.loads(lines[-1])["principal"] == "alice"
 
 
-def test_dashboard_served(client):
-    r = client.get("/")
-    assert r.status_code == 200 and "<html" in r.text.lower()
+@pytest.mark.parametrize("path", ["/", "/security", "/me"])
+def test_panels_served(client, path):
+    r = client.get(path)
+    assert r.status_code == 200 and "/ui/core.js" in r.text
+
+
+@pytest.mark.parametrize("theme", ["blueprint", "carbon", "primer", "beer", "terminal"])
+def test_theme_assets_served(client, theme):
+    assert client.get(f"/ui/themes/{theme}.js").status_code == 200
+    assert client.get("/ui/core.js").status_code == 200 and client.get("/ui/core.css").status_code == 200
 
 
 def test_admin_endpoints_require_token(client):

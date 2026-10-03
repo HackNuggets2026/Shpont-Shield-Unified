@@ -18,6 +18,7 @@ from typing import Any
 import httpx
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, Response, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 
 from .. import resources
 from ..config import PolicyStore
@@ -30,7 +31,7 @@ from . import broker, mcp_demo
 from .upstream import UpstreamClient
 
 PANELS = Path(__file__).resolve().parent.parent / "dashboard"
-DASHBOARD = PANELS / "index.html"
+PANEL = PANELS / "panel.html"
 
 
 def authenticate_principal(policy: Any, pid: str) -> Principal:
@@ -581,6 +582,9 @@ def create_app(
 
     def employee(request: Request):
         p = authenticate(store.policy, _api_key(request))
+        as_who = request.headers.get("x-acl-as")
+        if not p.authenticated and as_who and store.policy.identity.panel_demo:
+            p = authenticate_principal(store.policy, as_who)
         if not p.authenticated:
             raise HTTPException(401, "sign in with your personal API key")
         if p.kind != "human":
@@ -675,9 +679,22 @@ def create_app(
         ]
         return rows[:limit]
 
+    @app.get("/me/api/people")
+    async def me_people(request: Request):
+        """Who the panel may show: everyone in demo mode, otherwise only the signed-in employee."""
+        humans = [
+            {"principal": k.principal, "team": k.team}
+            for k in store.policy.identity.api_keys.values()
+            if k.kind == "human"
+        ]
+        if store.policy.identity.panel_demo:
+            return {"people": humans}
+        p = employee(request)
+        return {"people": [h for h in humans if h["principal"] == p.id]}
+
     @app.get("/me", response_class=HTMLResponse)
     async def me_page():
-        return (PANELS / "employee.html").read_text()
+        return PANEL.read_text()
 
     # ---- reporting ------------------------------------------------------------
 
@@ -908,7 +925,7 @@ def create_app(
 
     @app.get("/security", response_class=HTMLResponse)
     async def security_page():
-        return DASHBOARD.read_text()
+        return PANEL.read_text()
 
     @app.get("/metrics")
     async def metrics():
@@ -930,7 +947,9 @@ def create_app(
 
     @app.get("/", response_class=HTMLResponse)
     async def dashboard():
-        return DASHBOARD.read_text() if DASHBOARD.exists() else "<p>dashboard not built</p>"
+        return PANEL.read_text()
+
+    app.mount("/ui", StaticFiles(directory=PANELS), name="ui")
 
     return app
 

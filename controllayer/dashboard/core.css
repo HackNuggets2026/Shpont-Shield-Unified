@@ -1,0 +1,10 @@
+/* Layout only; every visual comes from the theme's component library. */
+.acl-grid { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: var(--acl-gap, 16px); }
+.acl-s4 { grid-column: span 4; } .acl-s6 { grid-column: span 6; } .acl-s8 { grid-column: span 8; } .acl-s12 { grid-column: span 12; }
+.acl-grid > div > * { height: 100%; box-sizing: border-box; }
+.acl-scroll { overflow-x: auto; }
+.acl-num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.acl-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 16px 24px; }
+.acl-tools { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.acl-meter { min-width: 90px; }
+@media (max-width: 1100px) { .acl-s4, .acl-s6, .acl-s8 { grid-column: span 12; } }

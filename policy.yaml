@@ -12,6 +12,7 @@ name: acme-corp-default
 
 identity:
   require_auth: true
+  panel_demo: true          # /me shows a "viewing as" switch instead of a sign-in; turn off for real use
   admin_token: ${ACL_ADMIN_TOKEN:-demo-admin-token}   # dashboard: http://127.0.0.1:8787/?token=demo-admin-token
   api_keys:
     dev-alice-key: { principal: alice, team: engineering, role: developer }

@@ -175,3 +175,18 @@ def test_uncapped_resource_may_be_granted_without_expiry(client):
 def test_absurd_grant_hours_rejected(client):
     assert grant(client, resource="build-server", scopes=("exec",), hours=1e306).status_code == 400
     assert client.get("/admin/grants").status_code == 200
+
+
+def test_demo_panel_picks_identity_without_key(client):
+    people = client.get("/me/api/people").json()["people"]
+    assert {"principal": "alice", "team": "engineering"} in people and all(
+        p["principal"] != "alice-coder" for p in people
+    )
+    assert client.get("/me/api/profile", headers={"x-acl-as": "bob"}).json()["principal"] == "bob"
+    assert client.get("/me/api/profile", headers={"x-acl-as": "alice-coder"}).status_code == 403  # agents never
+
+
+def test_without_demo_mode_a_key_is_required(make_client):
+    c = make_client(mutate=lambda p: p["identity"].update(panel_demo=False))
+    assert c.get("/me/api/profile", headers={"x-acl-as": "bob"}).status_code == 401
+    assert c.get("/me/api/people", headers=ALICE).json()["people"] == [{"principal": "alice", "team": "engineering"}]

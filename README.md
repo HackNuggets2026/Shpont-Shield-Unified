@@ -53,8 +53,10 @@ Without Docker, set `ACL_SEMANTIC=ollama ACL_UPSTREAM=ollama` before starting th
 
 | URL | Who | What |
 |---|---|---|
-| `/me` | Employees (sign in with their own key) | Usage, a monitoring notice, recent activity of themselves and their agents, and **company resources**: grant or revoke each of their agents' access to servers, credentials, SaaS and MCP servers, with scope and expiry |
+| `/me` | Employees (their own key; with `identity.panel_demo: true` a "viewing as" switch instead) | Usage, a monitoring notice, recent activity of themselves and their agents, and **company resources**: grant or revoke each of their agents' access to servers, credentials, SaaS and MCP servers, with scope and expiry |
 | `/security` (also `/`) | Security staff (`?token=`) | Posture, threats, controls, budgets, latency, audit trail, **insider risk** (scores, set watch/restricted levels), **silent alerts**, all agent grants (revoke), resource catalog (suspend) |
+
+Both panels come in five looks, each built on a component library: `?theme=blueprint` (default), `carbon`, `primer`, `beer` or `terminal`. There's also a switcher in the header. Each theme is a single file in `controllayer/dashboard/themes/` that implements a few building blocks (card, table, badge, button...) in its library's markup. `core.js` does all the data loading, page composition and actions. The libraries load from jsDelivr.
 
 ## Company resources for agents
 

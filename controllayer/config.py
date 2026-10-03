@@ -43,6 +43,8 @@ class Identity(_Strict):
     api_keys: dict[str, ApiKey] = Field(default_factory=dict)
     # Guards /admin/* and /metrics (header x-admin-token or ?token=). Unset = open, for local demos only.
     admin_token: str | None = None
+    # Demo only: the employee panel picks whom to show (x-acl-as) instead of asking for a key.
+    panel_demo: bool = False
 
 
 class ControlBase(_Strict):
