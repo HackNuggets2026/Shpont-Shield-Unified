@@ -246,3 +246,21 @@ def test_menu_says_workflows_are_paused_for_a_quarantined_or_revoked_person(clie
     client.post("/admin/principals/alice", json={"status": "revoked", "reason": "left"})
     assert client.get("/me/summary", headers=KEYS["alice"]).status_code == 200
     assert menu()["chat_assist"]["why"].startswith("paused: access revoked")
+
+
+def test_person_events_include_the_persisted_stream(make_client):
+    c = make_client()
+    assert chat(c, "my key is AKIAIOSFODNN7EXAMPLE", who="carol").status_code in (200, 403)
+    chat(c, "hello", who="carol")
+    live = c.get("/admin/principals/carol/events", params={"reason": "case 1"}).json()
+    assert live and all(e.get("source") != "stored" for e in live)
+    c2 = make_client()
+    c2.app.state.layer.audit.events.clear()  # seeded history, or a ring that rolled over: only the stream has it
+    after = c2.get("/admin/principals/carol/events", params={"reason": "case 1"}).json()
+    flagged = lambda es: {(e["request_id"], e["direction"]) for e in es if e["action"] != "allow"}  # noqa: E731
+    assert flagged(live) and flagged(after) == flagged(live)  # unmetered allows are not persisted
+    assert all(e["source"] == "stored" and e["text"] is None for e in after)
+    assert any(e["action"] in ("block", "redact") and e["findings"] for e in after)
+    interesting = c2.get("/me/summary", headers=KEYS["carol"]).json()["events"]
+    assert interesting and all(e["action"] != "allow" for e in interesting)
+    assert any(a["action"] == "view_events" for a in c2.get("/admin/actions", params={"target": "carol"}).json())

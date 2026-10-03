@@ -45,6 +45,39 @@ def _day_start(now: float) -> float:
     return calendar.timegm((t.tm_year, t.tm_mon, t.tm_mday, 0, 0, 0))
 
 
+def _audit_shape(e: dict[str, Any], direction: str) -> dict[str, Any]:
+    """A persisted check event in the audit log's shape (its text is not persisted: `text` is None)."""
+    d = e.get("detail") or {}
+    findings = []
+    for f in d.get("findings") or []:
+        head, _, action = str(f).rpartition(":")
+        control, _, category = head.partition("/")
+        findings.append({"control": control, "category": category, "action": action, "proposed": action,
+                         "score": None, "tier": None, "shadow": False, "detail": ""})  # fmt: skip
+    return {
+        "ts": e["ts"],
+        "request_id": e["request_id"],
+        "channel": d.get("channel") or e.get("source"),
+        "direction": direction,
+        "principal": e["principal"],
+        "team": e["team"],
+        "role": None,
+        "model": e.get("model"),
+        "tool": e.get("tool"),
+        "action": e.get("decision"),
+        "status_code": None,
+        "reason": d.get("reason") or "",
+        "policy_version": None,
+        "latency_ms": {},
+        "text_sha256": None,
+        "text": None,
+        "findings": findings,
+        "workflow": e.get("workflow"),
+        "task": e.get("task"),
+        "source": "stored",
+    }
+
+
 def register(
     app: FastAPI,
     store: PolicyStore,
@@ -133,11 +166,22 @@ def register(
         }
 
     def events_of(pid: str, limit: int = 100, interesting: bool = False) -> list[dict]:
-        out = [
+        """One person's policy checks, newest first: the audit ring (with masked text) merged with the
+        persisted event stream, which survives restarts and holds seeded history (no text there)."""
+        ring = [
             e
             for e in reversed(layer.audit.events)
             if e["principal"] == pid and (not interesting or e["action"] != "allow")
         ]
+        seen = {(e["request_id"], e["direction"]) for e in ring}
+        stored = []
+        kinds = [f"check.{d.value}" for d in Direction]
+        for e in usage.events(principal=pid, kind=kinds, limit=limit + len(ring)):
+            direction = e["kind"].removeprefix("check.")
+            if (e["request_id"], direction) in seen or (interesting and e["decision"] == "allow"):
+                continue
+            stored.append(_audit_shape(e, direction))
+        out = sorted([*ring, *stored], key=lambda e: e["ts"], reverse=True)
         return out[:limit]
 
     # ---- admin: usage and forecasts ---------------------------------------------
