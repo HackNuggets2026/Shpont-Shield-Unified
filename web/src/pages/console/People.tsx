@@ -71,7 +71,7 @@ export function PeopleTable({
                 <div className="truncate font-medium text-ink">{r.name || r.principal}</div>
                 <div className="truncate text-xs text-muted">
                   {r.principal}
-                  {r.role ? ` · ${r.role}` : ""}
+                  {r.title || r.role ? ` · ${r.title || r.role}` : ""}
                 </div>
               </td>
               {showTeam && (

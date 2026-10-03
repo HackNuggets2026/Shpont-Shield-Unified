@@ -122,6 +122,7 @@ export interface PersonRow extends PrincipalRow {
   department: string;
   name: string;
   email: string | null;
+  title?: string;
   usd: number;
   tokens: number;
 }
