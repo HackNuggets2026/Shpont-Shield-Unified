@@ -96,9 +96,15 @@
   const SENS = { low: 0, medium: 1, high: 2 };
   const RES_SORT = { name: (r) => r.name.toLowerCase(), sensitivity: (r) => SENS[r.sensitivity] ?? -1, calls: (r) => r.calls, usd: (r) => r.usd, grants: (r) => r.grants.length };
 
-  function grantLines(r) {
-    return r.grants.map((g) => `<div class="f6 no-wrap py-1">${g.active ? "" : h.badge("bad", "inactive") + " "}${h.person(g.agent)} ${h.muted(`of ${h.esc(g.owner || "-")} · ${h.esc(g.scopes.join(", "))} · ${g.expires_at ? "expires " + h.ago(g.expires_at) : "no expiry"}${g.granted_by ? " · by " + h.esc(g.granted_by) : ""}`)}
-      ${h.button("Revoke", `data-act="revoke" data-agent="${h.esc(g.agent)}" data-rid="${h.esc(r.id)}"`, "invisible")}</div>`).join("");
+  const GRANTS_SHOWN = 8;
+
+  // Active grants first, the most recent first; the rest behind "show all" so a 200-grant resource stays short.
+  function grantLines(r, all) {
+    const list = [...r.grants].sort((a, b) => b.active - a.active || (b.granted_at || 0) - (a.granted_at || 0));
+    const more = list.length > GRANTS_SHOWN
+      ? `<div class="f6">${h.link(all ? "show fewer" : `show all ${list.length}`, here({ grants: all ? null : "all" }), "Link--secondary")}</div>` : "";
+    return (all ? list : list.slice(0, GRANTS_SHOWN)).map((g) => `<div class="f6 py-1">${g.active ? "" : h.badge("bad", "inactive") + " "}${h.person(g.agent)} ${h.muted(`of ${h.esc(g.owner || "-")} · ${h.esc(g.scopes.join(", "))} · ${g.expires_at ? "expires " + h.ago(g.expires_at) : "no expiry"}${g.granted_by ? " · by " + h.esc(g.granted_by) : ""}`)}
+      ${h.button("Revoke", `data-act="revoke" data-agent="${h.esc(g.agent)}" data-rid="${h.esc(r.id)}"`, "invisible")}</div>`).join("") + more;
   }
 
   function resourceTable(list, p) {
@@ -112,7 +118,7 @@
         `data-act="suspend" data-rid="${h.esc(r.id)}" data-suspend="${r.suspended ? 0 : 1}"`,
         { disabled: r.suspended_in_policy, title: r.suspended_in_policy ? "Suspended in policy.yaml" : r.suspended ? "Resume: agents may call it again" : "Suspend: every grant stops at once" });
       const grants = r.grants.length
-        ? `<a class="Link--secondary no-wrap" href="${h.esc(here({ open: open ? null : r.id }))}" data-nav>${active} active${r.grants.length > active ? ` · ${r.grants.length - active} inactive` : ""} ${open ? "▴" : "▾"}</a>${open ? grantLines(r) : ""}`
+        ? `<a class="Link--secondary no-wrap" href="${h.esc(here({ open: open ? null : r.id, grants: null }))}" data-nav>${active} active${r.grants.length > active ? ` · ${r.grants.length - active} inactive` : ""} ${open ? "▴" : "▾"}</a>`
         : h.muted("none");
       return [
         `<b>${h.esc(r.name)}</b> ${h.muted(h.esc(r.id))}`,
@@ -129,7 +135,7 @@
     return h.table([{ label: "Resource", sort: "name" }, { label: "Type" }, { label: "Sensitivity", sort: "sensitivity" }, { label: "Scopes" },
       { label: "Per call", num: true }, { label: "Calls", num: true, sort: "calls" }, { label: "Spend", num: true, sort: "usd" },
       { label: "Status" }, { label: "Agent grants", sort: "grants" }], cells,
-    { sort, rowAttrs: (i) => (rows[i].suspended ? 'class="acl-greyed"' : "") });
+    { sort, rowAttrs: (i) => (rows[i].suspended ? 'class="acl-greyed"' : ""), detail: (i) => (p.open === rows[i].id && rows[i].grants.length ? grantLines(rows[i], p.grants === "all") : null) });
   }
 
   ACL.register({
@@ -243,22 +249,22 @@
   const CHANNELS = ["chat", "messages", "mcp", "sdk", "dashboard"];
   const DIRECTIONS = ["input", "output", "tool_call", "tool_result", "tool_description"];
   const FILTERS = ["action", "control", "principal", "channel", "direction", "q"];
-  // Until /admin/events filters channel, direction and q itself (requested), they are applied here too.
-  const LOCAL = ["channel", "direction", "q"];
-  const haystack = (e) => [e.principal, e.owner, e.team, e.tool, e.model, e.reason, ...e.findings.flatMap((f) => [f.control, f.category, f.detail])].join(" ").toLowerCase();
+
+  const eventId = (e) => e.request_id || String(e.ts);
 
   function eventRow(e, p) {
-    const id = e.request_id || String(e.ts), open = p.open === id, n = e.findings.length;
+    const id = eventId(e), open = p.open === id, n = e.findings.length;
     const who = `${h.person(e.principal)} ${h.muted(h.esc(e.team || "") + (e.owner ? " · agent of " + h.esc(e.owner) : ""))}
       <a class="Link--muted f6" href="${h.esc(here({ principal: e.principal }))}" data-nav title="Only ${h.esc(e.principal)}">⊂</a>`;
     const where = `${h.esc(e.channel)}/${h.esc(e.direction)}${e.tool || e.model ? " " + `<span class="text-mono f6 color-fg-muted">${h.esc(e.tool || e.model)}</span>` : ""}`;
     const summary = n
       ? `<a class="Link--secondary no-wrap" href="${h.esc(here({ open: open ? null : id }))}" data-nav>${e.findings.slice(0, 2).map((f) => `${h.esc(f.control)}/${h.esc(f.category)}`).join(", ")}${n > 2 ? ` +${n - 2}` : ""} ${open ? "▴" : "▾"}</a>`
       : h.muted(h.esc(e.reason || "-"));
-    const detail = open ? `<div class="mt-1">${e.reason ? `<div class="f6">${h.esc(e.reason)}</div>` : ""}${e.findings.map((f) => `<div class="f6 mt-1">${h.badge(h.tone(f.action), f.action)} <span class="text-mono">${h.esc(f.control)}/${h.esc(f.category)}</span>${f.shadow ? " " + h.badge("neutral", "shadow") : ""} ${h.muted(h.esc(f.detail || ""))}</div>`).join("")}
-      <div class="f6 color-fg-muted mt-1 text-mono">${h.esc(`request ${e.request_id || "-"} · HTTP ${e.status_code} · policy ${e.policy_version} · ${e.src_ip || ""}`)}</div></div>` : "";
-    return [h.ago(e.ts), h.badge(h.tone(e.action), e.action), who, where, e.latency_ms && e.latency_ms.total != null ? String(e.latency_ms.total) : "", summary + detail];
+    return [h.ago(e.ts), h.badge(h.tone(e.action), e.action), who, where, e.latency_ms && e.latency_ms.total != null ? String(e.latency_ms.total) : "", summary];
   }
+
+  const eventDetail = (e) => `<div>${e.reason ? `<div class="f6">${h.esc(e.reason)}</div>` : ""}${e.findings.map((f) => `<div class="f6 mt-1">${h.badge(h.tone(f.action), f.action)} <span class="text-mono">${h.esc(f.control)}/${h.esc(f.category)}</span>${f.shadow ? " " + h.badge("neutral", "shadow") : ""} ${h.muted(h.esc(f.detail || ""))}</div>`).join("")}
+      <div class="f6 color-fg-muted mt-1 text-mono">${h.esc(`request ${e.request_id || "-"} · HTTP ${e.status_code} · policy ${e.policy_version} · ${e.src_ip || ""}`)}</div></div>`;
 
   function auditToolbar(p, totals) {
     const actions = [{ label: "All", value: "" }, ...ACTIONS.map((a) => ({ label: totals[a] ? `${a} ${h.num(totals[a])}` : a, value: a }))];
@@ -281,13 +287,8 @@
     id: "audit", title: "Audit", tab: true, order: 60, periodic: false, inspection: true,
     async load(ctx) {
       const p = ctx.params, page = Math.max(1, Number(p.page) || 1);
-      const local = LOCAL.some((k) => p[k]);
       const query = Object.fromEntries(FILTERS.map((k) => [k, p[k]]));
-      let rows = await ACL.get(`/admin/events?${qs({ limit: local ? 100000 : page * PER + 1, ...query })}`);
-      if (local) {
-        const q = (p.q || "").toLowerCase();
-        rows = rows.filter((e) => (!p.channel || e.channel === p.channel) && (!p.direction || e.direction === p.direction) && (!q || haystack(e).includes(q)));
-      }
+      const rows = await ACL.get(`/admin/events?${qs({ limit: page * PER + 1, ...query })}`);
       return { page, rows: rows.slice((page - 1) * PER, page * PER), more: rows.length > page * PER };
     },
     render(d, ctx) {
@@ -296,7 +297,7 @@
       const pager = `<div class="d-flex flex-items-center flex-justify-between mt-2 f6">${exports()}
         <span class="acl-tools">${nav("Newer", d.page - 1, d.page <= 1)}<span class="color-fg-muted">page ${d.page}</span>${nav("Older", d.page + 1, !d.more)}</span></div>`;
       const table = d.rows.length ? h.table([{ label: "When" }, { label: "Action" }, { label: "Who" }, { label: "Where" }, { label: "ms", num: true }, { label: "Findings" }],
-        d.rows.map((e) => eventRow(e, p))) : h.empty("No decisions match these filters.");
+        d.rows.map((e) => eventRow(e, p)), { detail: (i) => (p.open === eventId(d.rows[i]) ? eventDetail(d.rows[i]) : null) }) : h.empty("No decisions match these filters.");
       return h.card(`Audit trail${d.rows.length ? `: ${(d.page - 1) * PER + 1}-${(d.page - 1) * PER + d.rows.length}, newest first` : ""}`, auditToolbar(p, totals) + table + pager);
     },
     inputs: {

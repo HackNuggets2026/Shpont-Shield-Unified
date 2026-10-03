@@ -140,7 +140,7 @@ def test_resources_catalog_suspend_resume_and_grants(client):
 
     held = next(r for r in catalog if any(g["active"] for g in r["grants"]))
     page.nav(next(h for h in links(page.html) if f"open={held['id']}" in h))
-    g = next(g for g in held["grants"] if g["active"])
+    g = max((g for g in held["grants"] if g["active"]), key=lambda g: g["granted_at"])  # listed first
     assert f'data-act="revoke" data-agent="{g["agent"]}" data-rid="{held["id"]}"' in page.html
     page.act({"act": "revoke", "agent": g["agent"], "rid": held["id"]})
     assert f"DELETE /admin/grants/{g['agent']}/{held['id']}" in page.requests and not page.errors()
@@ -180,7 +180,8 @@ def test_audit_filters_are_sent_to_the_server_and_narrow_rows(client):
     assert set(re.findall(r'class="Label Label--\w+">(\w+)</span></td>', page.html)) == {"block"}
 
     page.change({"param": "channel"}, "mcp")
-    assert params(page)["channel"] == "mcp" and query(page, "/admin/events?")["channel"] == "mcp"
+    assert params(page)["channel"] == "mcp"
+    assert query(page, "/admin/events?") == {"limit": "51", "action": "block", "channel": "mcp"}
     wheres = re.findall(r"<td class=\"\">(\w+)/\w+", page.html)
     assert wheres and set(wheres) == {"mcp"}
 
@@ -206,9 +207,10 @@ def test_audit_row_expands_its_findings(client):
     page.nav(toggle)
     rid = params(page)["open"]
     ev = next(e for e in client.get("/admin/events?limit=100000").json() if e["request_id"] == rid)
-    assert f"request {rid} · HTTP {ev['status_code']}" in page.html
+    detail = page.html.split('<tr class="acl-detail">', 1)[1].split("</tr>", 1)[0]
+    assert f"request {rid} · HTTP {ev['status_code']}" in detail
     for f in ev["findings"]:
-        assert f'<span class="text-mono">{f["control"]}/{f["category"]}</span>' in page.html
+        assert f'<span class="text-mono">{f["control"]}/{f["category"]}</span>' in detail
 
 
 def try_events(client, pid):
@@ -256,3 +258,13 @@ def test_empty_prompt_is_refused_without_a_call(client):
     page = open_tab(client, "playground")
     page.act({"act": "try"})
     assert "POST /admin/try" not in page.requests and "Type a prompt to check." in page.html
+
+
+def test_a_busy_resource_lists_eight_grants_until_show_all(client):
+    page = open_tab(client, "resources")
+    busy = max(client.get("/admin/analytics/resources").json()["resources"], key=lambda r: len(r["grants"]))
+    assert len(busy["grants"]) > 8
+    page.nav(next(h for h in links(page.html) if f"open={busy['id']}" in h))
+    assert page.html.count('<tr class="acl-detail">') == 1 and page.html.count('data-act="revoke"') == 8
+    page.nav(next(h for h in links(page.html) if "grants=all" in h))
+    assert page.html.count('data-act="revoke"') == len(busy["grants"]) and not page.errors()
