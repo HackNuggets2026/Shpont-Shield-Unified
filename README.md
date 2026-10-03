@@ -32,7 +32,7 @@ The same pipeline runs in both directions. Prompts and tool calls are checked on
 
 ```bash
 python -m venv .venv && .venv/bin/pip install -e '.[dev]'
-.venv/bin/python -m pytest              # full self-test suite, one worker per CPU (~45 s on 2 vCPUs)
+.venv/bin/python -m pytest              # full self-test suite, one worker per CPU (under a minute on 2 vCPUs)
 .venv/bin/python -m pytest -n 0 -x -k people   # in-process, stop at first failure, one area
 .venv/bin/python -m controllayer        # gateway on http://127.0.0.1:8787
 .venv/bin/python demo/agent.py          # scripted agent: benign steps + attacks
