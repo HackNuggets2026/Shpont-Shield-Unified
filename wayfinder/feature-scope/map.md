@@ -4,12 +4,12 @@ Labels: wayfinder:map
 
 ## Destination
 
-Every feature in shpont-shield-mikolaj is marked Keep or Ditch (everything starts as Keep), and every feature marked Explain has been explained, so later sessions know what to delete or hide before the HackYeah demo.
+Every feature in shpont-shield-mikolaj is either kept (its category, area and the feature itself ticked Keep) or dropped (anything left unticked), and everything marked Explain has been explained, so later sessions know what to delete or hide before the HackYeah demo.
 
 ## Notes
 
 - Domain: the Goldman Sachs "AI control layer" brief; 3-minute demo driven by `demo/live.py` on a seeded 5,000-person bank.
-- Review tool: [Shpont Shield feature scope](https://claude.ai/artifact/FnPwnSpKAt1Q88A7LiNAkC). Picks are stored in its `decisions` collection; read them with ArtifactData before resolving tickets.
+- Review tool: [Shpont Shield feature scope](https://claude.ai/artifact/FnPwnSpKAt1Q88A7LiNAkC). Picks are stored in its `nodes` collection (one doc per category, area or feature: keep, explain); read them with ArtifactData before resolving tickets.
 - Teammates cover parts of the space: Shpont-Shield (base guardrails), Shpont-Shield-Redteam (attacks), Shpont-Shield-Behavior (behaviour judging), SzpontShield (prompt checker). Prefer cutting what they already own.
 - Data shapes follow HackNuggets2026/Common-Database (pull first; teammates edit it too).
 - Tracker: local markdown in this folder (no tracker configured; `/setup-matt-pocock-skills` would set one up).
