@@ -153,7 +153,8 @@ _WRITE_SQL = re.compile(
     r"|exec|execute|attach|detach|pragma|vacuum|reindex|analyze|lock|set|reset|comment|refresh|into|use)\b",
     re.IGNORECASE,
 )
-_SQL_NOISE = re.compile(r"--[^\n]*|/\*.*?\*/|'(?:[^']|'')*'|\"(?:[^\"]|\"\")*\"", re.DOTALL)
+# Comments, string literals and the three ways SQLite quotes a name: "x", [x] and `x`.
+_SQL_NOISE = re.compile(r"--[^\n]*|/\*.*?\*/|'(?:[^']|'')*'|\"(?:[^\"]|\"\")*\"|\[[^\]]*\]|`(?:[^`]|``)*`", re.DOTALL)
 _QUERY_SECONDS = 2.0
 _MAX_VALUE_BYTES = 100_000
 _MAX_RESULT_CHARS = 1_000_000

@@ -293,3 +293,22 @@ def test_an_answer_that_is_not_json_is_a_tool_error_not_a_crash(client, monkeypa
     grant(client, "postgres-prod")
     r = call(client, "postgres_query", {"sql": "select 1"})
     assert r["result"]["isError"] and text(r).startswith("PostgreSQL (prod read replica): the answer cannot be sent")
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "select [a'b] from customers; delete from customers where x = '1'",
+        "select `a'b` from customers; delete from customers where x = '1'",
+        "select \"a'b\" from customers; delete from customers where x = '1'",
+    ],
+)
+def test_a_quote_inside_a_quoted_name_does_not_hide_a_second_statement(sql):
+    with pytest.raises(services.ServiceError, match="send exactly one statement"):
+        services.read_only_sql(sql, "pg")
+
+
+def test_keywords_in_quoted_names_are_names(client):
+    grant(client, "postgres-prod")
+    r = call(client, "postgres_query", {"sql": 'select 1 as [delete], 2 as `drop`, 3 as "into"'})
+    assert json.loads(text(r))["rows"] == [{"delete": 1, "drop": 2, "into": 3}]
