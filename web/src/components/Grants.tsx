@@ -46,8 +46,9 @@ export function GrantsTable({
               return (
                 <tr key={`${g.principal}-${g.id}`} className={live ? "" : "opacity-55"}>
                   <td>
-                    <div className="font-medium text-ink">{g.title ?? g.resource}</div>
-                    {g.title && g.title !== g.resource && <div className="font-mono text-[11px] text-muted">{g.resource}</div>}
+                    <div className="font-medium text-ink" title={g.resource}>
+                      {g.title ?? g.resource}
+                    </div>
                   </td>
                   {showPerson && (
                     <td>
