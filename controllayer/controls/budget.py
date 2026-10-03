@@ -109,7 +109,7 @@ class BudgetLedger:
         cache_write_tokens: int = 0,
         cache_read_tokens: int = 0,
     ) -> float:
-        """Charge one completion. Cached prompt tokens count toward token budgets like any input."""
+        """Cached prompt tokens count toward token budgets like any input."""
         pricing = policy.budgets.pricing
         # Exact name first, then glob keys, so a model admitted by an allowlist glob is still priced.
         price = pricing.get(model) or next((p for pat, p in pricing.items() if fnmatch(model, pat)), None)

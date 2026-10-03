@@ -159,7 +159,6 @@ def message_events(msg: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
 
 
 async def sse_events(lines: AsyncIterator[str]) -> AsyncIterator[tuple[str, dict[str, Any]]]:
-    """Parse a server-sent event stream into (event, data) pairs."""
     event, data = "", []
     async for line in lines:
         if line == "":
