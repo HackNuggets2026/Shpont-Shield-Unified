@@ -101,15 +101,18 @@ class HeuristicBackend:
 
 
 class ScriptedBackend:
-    """Test double: returns the probability for the first matching rule, else a default."""
+    """Test double: first rule whose needle occurs in the content wins.
+
+    Rule values are P(yes) for noul questions and the chosen option for choice questions.
+    """
 
     name = "scripted"
 
     def __init__(
         self,
-        rules: dict[str, list[tuple[str, float]]] | None = None,
+        rules: dict[str, list[tuple[str, float | str]]] | None = None,
         default: float = 0.02,
-        per_model: dict[str, dict[str, list[tuple[str, float]]]] | None = None,
+        per_model: dict[str, dict[str, list[tuple[str, float | str]]]] | None = None,
     ):
         self.rules = rules or {}
         self.per_model = per_model or {}
@@ -125,11 +128,11 @@ class ScriptedBackend:
         rules = self.per_model.get(model, self.rules)
         answers = {}
         for name, q in questions.items():
-            p = next((p for needle, p in rules.get(name, []) if needle in text), self.default)
+            hit = next((v for needle, v in rules.get(name, []) if needle in text), None)
             if q["type"] == "noul":
+                p = self.default if hit is None else float(hit)
                 answers[name] = Answer("noul", p, confidence=_noul_confidence(p))
             else:
-                options = list(q["criteria"])
-                chosen = options[0] if p < 0.5 else options[-1]
-                answers[name] = Answer("choice", max(p, 1 - p), chosen, {}, 0.9)
+                chosen = hit if isinstance(hit, str) else next(iter(q["criteria"]))
+                answers[name] = Answer("choice", 0.9, chosen, {chosen: 0.9}, 0.9)
         return DecisionResult(answers, len(text) // 4)

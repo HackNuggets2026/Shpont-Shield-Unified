@@ -75,6 +75,8 @@ class BudgetLedger:
     def _loop_check(self, ctx: Context, policy: Policy, now: float) -> list[Finding]:
         g = policy.budgets.loop_guard
         sig = hashlib.sha256(f"{ctx.principal.id}|{ctx.direction.value}|{ctx.tool}|{ctx.text}".encode()).hexdigest()
+        if len(self._calls) > 50_000:  # unique prompts would otherwise grow this map forever
+            self._calls = defaultdict(deque, {k: q for k, q in self._calls.items() if q and now - q[-1] <= g.window_seconds})
         q = self._calls[sig]
         while q and now - q[0] > g.window_seconds:
             q.popleft()
