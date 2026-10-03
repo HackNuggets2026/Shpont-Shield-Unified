@@ -12,7 +12,7 @@ import httpx
 
 from .audit import AuditLog
 from .config import Policy, PolicyStore
-from .controls import access, signatures
+from .controls import access, pii_model, signatures
 from .controls.budget import BudgetLedger
 from .controls.patterns import pii, redact, secrets
 from .controls.semantic import SemanticGuard
@@ -36,6 +36,9 @@ class ControlLayer:
         self.store = store
         self.state = state or StateStore(store.base_dir / "data" / "state.json")
         self.risk = RiskEngine(self.state, store.base_dir, http)
+        self.http = http
+        self._pii: pii_model.Detector | None = None
+        self._pii_key: tuple | None = None
         self._fixed_backend = backend
         self._backend_key: tuple | None = None
         self._backend: DecisionBackend | None = backend
@@ -73,6 +76,13 @@ class ControlLayer:
             tp = p.for_team(team)
             self._team_cache[key] = tp.with_overrides(p.insider_risk.watch_controls) if watched else tp
         return self._team_cache[key]
+
+    def pii_detector(self, policy: Policy) -> pii_model.Detector | None:
+        cfg = policy.pii_model
+        key = (cfg.backend, cfg.url, cfg.timeout_seconds)
+        if key != self._pii_key:
+            self._pii, self._pii_key = pii_model.detector_for(policy, self.http), key
+        return self._pii
 
     def backend(self, policy: Policy) -> DecisionBackend:
         if self._fixed_backend:
@@ -148,7 +158,14 @@ class ControlLayer:
             return self._seen[key]
         verdict = await self._evaluate(ctx, extra, semantic=semantic)
         # Budget and engine-failure outcomes depend on the moment, not the content: never cached.
-        if cacheable and not any(f.control in ("budget", "semantic_engine") for f in verdict.findings):
+        # Never cached: budget and outage outcomes (they depend on the moment) and masked verdicts
+        # (their placeholders belong to one request's numbering).
+        transient = {"budget", "semantic_engine"}
+        if (
+            cacheable
+            and not verdict.mask_map
+            and not any(f.control in transient or f.category == "detector_unavailable" for f in verdict.findings)
+        ):
             self._seen[key] = verdict
             if len(self._seen) > 10_000:
                 self._seen.popitem(last=False)
@@ -183,6 +200,10 @@ class ControlLayer:
             findings += signatures.check(ctx, policy.signatures, self.feed)
             t = lap("deterministic", t)
 
+        if inspect and not _blocked(findings):
+            findings += await pii_model.check(ctx, policy, self.pii_detector(policy))
+            t = lap("pii_model", t)
+
         extra = dict(extra or {})
         # Deterministic block already decided the outcome; skip the model call.
         if inspect and semantic and not _blocked(findings):
@@ -201,7 +222,16 @@ class ControlLayer:
             }
 
         latency["total"] = (time.perf_counter() - t_start) * 1000
-        verdict = _decide(ctx, findings, policy.version, latency)
+        if inspect:
+            semantic_backend = self.backend(policy) if policy.semantic.backend != "off" else None
+            findings = await pii_model.apply_overrides(ctx, policy, findings, semantic_backend)
+        # Masks can only be put back where a reply returns to the same caller: chat input.
+        reversible = (
+            frozenset(policy.pii_model.reversible)
+            if ctx.channel == "chat" and ctx.direction is Direction.INPUT
+            else frozenset()
+        )
+        verdict = _decide(ctx, findings, policy.version, latency, reversible)
         raw = level != "normal" and policy.insider_risk.watch_capture_raw
         self.audit.record(ctx, verdict, extra, raw=raw)
         self.risk.observe(policy, ctx, verdict, level)
@@ -259,9 +289,13 @@ def _blocked(findings: list[Finding]) -> bool:
     return any(f.action is Action.BLOCK for f in findings)
 
 
-def _decide(ctx: Context, findings: list[Finding], version: str, latency: dict[str, float]) -> Verdict:
+def _decide(
+    ctx: Context, findings: list[Finding], version: str, latency: dict[str, float], reversible: frozenset[str]
+) -> Verdict:
     action = max((f.action for f in findings), key=lambda a: a.rank, default=Action.ALLOW)
     text = ctx.text
+    mask_map = ctx.mask_map if ctx.mask_map is not None else {}
+    before = dict(mask_map)
     status, reason = 200, ""
     if action is Action.BLOCK:
         blocker = next(f for f in findings if f.action is Action.BLOCK)
@@ -275,8 +309,9 @@ def _decide(ctx: Context, findings: list[Finding], version: str, latency: dict[s
             names = ",".join(sorted({f.control for f in redacting if not f.spans}))
             text = f"[REDACTED:{names}]"
         else:
-            text = redact(text, [s for f in redacting for s in f.spans])
+            text = redact(text, [s for f in redacting for s in f.spans], reversible, mask_map)
         reason = "; ".join(f"{f.control}/{f.category}" for f in redacting)
     elif action is Action.WARN:
         reason = "; ".join(f"{f.control}/{f.category}" for f in findings if f.action is Action.WARN)
-    return Verdict(action, text, findings, ctx.request_id, version, latency, status, reason)
+    added = {k: v for k, v in mask_map.items() if k not in before}
+    return Verdict(action, text, findings, ctx.request_id, version, latency, status, reason, mask_map=added)

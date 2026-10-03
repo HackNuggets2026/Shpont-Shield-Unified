@@ -59,6 +59,8 @@ class Context:
     resource: str | None = None  # catalog id when the call uses a brokered company resource
     scope: str | None = None
     pii_override: str | None = None  # reason given with x-pii-override
+    # Shared by all messages of one chat request so placeholders are numbered consistently.
+    mask_map: dict[str, str] | None = None
     request_id: str = field(default_factory=lambda: uuid.uuid4().hex[:16])
 
 

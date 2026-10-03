@@ -164,12 +164,23 @@ def create_app(
         warnings: list[str] = []
         metered_ctx: Context | None = None
         last = len(messages) - 1
+        mask_map: dict[str, str] = {}  # placeholder -> original, restored into the reply
+        override = request.headers.get("x-pii-override")
         for i, m in enumerate(messages):
             direction = Direction.TOOL_RESULT if m.get("role") == "tool" else Direction.INPUT
             metered = i == last and direction is Direction.INPUT
             content = m.get("content")
             text = _text(content)
-            ctx = Context(principal, direction, text, model=model, channel="chat", metered=metered)
+            ctx = Context(
+                principal,
+                direction,
+                text,
+                model=model,
+                channel="chat",
+                metered=metered,
+                pii_override=override,
+                mask_map=mask_map,
+            )
             v = await layer.evaluate(ctx)
             if v.blocked:
                 return _policy_error(v)
@@ -281,6 +292,9 @@ def create_app(
         content, finish = (ov.text if ov.action is Action.REDACT else completion.content), "stop"
         if ov.blocked:
             content, finish = f"[Response withheld by policy: {ov.reason}]", "content_filter"
+        else:
+            for placeholder, original in mask_map.items():  # the employee sees their own data again
+                content = content.replace(placeholder, original)
         if ov.action is Action.WARN:
             warnings.append(ov.reason)
 
@@ -484,6 +498,7 @@ def create_app(
             principal,
             direction,
             _text(body.get("text", "")),
+            pii_override=request.headers.get("x-pii-override"),
             model=body.get("model"),
             tool=body.get("tool"),
             channel="sdk",

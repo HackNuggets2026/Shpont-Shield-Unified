@@ -106,8 +106,12 @@ pii = PatternDetector("pii", PII)
 secrets = PatternDetector("secrets", SECRETS)
 
 
-def redact(text: str, spans: list[Span]) -> str:
-    """Replace spans right-to-left; overlapping spans are merged."""
+def redact(text: str, spans: list[Span], reversible: frozenset[str] = frozenset(), mask_map: dict | None = None) -> str:
+    """Replace spans right-to-left; overlapping spans are merged.
+
+    Labels in `reversible` become numbered placeholders (`<PRIVATE_PERSON_1>`) recorded in
+    `mask_map`; the same value always gets the same placeholder within one map.
+    """
     merged: list[Span] = []
     for s in sorted(spans, key=lambda s: s.start):
         if merged and s.start < merged[-1].end:
@@ -115,6 +119,19 @@ def redact(text: str, spans: list[Span]) -> str:
             merged[-1] = Span(last.start, max(last.end, s.end), last.label)
         else:
             merged.append(s)
+    out = text
     for s in reversed(merged):
-        text = text[: s.start] + f"[REDACTED:{s.label}]" + text[s.end :]
-    return text
+        out = out[: s.start] + _replacement(text[s.start : s.end], s.label, reversible, mask_map) + out[s.end :]
+    return out
+
+
+def _replacement(value: str, label: str, reversible: frozenset[str], mask_map: dict | None) -> str:
+    if label not in reversible or mask_map is None:
+        return f"[REDACTED:{label}]"
+    for ph, orig in mask_map.items():
+        if orig == value and ph.startswith(f"<{label.upper()}_"):
+            return ph
+    n = 1 + sum(ph.startswith(f"<{label.upper()}_") for ph in mask_map)
+    ph = f"<{label.upper()}_{n}>"
+    mask_map[ph] = value
+    return ph
