@@ -1,8 +1,12 @@
-"""In-process demo MCP server: ordinary tools, a poisoned tool and documents carrying attacks."""
+"""In-process demo MCP server: ordinary tools, a poisoned tool, documents carrying attacks, and
+simulator/VM tools that stand in for argent-style device control (leased and metered by the gateway)."""
 
 from __future__ import annotations
 
+import secrets
 from typing import Any
+
+RUNNING: dict[str, str] = {}  # handle -> what it is
 
 TOOLS = [
     {
@@ -34,6 +38,34 @@ TOOLS = [
         "name": "run_tests",
         "description": "Run the project's test suite.",
         "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "boot_simulator",
+        "description": "Boot an iOS simulator and return its id.",
+        "inputSchema": {"type": "object", "properties": {"device": {"type": "string"}}},
+    },
+    {
+        "name": "simulator_tap",
+        "description": "Tap a point on a running simulator.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"id": {"type": "string"}, "x": {"type": "number"}, "y": {"type": "number"}},
+        },
+    },
+    {
+        "name": "shutdown_simulator",
+        "description": "Shut down a simulator.",
+        "inputSchema": {"type": "object", "properties": {"id": {"type": "string"}}},
+    },
+    {
+        "name": "create_vm",
+        "description": "Create a sandbox VM and return its id.",
+        "inputSchema": {"type": "object", "properties": {"size": {"type": "string"}}},
+    },
+    {
+        "name": "destroy_vm",
+        "description": "Destroy a sandbox VM.",
+        "inputSchema": {"type": "object", "properties": {"id": {"type": "string"}}},
     },
     {
         "name": "get_weather",
@@ -70,6 +102,21 @@ def call(name: str, args: dict[str, Any]) -> str:
         return "42 passed"
     if name == "get_weather":
         return f"Sunny in {args.get('city')}"
+    if name in ("boot_simulator", "create_vm"):
+        prefix, what = (
+            ("sim", args.get("device") or "iPhone 16")
+            if name == "boot_simulator"
+            else ("vm", args.get("size") or "small")
+        )
+        handle = f"{prefix}-{secrets.token_hex(3)}"
+        RUNNING[handle] = str(what)
+        return f"started {handle} ({what})"
+    if name == "simulator_tap":
+        if args.get("id") not in RUNNING:
+            return f"no simulator {args.get('id')}"
+        return f"tapped ({args.get('x')}, {args.get('y')}) on {args.get('id')}"
+    if name in ("shutdown_simulator", "destroy_vm"):
+        return f"stopped {args.get('id')}" if RUNNING.pop(str(args.get("id")), None) else f"no such id {args.get('id')}"
     raise KeyError(name)
 
 

@@ -27,6 +27,19 @@ class AuditLog:
         self.by_principal: Counter[str] = Counter()
         self.latency: dict[str, deque[float]] = {}
         self.total = 0
+        self._reload_tail()
+
+    def _reload_tail(self) -> None:
+        """Refill the event ring from the audit file, so dashboards keep recent history across restarts.
+        Counters start again from zero; the file is the complete record."""
+        if not (self.path and self.path.exists()):
+            return
+        with self.path.open() as fh:
+            for line in deque(fh, maxlen=self.events.maxlen):
+                try:
+                    self.events.append(json.loads(line))
+                except ValueError:
+                    continue  # a line cut short by a crash
 
     def record(self, ctx: Context, v: Verdict, extra: dict[str, Any] | None = None) -> dict[str, Any]:
         event = {

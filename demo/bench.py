@@ -41,6 +41,7 @@ def _client(gateway: str | None) -> httpx.AsyncClient:
     shutil.copytree(ROOT / "feeds", tmp / "feeds")
     policy = yaml.safe_load((ROOT / "policy.yaml").read_text())
     policy["budgets"]["enabled"] = False
+    policy["detections"]["response"]["auto"] = False  # scripted attacks must not quarantine the bench principals
     (tmp / "policy.yaml").write_text(yaml.safe_dump(policy))
     app = create_app(tmp / "policy.yaml", watch=False)
     return httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://bench", headers=headers)

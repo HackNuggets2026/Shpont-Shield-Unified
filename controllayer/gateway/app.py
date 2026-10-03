@@ -24,7 +24,7 @@ from ..controls.access import authenticate
 from ..decision import DecisionBackend
 from ..engine import ControlLayer, flatten
 from ..types import Action, Context, Direction, Verdict
-from . import mcp_demo
+from . import governance, mcp_demo
 from .upstream import UpstreamClient
 
 DASHBOARD = Path(__file__).resolve().parent.parent / "dashboard" / "index.html"
@@ -94,14 +94,49 @@ def create_app(
     layer = ControlLayer(store, backend=backend)
     http = upstream_client or httpx.AsyncClient(timeout=120)
 
+    async def mcp_forward(target: str, r: dict) -> dict:
+        if target == "builtin":
+            return mcp_demo.handle(r)
+        resp = await http.post(target, json=r, headers={"accept": "application/json"})
+        data = resp.json()
+        if not isinstance(data, dict):
+            raise ValueError("MCP server returned a non-object")
+        return data
+
+    async def reclaim(lease: dict, reason: str) -> bool:
+        """Stop a leased resource through its MCP server, then close the lease. False if it cannot be stopped."""
+        policy = store.policy
+        req = layer.leases.reclaim_request(lease, policy)
+        target = policy.upstream.mcp_servers.get(lease["server"] or "")
+        if req is None or target is None:
+            return False
+        try:
+            resp = await mcp_forward(target, req)
+        except (httpx.HTTPError, ValueError) as e:
+            logging.getLogger(__name__).error("reclaim of %s failed: %s", lease["id"], e)
+            return False
+        if "error" in resp:
+            return False
+        layer.leases.close(lease["id"], policy, reason)
+        return True
+
+    app_reclaim = reclaim
+
     async def background() -> None:
-        last_feed = time.monotonic()
+        last_feed = last_sweep = time.monotonic()
         while True:
             await asyncio.sleep(1)
             try:
                 store.poll()
             except Exception:  # noqa: BLE001 - the watcher must survive anything a bad edit throws
                 logging.getLogger(__name__).exception("policy poll failed")
+            if time.monotonic() - last_sweep >= 10:
+                last_sweep = time.monotonic()
+                try:
+                    for lease in layer.leases.sweep(store.policy):
+                        await reclaim(lease, "reclaimed: " + ",".join(lease["flags"]))
+                except Exception:  # noqa: BLE001 - a sweep failure must not stop the policy watcher
+                    logging.getLogger(__name__).exception("lease sweep failed")
             if time.monotonic() - last_feed >= store.policy.signatures.refresh_seconds:
                 last_feed = time.monotonic()
                 try:
@@ -137,6 +172,21 @@ def create_app(
     def upstream() -> UpstreamClient:
         return UpstreamClient(store.policy.upstream, http)
 
+    def attribution(request: Request, principal) -> dict[str, Any]:
+        """Workflow, task and session from the x-acl-* headers; a session keeps its declared workflow."""
+        h = request.headers
+        wf = (h.get("x-acl-workflow") or "").strip() or None
+        attrs: dict[str, Any] = {
+            "workflow": wf,
+            "workflow_source": "declared" if wf else None,
+            "task_id": (h.get("x-acl-task") or "").strip()[:200] or None,
+            "session_id": (h.get("x-acl-session") or "").strip()[:200] or None,
+            "client": f"{request.client.host if request.client else '?'}|{h.get('user-agent', '')[:80]}",
+        }
+        ctx = layer.attribute(Context(principal, Direction.INPUT, "", **attrs))
+        attrs.update(workflow=ctx.workflow, workflow_source=ctx.workflow_source)
+        return attrs
+
     # ---- agent/app -> model -------------------------------------------------
 
     @app.post("/v1/chat/completions")
@@ -150,6 +200,16 @@ def create_app(
         if model is not None and not isinstance(model, str):
             raise BadRequest("model must be a string")
         messages = [dict(m) for m in messages]
+        attrs = attribution(request, principal)
+
+        # Past the downgrade threshold of a budget, a cheaper model answers instead of a refusal.
+        downgraded_from = None
+        if principal.authenticated and isinstance(model, str):
+            probe = Context(principal, Direction.INPUT, "", model=model, channel="chat", **attrs)
+            cheaper = layer.ledger.downgrade(probe, layer.policy_for(principal.team), model)
+            if cheaper:
+                downgraded_from, model = model, cheaper
+                body = {**body, "model": model}
 
         # The client owns the history and can forge any of it, so every message, every field of it,
         # and the declared tools are inspected on every call. Repeats hit the engine's verdict cache;
@@ -162,7 +222,7 @@ def create_app(
             metered = i == last and direction is Direction.INPUT
             content = m.get("content")
             text = _text(content)
-            ctx = Context(principal, direction, text, model=model, channel="chat", metered=metered)
+            ctx = Context(principal, direction, text, model=model, channel="chat", **attrs, metered=metered)
             v = await layer.evaluate(ctx)
             if v.blocked:
                 return _policy_error(v)
@@ -170,6 +230,8 @@ def create_app(
                 warnings.append(v.reason)
             if metered:
                 metered_ctx = ctx
+                # The classifier may have attributed an unlabeled prompt; the reply and costs follow it.
+                attrs.update(workflow=ctx.workflow, workflow_source=ctx.workflow_source)
             if v.action is Action.REDACT:
                 if isinstance(content, str):
                     m["content"] = v.text
@@ -189,7 +251,9 @@ def create_app(
             if isinstance(content, list):
                 parts = [{k: val for k, val in p.items() if k != "text"} if _is_text_part(p) else p for p in content]
             if rest or parts:
-                rctx = Context(principal, direction, flatten([rest, parts]), model=model, channel="chat", metered=False)
+                rctx = Context(
+                    principal, direction, flatten([rest, parts]), model=model, channel="chat", **attrs, metered=False
+                )
                 rv = await layer.evaluate(rctx)
                 if rv.blocked:
                     return _policy_error(rv)
@@ -208,7 +272,13 @@ def create_app(
             kept = []
             for tool in declared:
                 tctx = Context(
-                    principal, Direction.TOOL_DESCRIPTION, flatten(tool), model=model, channel="chat", metered=False
+                    principal,
+                    Direction.TOOL_DESCRIPTION,
+                    flatten(tool),
+                    model=model,
+                    channel="chat",
+                    **attrs,
+                    metered=False,
                 )
                 tv = await layer.evaluate(tctx)
                 if tv.blocked:
@@ -224,7 +294,7 @@ def create_app(
             body = {**body, key: kept}
         if metered_ctx is None:  # turn ends in a tool result, already inspected: gates and budgets still apply
             metered_ctx = Context(
-                principal, Direction.INPUT, _text(messages[-1].get("content")), model=model, channel="chat"
+                principal, Direction.INPUT, _text(messages[-1].get("content")), model=model, channel="chat", **attrs
             )
             v = await layer.gate(metered_ctx)
             if v.blocked:
@@ -234,7 +304,7 @@ def create_app(
         # roles, anything a future API adds) gets the deterministic detectors before it leaves.
         outgoing = {**body, "messages": messages}
         sv = await layer.evaluate(
-            Context(principal, Direction.INPUT, flatten(outgoing), model=model, channel="chat", metered=False),
+            Context(principal, Direction.INPUT, flatten(outgoing), model=model, channel="chat", **attrs, metered=False),
             semantic=False,
         )
         if sv.blocked:
@@ -266,6 +336,7 @@ def create_app(
             completion.content,
             model=model,
             channel="chat",
+            **attrs,
             request_id=metered_ctx.request_id,
         )
         ov = await layer.evaluate(
@@ -292,9 +363,15 @@ def create_app(
                 "input_request_id": metered_ctx.request_id,
                 "output_action": ov.action.value,
                 "warnings": warnings,
+                "workflow": metered_ctx.workflow,
+                "workflow_source": metered_ctx.workflow_source,
+                "usd": round(cost, 6),
+                **({"downgraded_from": downgraded_from} if downgraded_from else {}),
             },
         }
         headers = {"x-control-request-id": metered_ctx.request_id, "x-control-action": ov.action.value}
+        if downgraded_from:
+            headers["x-control-downgraded-from"] = downgraded_from
         if body.get("stream"):
             # The full reply must be inspected before release, so it is sent as a single chunk.
             chunk = {
@@ -327,6 +404,7 @@ def create_app(
         if not isinstance(method, str) or not isinstance(params, dict):
             return rpc(rid, -32600, "invalid request")
         principal = authenticate(store.policy, _api_key(request))
+        attrs = attribution(request, principal)
         target = store.policy.upstream.mcp_servers.get(server)
         if target is None:
             return rpc(rid, -32004, f"unknown MCP server {server!r}")
@@ -336,23 +414,17 @@ def create_app(
                 rid, -32001, f"blocked by policy: {v.reason}", {"request_id": v.request_id, "action": v.action.value}
             )
 
-        async def forward(r: dict) -> dict:
-            if target == "builtin":
-                return mcp_demo.handle(r)
-            resp = await http.post(target, json=r, headers={"accept": "application/json"})
-            data = resp.json()
-            if not isinstance(data, dict):
-                raise ValueError("MCP server returned a non-object")
-            return data
-
         name: str | None = None
+        call_ctx: Context | None = None
         request_id: str | None = None
         if method == "tools/call":
             name, args = params.get("name"), params.get("arguments") or {}
             if not isinstance(name, str) or not isinstance(args, dict):
                 return rpc(rid, -32602, "tools/call needs a string name and object arguments")
             # All of params (name, _meta, ...), not only the arguments, reaches the server.
-            ctx = Context(principal, Direction.TOOL_CALL, flatten(params), tool=name, tool_args=args, channel="mcp")
+            ctx = Context(
+                principal, Direction.TOOL_CALL, flatten(params), tool=name, tool_args=args, channel="mcp", **attrs
+            )
             v = await layer.evaluate(ctx, {"server": server})
             if v.blocked:
                 return blocked(v)
@@ -362,10 +434,11 @@ def create_app(
                     return blocked(v)  # cannot be cut out of the call, so it cannot go ahead
                 req = {**req, "params": cleaned}
             request_id = ctx.request_id
+            call_ctx = ctx
         elif method not in ("initialize", "tools/list"):
             # resources/read, prompts/get, ...: their params reach the server too (and gates apply).
             # Not metered: pings, notifications and reads are protocol traffic, not tool spend.
-            ctx = Context(principal, Direction.TOOL_CALL, flatten(params), channel="mcp", metered=False)
+            ctx = Context(principal, Direction.TOOL_CALL, flatten(params), channel="mcp", **attrs, metered=False)
             v = await layer.evaluate(ctx, {"server": server, "method": method})
             if v.blocked:
                 return blocked(v)
@@ -376,13 +449,17 @@ def create_app(
                 req = {**req, "params": cleaned}
             request_id = ctx.request_id
         elif not principal.authenticated and store.policy.identity.require_auth:
-            return blocked(await layer.evaluate(Context(principal, Direction.TOOL_CALL, "", channel="mcp")))
+            return blocked(await layer.evaluate(Context(principal, Direction.TOOL_CALL, "", channel="mcp", **attrs)))
 
         try:
-            resp = await forward(req)
+            resp = await mcp_forward(target, req)
         except (httpx.HTTPError, ValueError) as e:
             return rpc(rid, -32002, f"MCP server unavailable: {type(e).__name__}: {e}")
         result = resp.get("result")
+        if call_ctx is not None and isinstance(result, dict) and not result.get("isError"):
+            # Simulators, VMs, browsers: open, touch or close the lease this call stands for.
+            args = req["params"].get("arguments") or {}
+            layer.leases.after_call(call_ctx, store.policy, server, args, flatten(result))
         if not isinstance(result, dict) or method == "initialize":
             return JSONResponse(resp)
 
@@ -393,7 +470,7 @@ def create_app(
                     continue
                 # Name, description and every schema string: poisoning hides in parameter descriptions too.
                 tctx = Context(
-                    principal, Direction.TOOL_DESCRIPTION, flatten(tool), tool=tool.get("name"), channel="mcp"
+                    principal, Direction.TOOL_DESCRIPTION, flatten(tool), tool=tool.get("name"), channel="mcp", **attrs
                 )
                 tv = await layer.evaluate(tctx, {"server": server})
                 if tv.blocked:
@@ -414,6 +491,7 @@ def create_app(
             flatten(result),
             tool=name,
             channel="mcp",
+            **attrs,
             request_id=request_id or uuid.uuid4().hex[:16],
         )
         rv = await layer.evaluate(rctx, {"server": server, "method": method})
@@ -446,6 +524,7 @@ def create_app(
             model=body.get("model"),
             tool=body.get("tool"),
             channel="sdk",
+            **attribution(request, principal),
         )
         v = await layer.evaluate(ctx)
         return JSONResponse(_verdict_json(v), status_code=v.status_code if v.blocked else 200)
@@ -615,6 +694,7 @@ def create_app(
     async def dashboard():
         return DASHBOARD.read_text() if DASHBOARD.exists() else "<p>dashboard not built</p>"
 
+    governance.register(app, store, layer, app_reclaim, _api_key, _json_object)
     return app
 
 

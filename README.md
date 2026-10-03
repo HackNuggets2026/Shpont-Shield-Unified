@@ -71,12 +71,34 @@ All controls, thresholds, allowed models, budgets and team overrides live in [`p
 
 | Endpoint | For |
 |---|---|
-| `/` | Dashboard: posture, threats, shadow findings, controls, budgets, latency, audit trail, prompt playground |
+| `/` | Admin dashboard: security (people, risk, incidents, restrictions), usage & menu (spend, forecast, breakdowns, leases, approvals), controls & audit |
+| `/me` | Employee dashboard (their own API key): usage, quota, menu, runs, leases, blocked events, admin activity about them |
+| `/admin/overview`, `/admin/usage?by=workflow,task`, `/admin/menu`, `/admin/leases`, `/admin/incidents`, `/admin/principals`, `/admin/requests`, `/admin/actions` | Governance JSON; POST variants change restrictions |
 | `/admin/audit/export?format=jsonl\|csv` | Audit log for security teams. Detected PII and secrets are masked in every event, whatever the action; the SHA-256 of the original is kept |
 | `/admin/summary`, `/admin/events` | JSON for other tools |
 | `/metrics` | Prometheus: decisions, findings, latency per stage, spend |
 
 Admin endpoints need `x-admin-token` (or `?token=`), set with `identity.admin_token` / `ACL_ADMIN_TOKEN`.
+
+## Usage governance
+
+The same gateway meters and limits *what AI work costs*, not just what it says.
+
+- **Workflow menu.** `menu.workflows` lists the kinds of work people do with AI (`pr_review`, `ui_qa`, `data_analysis`, ...). Each item says who may run it, which models, tools and resources it uses, what one run may cost, and whether it needs approval. Clients label traffic with `x-acl-workflow`, `x-acl-task` and `x-acl-session` headers. Unlabeled chat is attributed by one extra question in tev1's existing call. That guess is used for reporting only and never to refuse a request.
+- **Measured prices.** Every item shows what a run really costs (typical and p90), computed from history. Costs include tokens, simulator and VM minutes, and CI minutes.
+- **Resources beyond tokens.** MCP tools that start a simulator, VM or browser (`boot_simulator`, argent's `boot-device`, `create_vm`) open a **lease**, and stop tools close it. The gateway bills leases per minute, caps how many each person can run at once, and flags leases idle past a limit (zombies). Resources can be set to stop zombies automatically. Usage the gateway cannot see is reported with `POST /v1/usage`.
+- **Restrictions.** Admins can quarantine (read-only tools, 10% budget), revoke, scale budgets, approve workflows, and turn menu items off. Each change is validated, written to `data/admin-overlay.yaml` (merged over `policy.yaml`, hot-reloaded) and logged with a reason. Past 80% of a budget, requests are routed to a cheaper model instead of being refused.
+- **Security from usage.** Detections combine usage with verdicts: probing (repeated blocks), exfiltration (double weight when it comes with a token spike), usage spikes, a key used from a new client, sensitive tools an agent never used before, repeated secret pastes, and zombie or unlabeled resources. Incidents add to a per-person **risk score** that halves every 2 h. Crossing thresholds first tightens the person's budget, then quarantines them. Only an admin relaxes a restriction.
+- **Two dashboards.** `/` is the admin view, with Security, Usage & menu, and Controls & audit tabs. `/me` is the employee view, opened with their own API key. It shows their spend, budgets, measured menu prices, runs, running resources (with a Stop button), what was blocked and why, the incidents about them, and every admin action or content view concerning them. Viewing one person's events needs a stated reason, which that person can see.
+
+```bash
+.venv/bin/python -m controllayer &
+.venv/bin/python demo/governance.py          # labelled work, simulators, an approval, an insider escalating
+open 'http://127.0.0.1:8787/?token=demo-admin-token'
+open 'http://127.0.0.1:8787/me?key=intern-key'
+```
+
+Usage, leases, incidents and approvals are stored in SQLite (`usage.path`), so budgets and history survive restarts.
 
 ## Performance
 

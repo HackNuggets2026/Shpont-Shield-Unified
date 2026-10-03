@@ -1,0 +1,232 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>My AI Usage</title>
+<style>
+:root {
+  --bg: #f6f7f9; --panel: #fff; --text: #1b1f24; --muted: #5f6b7a; --border: #e2e6eb;
+  --allow: #1f9d55; --log: #6b7280; --warn: #c27c0e; --redact: #7c4dcc; --block: #d1343b; --accent: #2563eb;
+  --soft: #eef3fd;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #0f1216; --panel: #171b21; --text: #e6e9ee; --muted: #94a0b0; --border: #2a3039;
+    --allow: #3fbf75; --log: #9aa3af; --warn: #e3a33b; --redact: #a582ea; --block: #f0585e; --accent: #5b8def; --soft: #1b2433; }
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 system-ui, -apple-system, Segoe UI, sans-serif; }
+header { display: flex; flex-wrap: wrap; gap: 8px 20px; align-items: center; padding: 16px 20px; border-bottom: 1px solid var(--border); background: var(--panel); }
+header h1 { font-size: 18px; margin: 0; }
+.meta { color: var(--muted); font-size: 12px; }
+main { padding: 16px 20px; display: grid; gap: 16px; grid-template-columns: repeat(12, 1fr); max-width: 1280px; margin: 0 auto; }
+.card { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 14px 16px; min-width: 0; }
+.card h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 0 0 10px; }
+.span12 { grid-column: span 12; } .span8 { grid-column: span 8; } .span6 { grid-column: span 6; } .span4 { grid-column: span 4; }
+@media (max-width: 900px) { .span8, .span6, .span4 { grid-column: span 12; } main { padding: 12px 16px; } }
+.kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; }
+.kpi .v { font-size: 24px; font-weight: 650; font-variant-numeric: tabular-nums; }
+.kpi .l { color: var(--muted); font-size: 12px; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
+th { color: var(--muted); font-weight: 600; font-size: 12px; }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+.pill { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; color: #fff; white-space: nowrap; }
+.allow, .active { background: var(--allow); } .log { background: var(--log); } .warn, .tighten, .alert, .medium { background: var(--warn); }
+.redact { background: var(--redact); } .block, .revoked, .quarantined, .quarantine, .high { background: var(--block); } .low, .none { background: var(--log); }
+.tag { font-size: 11px; color: var(--muted); border: 1px solid var(--border); border-radius: 4px; padding: 0 5px; margin-left: 4px; white-space: nowrap; }
+.bar { height: 8px; border-radius: 4px; background: var(--border); overflow: hidden; }
+.bar > i { display: block; height: 100%; background: var(--accent); }
+.bar.hot > i { background: var(--block); }
+.row { display: grid; grid-template-columns: minmax(110px, 30%) 1fr minmax(110px, auto); gap: 10px; align-items: center; margin: 6px 0; font-size: 13px; }
+.scroll { overflow-x: auto; }
+.detail { color: var(--muted); font-size: 12px; }
+.empty { color: var(--muted); font-size: 13px; }
+button, input, select { font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--border); border-radius: 6px; padding: 5px 10px; }
+button { cursor: pointer; }
+button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+.banner { grid-column: span 12; border-radius: 8px; padding: 12px 16px; border: 1px solid var(--block); background: color-mix(in srgb, var(--block) 10%, var(--panel)); }
+.banner b { color: var(--block); }
+.menu { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 12px; }
+.item { border: 1px solid var(--border); border-radius: 8px; padding: 12px; display: flex; flex-direction: column; gap: 6px; }
+.item.locked { opacity: .7; border-style: dashed; }
+.item h3 { margin: 0; font-size: 14px; display: flex; justify-content: space-between; gap: 6px; }
+.price { font-size: 20px; font-weight: 650; font-variant-numeric: tabular-nums; }
+ul.tips { margin: 0; padding-left: 18px; } ul.tips li { margin: 4px 0; }
+.login { max-width: 420px; margin: 80px auto; display: flex; flex-direction: column; gap: 10px; padding: 0 16px; }
+form.inline { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+form.inline input[type=text] { flex: 1; min-width: 160px; }
+</style>
+</head>
+<body>
+<div id="login" class="login" hidden>
+  <h1>My AI usage</h1>
+  <p class="detail">Sign in with the API key you use for AI tools. It stays in this browser tab.</p>
+  <input id="keyin" type="password" placeholder="API key" autocomplete="off">
+  <button class="primary" id="keygo">Open my dashboard</button>
+  <p id="keyerr" class="detail"></p>
+</div>
+<div id="app" hidden>
+<header>
+  <h1 id="who">-</h1>
+  <span id="status"></span>
+  <span class="meta" id="teamrole"></span>
+  <span class="meta" id="updated" style="margin-left:auto"></span>
+  <button id="signout">Sign out</button>
+</header>
+<main>
+  <div class="banner" id="banner" hidden></div>
+  <section class="card span12"><h2>Today</h2><div class="kpis" id="kpis"></div></section>
+
+  <section class="card span6"><h2>My budgets</h2><div id="budgets"></div></section>
+  <section class="card span6"><h2>Suggestions</h2><div id="tips"></div></section>
+
+  <section class="card span12"><h2>Workflow menu: what you can run, and what one run usually costs</h2><div class="menu" id="menu"></div></section>
+
+  <section class="card span8 scroll"><h2>My runs this week (by workflow and task)</h2><table id="runs"></table></section>
+  <section class="card span4 scroll"><h2>By resource and model (7 days)</h2><table id="resources"></table></section>
+
+  <section class="card span12 scroll"><h2>Running resources</h2><table id="leases"></table></section>
+
+  <section class="card span8 scroll"><h2>What was blocked, redacted or flagged, and why</h2><table id="events"></table></section>
+  <section class="card span4" id="riskcard"><h2>Security signals about me</h2><div id="risk"></div></section>
+
+  <section class="card span6">
+    <h2>Requests</h2>
+    <form class="inline" id="quota">
+      <select id="qkind"></select>
+      <input type="text" id="qreason" placeholder="Why (shown to admins)" required>
+      <button class="primary">Ask</button>
+    </form>
+    <table id="requests" style="margin-top:10px"></table>
+  </section>
+  <section class="card span6">
+    <h2>What admins can see about me</h2>
+    <ul class="tips" id="collected"></ul>
+    <h2 style="margin-top:14px">Admin activity about me</h2>
+    <table id="adminact"></table>
+  </section>
+</main>
+</div>
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+const pill = (a) => `<span class="pill ${esc(a)}">${esc(a)}</span>`;
+const usd = (x) => { const v = Number(x || 0); return "$" + (v >= 1 ? v.toFixed(2) : v >= 0.01 ? v.toFixed(3) : v.toFixed(5)); };
+const num = (x) => Number(x || 0).toLocaleString();
+const ago = (ts) => ts ? new Date(ts * 1000).toLocaleString() : "";
+const pct = (a, b) => (b ? Math.min(100, (100 * a) / b) : 0);
+const store = { get() { try { return sessionStorage.getItem("acl-key"); } catch { return null; } },
+  set(v) { try { v ? sessionStorage.setItem("acl-key", v) : sessionStorage.removeItem("acl-key"); } catch {} } };
+let KEY = new URLSearchParams(location.search).get("key") || store.get() || "";
+if (new URLSearchParams(location.search).get("key")) { store.set(KEY); history.replaceState(null, "", location.pathname); }
+const api = (path, opts = {}) => fetch(path, { ...opts, headers: { ...(opts.headers || {}), authorization: "Bearer " + KEY, "content-type": "application/json" } });
+
+function bar(used, lim) {
+  if (!lim) return `<span class="detail">no limit</span>`;
+  return `<div class="bar ${used / lim > 0.8 ? "hot" : ""}"><i style="width:${pct(used, lim)}%"></i></div>`;
+}
+
+async function refresh() {
+  const r = await api("/me/summary");
+  if (r.status === 401) { showLogin("That key is not recognised."); return; }
+  const s = await r.json();
+  $("login").hidden = true; $("app").hidden = false;
+  $("who").textContent = s.principal;
+  $("status").innerHTML = pill(s.status.status) + (s.status.budget_scale !== 1 ? `<span class="tag">budget ×${s.status.budget_scale}</span>` : "");
+  $("teamrole").textContent = `${s.team} · ${s.role}`;
+  $("updated").textContent = "updated " + new Date().toLocaleTimeString();
+
+  const st = s.status;
+  if (st.status !== "active" || st.budget_scale < 1) {
+    const what = st.status === "revoked" ? "Your access is revoked." : st.status === "quarantined"
+      ? "Your access is limited to read-only tools and 10% of your budget." : `Your daily budget is at ${Math.round(st.budget_scale * 100)}%.`;
+    $("banner").hidden = false;
+    $("banner").innerHTML = `<b>${esc(what)}</b> Reason: ${esc(st.reason || "-")}<div class="detail">by ${esc(st.by || "-")} · ${esc(ago(st.since))}. Ask your admin if this looks wrong.</div>`;
+  } else $("banner").hidden = true;
+
+  const me = s.budgets.find((b) => b.scope === "principal") || {};
+  const tokensToday = me.tokens || 0;
+  $("kpis").innerHTML = [
+    ["Spent today", usd(s.spend.today)], ["This month", usd(s.spend.month_to_date)],
+    ["Tokens today", num(tokensToday) + (me.tokens_limit ? ` / ${num(me.tokens_limit)}` : "")],
+    ["Running resources", s.leases.length], ["Requests", num(me.requests)],
+  ].map(([l, v]) => `<div class="kpi"><div class="v">${esc(v)}</div><div class="l">${esc(l)}</div></div>`).join("");
+
+  $("budgets").innerHTML = s.budgets.map((b) => `
+    <div class="row"><span>${b.scope === "principal" ? "Me" : "Team " + esc(b.key)} · tokens</span>${bar(b.tokens, b.tokens_limit)}<span class="detail">${num(b.tokens)}${b.tokens_limit ? " / " + num(b.tokens_limit) : ""}</span></div>
+    <div class="row"><span>${b.scope === "principal" ? "Me" : "Team " + esc(b.key)} · USD</span>${bar(b.usd, b.usd_limit)}<span class="detail">${usd(b.usd)}${b.usd_limit ? " / " + usd(b.usd_limit) : ""}</span></div>`).join("")
+    || '<div class="empty">no usage yet today</div>';
+
+  $("tips").innerHTML = s.tips.length ? `<ul class="tips">${s.tips.map((t) => `<li>${esc(t)}</li>`).join("")}</ul>` : '<div class="empty">Nothing to suggest right now.</div>';
+
+  $("menu").innerHTML = s.menu.map((w) => `
+    <div class="item ${w.available ? "" : "locked"}">
+      <h3><span>${esc(w.name.replace(/_/g, " "))}</span><span class="tag">${esc(w.tier)}</span></h3>
+      <div class="detail">${esc(w.description)}</div>
+      <div><span class="price">${w.measured.runs ? usd(w.measured.usd_p50) : "-"}</span> <span class="detail">${w.measured.runs ? `typical run · ${usd(w.measured.usd_p90)} at p90 · ${w.measured.runs} runs` : "no runs measured yet"}</span></div>
+      <div class="detail">${w.per_run.usd != null ? `limit ${usd(w.per_run.usd)}/run` : ""}${w.per_run.tokens != null ? ` · ${num(w.per_run.tokens)} tokens/run` : ""}
+        ${Object.entries(w.resources).map(([k, v]) => `<span class="tag">${esc(k)}${v.max_concurrent ? " ×" + v.max_concurrent : ""}${v.max_minutes ? " · " + v.max_minutes + " min" : ""}</span>`).join("")}</div>
+      <div>${w.available ? '<span class="pill allow">available</span> <code class="detail">x-acl-workflow: ' + esc(w.name) + "</code>"
+        : `<span class="pill block">locked</span> <span class="detail">${esc(w.why)}</span>` +
+          (w.why === "needs admin approval" ? ` <button data-wf="${esc(w.name)}">Request access</button>` : "")}</div>
+    </div>`).join("") || '<div class="empty">No workflows defined.</div>';
+  for (const b of document.querySelectorAll("button[data-wf]")) b.onclick = () => { $("qkind").value = "wf:" + b.dataset.wf; $("qreason").focus(); };
+  const kind = $("qkind").value;
+  $("qkind").innerHTML = [1.5, 2, 3, 5].map((x) => `<option value="quota:${x}">More daily budget ×${x}</option>`).join("") +
+    s.menu.filter((w) => w.why === "needs admin approval").map((w) => `<option value="wf:${esc(w.name)}">Access to ${esc(w.name)}</option>`).join("");
+  if ([...$("qkind").options].some((o) => o.value === kind)) $("qkind").value = kind; else $("qkind").value = "quota:2";
+
+  $("runs").innerHTML = "<tr><th>Workflow</th><th>Task</th><th class=num>Tokens</th><th class=num>Resource min</th><th class=num>Cost</th></tr>" +
+    (s.runs.map((r) => `<tr><td>${esc(r.workflow.replace("(none)", "no label"))}</td><td>${esc(r.task.replace("(none)", "-"))}</td><td class=num>${num(r.tokens)}</td><td class=num>${Number(r.minutes || 0).toFixed(1)}</td><td class=num>${usd(r.usd)}</td></tr>`).join("")
+     || '<tr><td colspan=5 class="empty">No usage this week.</td></tr>');
+
+  const resRows = [...s.by_resource.map((r) => ["resource", r.resource, r]), ...s.by_model.filter((r) => r.model !== "(none)").map((r) => ["model", r.model, r])];
+  $("resources").innerHTML = "<tr><th>What</th><th class=num>Tokens / min</th><th class=num>Cost</th></tr>" +
+    (resRows.map(([k, n, r]) => `<tr><td>${esc(n)}<span class="tag">${k}</span>${n === "guard" ? '<div class="detail">policy checks, not charged to you</div>' : ""}</td>
+      <td class=num>${r.minutes ? Number(r.minutes).toFixed(1) + " min" : num(r.tokens || r.guard_tokens)}</td><td class=num>${usd(r.usd)}</td></tr>`).join("") || '<tr><td colspan=3 class="empty">-</td></tr>');
+
+  $("leases").innerHTML = "<tr><th>Resource</th><th>Workflow / task</th><th class=num>Running</th><th class=num>Idle</th><th class=num>Cost so far</th><th></th></tr>" +
+    (s.leases.map((x) => `<tr><td>${esc(x.resource)} <code>${esc(x.handle || x.id)}</code>${x.flags.map((f) => `<span class="tag">${esc(f)}</span>`).join("")}</td>
+      <td>${esc(x.workflow || "-")}${x.task ? `<span class="tag">${esc(x.task)}</span>` : ""}</td>
+      <td class=num>${x.minutes} min</td><td class=num>${x.idle_minutes} min</td><td class=num>${usd(x.running_usd)}</td>
+      <td><button data-lease="${esc(x.id)}">Stop</button></td></tr>`).join("") || '<tr><td colspan=6 class="empty">Nothing running.</td></tr>');
+  for (const b of document.querySelectorAll("button[data-lease]")) b.onclick = async () => { await api(`/me/leases/${b.dataset.lease}/release`, { method: "POST" }); refresh(); };
+
+  $("events").innerHTML = "<tr><th>When</th><th>Action</th><th>Where</th><th>Why</th></tr>" +
+    (s.events.map((e) => `<tr><td>${new Date(e.ts * 1000).toLocaleTimeString()}</td><td>${pill(e.action)}</td>
+      <td>${esc(e.channel)}/${esc(e.direction)}${e.tool ? `<span class="tag">${esc(e.tool)}</span>` : ""}${e.workflow ? `<span class="tag">${esc(e.workflow)}</span>` : ""}</td>
+      <td>${e.findings.filter((f) => f.action !== "allow").map((f) => `${esc(f.control)}/${esc(f.category)}<div class="detail">${esc(f.detail)}</div>`).join("") || esc(e.reason)}</td></tr>`).join("")
+     || '<tr><td colspan=4 class="empty">Nothing blocked or redacted. 👍</td></tr>');
+
+  if (s.risk) {
+    $("riskcard").hidden = false;
+    $("risk").innerHTML = `<div class="kpi"><div class="v">${s.risk.score}</div><div class="l">risk score ${pill(s.risk.level)}</div></div>` +
+      (s.risk.incidents.length ? "<table>" + s.risk.incidents.map((i) => `<tr><td>${pill(i.severity)}</td><td>${esc(i.rule.replace(/_/g, " "))}<div class="detail">${esc(i.detail)}</div></td><td>${esc(i.status)}</td></tr>`).join("") + "</table>"
+        : '<div class="empty" style="margin-top:8px">No incidents.</div>');
+  } else $("riskcard").hidden = true;
+
+  const reqPill = (st) => `<span class="pill ${st === "approved" ? "allow" : st === "denied" ? "block" : "log"}">${esc(st)}</span>`;
+  $("requests").innerHTML = s.requests.map((q) => `<tr><td>${esc(q.kind)}${q.workflow ? " · " + esc(q.workflow) : ""}${q.scale ? " ×" + q.scale : ""}</td><td>${esc(q.reason)}</td><td>${reqPill(q.status)}</td></tr>`).join("");
+  $("collected").innerHTML = s.collected.map((c) => `<li>${esc(c)}</li>`).join("");
+  $("adminact").innerHTML = s.admin_activity.map((a) => `<tr><td>${new Date(a.ts * 1000).toLocaleString()}</td><td>${esc(a.actor)}</td><td>${esc(a.action.replace(/_/g, " "))}</td><td class="detail">${esc(a.reason)}</td></tr>`).join("")
+    || '<tr><td class="empty">No admin has changed or viewed anything about you.</td></tr>';
+}
+
+$("quota").onsubmit = async (e) => {
+  e.preventDefault();
+  const [kind, arg] = $("qkind").value.split(":");
+  const body = kind === "wf" ? { kind: "workflow", workflow: arg } : { kind: "quota", scale: Number(arg) };
+  await api("/me/requests", { method: "POST", body: JSON.stringify({ ...body, reason: $("qreason").value }) });
+  $("qreason").value = ""; refresh();
+};
+function showLogin(msg) { $("app").hidden = true; $("login").hidden = false; $("keyerr").textContent = msg || ""; }
+$("keygo").onclick = () => { KEY = $("keyin").value.trim(); store.set(KEY); refresh(); };
+$("keyin").onkeydown = (e) => { if (e.key === "Enter") $("keygo").click(); };
+$("signout").onclick = () => { KEY = ""; store.set(""); showLogin(); };
+if (KEY) refresh(); else showLogin();
+setInterval(() => { if (KEY && !$("app").hidden) refresh(); }, 3000);
+</script>
+</body>
+</html>

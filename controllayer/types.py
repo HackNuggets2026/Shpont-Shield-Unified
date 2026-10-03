@@ -55,6 +55,14 @@ class Context:
     # False for re-checks of conversation history: content is inspected, but not charged to budgets.
     metered: bool = True
     request_id: str = field(default_factory=lambda: uuid.uuid4().hex[:16])
+    # Attribution: which menu workflow and which task (ticket, branch, run) this traffic belongs to.
+    workflow: str | None = None
+    # declared (client header, or inherited from its session) | classified (decision model guess) | None.
+    # Only declared workflows are gated; a guess is used for reporting, never to refuse.
+    workflow_source: str | None = None
+    task_id: str | None = None
+    session_id: str | None = None
+    client: str | None = None  # "ip|user-agent", for stolen-key detection
 
 
 @dataclass

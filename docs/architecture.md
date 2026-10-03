@@ -61,10 +61,40 @@ LLM04 (data poisoning), LLM08 (vector/embedding) and LLM09 (misinformation) are 
 
 Monitoring employees' AI use is personal-data processing. In the EU that means GDPR, and possibly works-council agreements. By default the audit log stores the text with every detected span masked (even when the action was only `log`), plus a SHA-256 of the original (`audit.store_raw_text: false`). Blocked payloads are not stored at all. Content flagged only by a semantic control has no span to mask and is stored as sent. `shadow` and `log` modes allow monitoring without interfering.
 
+## Usage governance
+
+| Piece | Where | Notes |
+|---|---|---|
+| Attribution | `x-acl-workflow`, `x-acl-task`, `x-acl-session` headers; `ControlLayer.attribute` | A session keeps its declared workflow, so later MCP calls inherit it. Reported usage with a known task joins that task's workflow. |
+| Classifier | `controls/workflows.classifier` | One extra `choice` question in the fast tier's existing call, so it adds no extra round trip. Never escalated, never a finding, never a gate. |
+| Menu gate | `controls/workflows.check` | Only declared workflows are gated: unknown, disabled, wrong team or role, approval missing, model or tool outside the workflow. |
+| Per-run limits | `BudgetLedger._run_check` | A run is one task id. Its tokens and USD are summed from the usage store. |
+| Downgrade | `BudgetLedger.downgrade` | Past `budgets.downgrade.at` of any of the caller's daily budgets. Never downgrades to a model the workflow would refuse. |
+| Leases | `controls/resources.LeaseTracker` | Start, stop, stop-all and activity tools come from the policy. `handle.pattern` finds the id in the start result, so stop calls close the right lease. The sweep runs every 10 s, and a reclaim calls the first stop tool on the lease's MCP server. |
+| Store | `usage.UsageStore` (SQLite, WAL) | One row per LLM call, policy-check call (`resource=guard`, `metered=0`, never charged), closed lease, or reported usage. The in-memory ledger is rebuilt from today's rows at startup. |
+| Detections | `detections.RiskEngine` | Rules are code; their parameters live in the policy. One incident per rule per person per window; later evidence joins it. Score = sum of weight x 0.5^(age / half-life) over open and acknowledged incidents. Responses only escalate; recommend-only when `response.auto: false`. |
+| Restrictions | `PolicyStore.write_overlay` | Merged over `policy.yaml` (only `principals`, `menu`, `budgets`, `resources`, `detections`, `quarantine`). Validated before it is written. A broken overlay at startup is ignored and reported, and the base policy applies. |
+
+Design choices:
+
+- **Guesses never refuse.** A misclassified prompt would otherwise block legitimate work. Set `menu.require_label: true` to force labels instead.
+- **Openness both ways.** The employee page shows what is collected, their risk and incidents (`privacy.show_risk_to_employee`), and every admin action or content view about them. This is aimed at GDPR access rights and works-council agreements.
+- **Policy checks have a visible cost.** The gateway's own decision-model tokens are reported (`guard`) and never charged to the employee.
+
+Ideas not built yet:
+
+- **Approval for one call.** Irreversible tools could park the call and wait for an admin click, using the same requests queue as workflow approvals.
+- **Budget the run, not the day.** Keep a forecast per task, warn when a run is heading past its p90, and suggest stopping before the hard limit.
+- **Argent over stdio.** A small `controllayer mcp-wrap -- argent mcp` shim so stdio MCP servers go through the gateway and get leases.
+- **Cost-aware routing per workflow.** Light workflows could default to the cheapest allowed model, with the menu price showing what the upgrade costs.
+- **Team leaderboard of savings.** Show savings (downgrades, reclaimed zombies, avoided runs), never raw individual usage, so the numbers encourage people rather than single them out.
+- **Detection feed.** Ship detection parameters like the signature feed, so thresholds can be tuned centrally.
+
 ## Known gaps
 
-- No approval workflow yet: irreversible tools are simply blocked.
-- Budgets and metrics are in-memory, so a restart resets them. Multiple replicas would need Redis for shared counters.
+- Approvals cover workflows and quota. Irreversible tools are still simply blocked.
+- Budgets, usage, leases and incidents persist in a local SQLite file. Rate-limit windows, the loop guard and the detection baselines for new clients and tool drift are in memory. Multiple replicas would need a shared store (Postgres or Redis).
+- Leases only see resources started through MCP tools or reported to `/v1/usage`. A simulator started by hand is invisible.
 - Streaming responses are buffered and released as a single checked chunk.
 - The MCP proxy speaks JSON-RPC over plain HTTP POST. SSE sessions and stdio servers are not proxied.
 - The heuristic backend is a keyword stand-in for demos without models, not a classifier.

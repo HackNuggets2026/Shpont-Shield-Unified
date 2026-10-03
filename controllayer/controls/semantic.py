@@ -32,6 +32,7 @@ class SemanticStats:
     chunks: int = 0
     input_tokens: int = 0
     error: str | None = None
+    workflow: str | None = None  # the classifier's answer, when it was asked
 
 
 def chunk(text: str, size: int) -> list[str]:
@@ -82,10 +83,16 @@ class SemanticGuard:
         stats.input_tokens += sum(r.input_tokens for r in results)
         return {n: _worst(c, [r.answers[n] for r in results]) for n, c in controls.items()}
 
-    async def check(self, ctx: Context, policy: Policy) -> tuple[list[Finding], SemanticStats]:
+    async def check(
+        self, ctx: Context, policy: Policy, classify: SemanticControl | None = None, classify_as: str = "_workflow"
+    ) -> tuple[list[Finding], SemanticStats]:
+        """`classify` is an extra choice question (workflow attribution) asked in the same fast-tier call.
+        It never escalates and never produces a finding."""
         eng = policy.semantic
         stats = SemanticStats()
         controls = {n: c for n, c in policy.semantic_controls.items() if applies(c, ctx)}
+        if classify is not None:
+            controls[classify_as] = classify
         if eng.backend == "off" or not controls or not ctx.text.strip():
             return [], stats
         chunks = chunk(ctx.text, eng.max_chunk_chars)
@@ -99,10 +106,13 @@ class SemanticGuard:
             stats.fast_ms = (time.perf_counter() - t0) * 1000
             tiers = dict.fromkeys(answers, "fast")
             lo, hi = eng.escalate_band
+            if classify is not None:
+                stats.workflow = answers[classify_as].choice
             unsure = {
                 n: c
                 for n, c in controls.items()
-                if (c.type == "noul" and lo <= answers[n].p < hi) or answers[n].confidence < eng.min_confidence
+                if n != classify_as
+                and ((c.type == "noul" and lo <= answers[n].p < hi) or answers[n].confidence < eng.min_confidence)
             }
             if unsure and eng.deep_model and eng.deep_model != eng.fast_model:
                 t1 = time.perf_counter()
@@ -128,6 +138,8 @@ class SemanticGuard:
 
         out = []
         for name, c in controls.items():
+            if name == classify_as and classify is not None:
+                continue
             a = answers[name]
             proposed = _proposed(c, a)
             if proposed is Action.ALLOW:

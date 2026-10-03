@@ -10,14 +10,17 @@ from typing import Any
 
 from .audit import AuditLog
 from .config import Policy, PolicyStore
-from .controls import access, signatures
+from .controls import access, signatures, workflows
 from .controls.budget import BudgetLedger
 from .controls.patterns import pii, redact, secrets
+from .controls.resources import LeaseTracker
 from .controls.semantic import SemanticGuard
 from .decision import DecisionBackend, HeuristicBackend, OllamaSystemOne
+from .detections import RiskEngine
 from .types import Action, Context, Direction, Finding, Principal, Verdict
+from .usage import UsageStore
 
-_STATUS = {"auth": 401, "budget": 429}
+_STATUS = {"auth": 401, "budget": 429, "resources": 429}
 
 
 class ControlLayer:
@@ -26,8 +29,15 @@ class ControlLayer:
         self._fixed_backend = backend
         self._backend_key: tuple | None = None
         self._backend: DecisionBackend | None = backend
-        self.ledger = BudgetLedger()
         p = store.policy
+        usage_path = p.usage.path if p.usage.path == ":memory:" else store.base_dir / p.usage.path
+        self.usage = UsageStore(usage_path)
+        self.ledger = BudgetLedger(self.usage)
+        self.leases = LeaseTracker(self.usage, self.ledger)
+        self.risk = RiskEngine(self.usage, store)
+        self.leases.on_signal = self.risk.signal
+        # (principal, session) -> declared workflow, so later calls in a session inherit its label.
+        self.sessions: OrderedDict[tuple[str, str], str] = OrderedDict()
         self.audit = audit or AuditLog(store.base_dir / p.audit.path, p.audit.ring_size, p.audit.store_raw_text)
         self.feed = signatures.SignatureFeed(p.signatures.feed)
         self.feed.load(store.base_dir)
@@ -72,6 +82,19 @@ class ControlLayer:
             self._backend_key = key
         assert self._backend is not None
         return self._backend
+
+    def attribute(self, ctx: Context) -> Context:
+        """Fill a session's declared workflow into a call that did not label itself, and remember labels."""
+        if ctx.session_id:
+            key = (ctx.principal.id, ctx.session_id)
+            if ctx.workflow and ctx.workflow_source == "declared":
+                self.sessions[key] = ctx.workflow
+                self.sessions.move_to_end(key)
+                if len(self.sessions) > 50_000:
+                    self.sessions.popitem(last=False)
+            elif not ctx.workflow and key in self.sessions:
+                ctx.workflow, ctx.workflow_source = self.sessions[key], "declared"
+        return ctx
 
     @staticmethod
     def spans_only(v: Verdict) -> bool:
@@ -128,8 +151,9 @@ class ControlLayer:
             self._seen.move_to_end(key)
             return self._seen[key]
         verdict = await self._evaluate(ctx, extra, semantic=semantic)
-        # Budget and engine-failure outcomes depend on the moment, not the content: never cached.
-        if not any(f.control in ("budget", "semantic_engine") for f in verdict.findings):
+        # Budget, lease, workflow and engine-failure outcomes depend on the moment or on headers, not on the
+        # content: never cached.
+        if not any(f.control in ("budget", "resources", "workflow", "semantic_engine") for f in verdict.findings):
             self._seen[key] = verdict
             if len(self._seen) > 10_000:
                 self._seen.popitem(last=False)
@@ -148,10 +172,12 @@ class ControlLayer:
         findings: list[Finding] = access.check_auth(ctx, policy)
         if not findings:
             findings += access.check_model(ctx, policy) + access.check_tool(ctx, policy)
+            findings += workflows.check(ctx, policy)
         t = lap("gates", t_start)
 
         if not _blocked(findings) and ctx.metered and ctx.direction in (Direction.INPUT, Direction.TOOL_CALL):
             findings += self.ledger.pre_check(ctx, policy)
+            findings += self.leases.pre_check(ctx, policy)
             t = lap("budget", t)
 
         if inspect and not _blocked(findings):
@@ -163,8 +189,19 @@ class ControlLayer:
         extra = dict(extra or {})
         # Deterministic block already decided the outcome; skip the model call.
         if inspect and semantic and not _blocked(findings):
-            sem, stats = await SemanticGuard(self.backend(policy)).check(ctx, policy)
+            # Unlabeled chat prompts are attributed to a workflow by the same fast-tier call.
+            classify = None
+            if ctx.metered and ctx.channel == "chat" and ctx.direction is Direction.INPUT and not ctx.workflow:
+                classify = workflows.classifier(policy)
+            sem, stats = await SemanticGuard(self.backend(policy)).check(
+                ctx, policy, classify, classify_as=workflows.CLASSIFIER
+            )
             findings += sem
+            if classify is not None:
+                ctx.workflow = stats.workflow if stats.workflow not in (None, "other") else workflows.UNLABELED
+                ctx.workflow_source = "classified" if ctx.workflow != workflows.UNLABELED else None
+            if stats.input_tokens:
+                self.ledger.record_guard(ctx, policy.semantic.fast_model, stats.input_tokens)
             latency["semantic"] = (time.perf_counter() - t) * 1000
             if stats.fast_ms:
                 latency["semantic_fast"] = stats.fast_ms
@@ -179,7 +216,12 @@ class ControlLayer:
 
         latency["total"] = (time.perf_counter() - t_start) * 1000
         verdict = _decide(ctx, findings, policy.version, latency)
+        if ctx.workflow:
+            extra.setdefault("workflow", ctx.workflow)
+        if ctx.task_id:
+            extra.setdefault("task", ctx.task_id)
         self.audit.record(ctx, verdict, extra)
+        self.risk.observe(ctx, verdict, policy)
         return verdict
 
 

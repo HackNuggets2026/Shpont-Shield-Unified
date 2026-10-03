@@ -55,6 +55,10 @@ budgets:
     "qwen3:*": { usd_per_compute_second: 0.0003 }
     "mock-*": { usd_per_1m_input: 1.0, usd_per_1m_output: 2.0 }
   loop_guard: { max_identical_calls: 5, window_seconds: 60 }
+  downgrade:                 # past 80% of a daily budget, answer with a cheaper model instead of refusing
+    enabled: true
+    at: 0.8
+    routes: { "qwen3:*": "llama3.2:1b", "gpt-4o": "gpt-4o-mini", "mock-large": "mock-model" }
 
 # --- Deterministic controls -------------------------------------------------
 
@@ -90,10 +94,10 @@ signatures:
 tool_access:
   mode: block
   roles:
-    developer: ["read_*", "search_*", "http_get", "run_tests"]
+    developer: ["read_*", "search_*", "http_get", "run_tests", "*simulator*", "create_vm", "destroy_vm"]
     analyst: ["read_*", "search_*", "send_email"]
     automation: ["*"]
-    intern: ["search_*"]
+    intern: ["search_*", "*simulator*"]
   irreversible: ["delete_*", "drop_*", "transfer_funds", "send_email"]
 
 # --- Semantic (AI-based) controls ---------------------------------------------
@@ -152,6 +156,115 @@ semantic_controls:
     instructions: Is the request clearly unrelated to the employee's work (personal errands, gaming, dating)?
     thresholds: { log: 0.7 }
     keywords: ["dating", "fantasy football", "horoscope"]
+
+# --- Usage governance: the workflow menu, leased resources, detections -----------
+# Clients label traffic with headers: x-acl-workflow (a menu item), x-acl-task (ticket/branch/run id)
+# and x-acl-session. Only a declared workflow is gated; unlabeled chat is attributed by the classifier
+# (one extra question in tev1's existing call) for reporting only.
+
+menu:
+  require_label: false
+  classify_unlabeled: true
+  workflows:
+    chat_assist:
+      description: quick questions, explanations, writing help
+      tier: light
+      models: ["llama3.2:*", "gpt-4o-mini", "mock-*"]
+      per_run: { tokens: 20000 }
+      keywords: ["explain", "summari[sz]e", "rewrite", "translate"]
+    pr_review:
+      description: reviewing a code change or pull request
+      tools: ["read_*", "search_*", "run_tests"]
+      per_run: { tokens: 150000, usd: 1.0 }
+      keywords: ["review (this|the|my) (pr|pull request|diff|change)", "code review"]
+    bugfix:
+      description: debugging and fixing a defect
+      tools: ["read_*", "search_*", "run_tests", "http_get", "create_vm", "destroy_vm"]
+      resources: { vm: { max_concurrent: 1, max_minutes: 60 } }
+      per_run: { usd: 3.0 }
+      keywords: ["bug", "stack ?trace", "exception", "fix (the|this)"]
+    ui_qa:
+      description: driving a mobile simulator through a user flow
+      tier: heavy
+      teams: [engineering, interns]
+      tools: ["read_*", "search_*", "*simulator*"]
+      resources: { simulator: { max_concurrent: 2, max_minutes: 30 } }
+      per_run: { usd: 5.0 }
+      keywords: ["simulator", "tap", "ui test", "screen"]
+    data_analysis:
+      description: analysing spreadsheets, reports or business data
+      teams: [finance, engineering]
+      tools: ["read_*", "search_*"]
+      per_run: { tokens: 100000 }
+      keywords: ["revenue", "spreadsheet", "forecast", "quarter"]
+    load_test:
+      description: large automated test runs on dedicated VMs
+      tier: heavy
+      teams: [engineering, platform]
+      approval: admin          # employees request it from /me; an admin approves per person
+      tools: ["create_vm", "destroy_vm", "run_tests", "read_*"]
+      resources: { vm: { max_concurrent: 1, max_minutes: 120 } }
+      per_run: { usd: 20.0 }
+
+resources:
+  simulator:
+    usd_per_minute: 0.01
+    start_tools: [boot_simulator, boot-device]          # demo server, argent
+    stop_tools: [shutdown_simulator]
+    stop_all_tools: [stop-all-simulator-servers]
+    activity_tools: ["simulator_*", "gesture-*", describe, screenshot, launch-app]
+    handle: { pattern: "sim-[0-9a-f]{6}", arg: id }
+    max_concurrent_per_principal: 2
+    idle_minutes: 10
+    auto_reclaim: true
+  vm:
+    usd_per_minute: 0.05
+    start_tools: [create_vm]
+    stop_tools: [destroy_vm]
+    activity_tools: ["vm_*", run_tests]
+    handle: { pattern: "vm-[0-9a-f]{6}", arg: id }
+    max_concurrent_per_principal: 1
+    idle_minutes: 30
+    auto_reclaim: true
+  ci_minutes:
+    usd_per_minute: 0.008     # reported by CI runners: POST /v1/usage {resource: ci_minutes, quantity: 12}
+
+quarantine:                    # what a quarantined principal keeps
+  tools: ["read_*", "search_*"]
+  budget_scale: 0.1
+
+detections:
+  enabled: true
+  half_life_minutes: 120       # a principal's risk score halves every 2 h without new incidents
+  rules:
+    probing: { weight: 30, count: 3, window_minutes: 10 }           # repeated blocked attempts
+    secret_paste: { weight: 10, count: 3, window_minutes: 60 }     # training need, not an attack
+    exfiltration: { weight: 40, factor: 3, min_tokens: 2000, window_minutes: 15 }  # x2 with a usage spike
+    usage_spike: { weight: 20, factor: 4, min_tokens: 20000, window_minutes: 15 }
+    new_client: { weight: 20, min_history: 20, window_minutes: 60 }  # possible stolen key
+    tool_drift: { weight: 25, min_history: 5, tools: [send_email, http_get, "delete_*", "transfer_*"] }
+    off_hours: { enabled: false, weight: 5, hours_utc: [6, 20], window_minutes: 240 }
+    zombie_resource: { weight: 10, window_minutes: 30 }
+    unlabeled_resource: { weight: 5, window_minutes: 60 }
+  response:
+    auto: true
+    alert: 30
+    tighten: 60                # budgets drop to 25%
+    quarantine: 90             # read-only tools, 10% budget; only an admin lifts it
+    tighten_budget_scale: 0.25
+
+# principals:                  # usually written by the admin dashboard into admin_overlay
+#   carol: { status: quarantined, reason: "investigating incident 4f2a" }
+principals: {}
+
+usage:
+  path: data/usage.sqlite      # durable usage, leases, incidents, approvals
+
+privacy:
+  show_risk_to_employee: true  # employees see the incidents and score about them
+  require_reason_for_content: true
+
+admin_overlay: data/admin-overlay.yaml   # restrictions set from the dashboard; merged over this file
 
 # --- Per-team overrides -------------------------------------------------------
 

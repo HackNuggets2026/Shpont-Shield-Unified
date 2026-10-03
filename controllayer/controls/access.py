@@ -21,6 +21,9 @@ def authenticate(policy: Policy, api_key: str | None) -> Principal:
 def check_auth(ctx: Context, policy: Policy) -> list[Finding]:
     if policy.identity.require_auth and not ctx.principal.authenticated:
         return [_hard("auth", "unauthenticated", "missing or unknown API key")]
+    pp = policy.principal(ctx.principal.id)
+    if pp.status == "revoked":
+        return [_hard("auth", "revoked", f"access revoked: {pp.reason or 'by an administrator'}")]
     return []
 
 
@@ -49,6 +52,18 @@ def check_tool(ctx: Context, policy: Policy) -> list[Finding]:
                 "tool_not_allowed",
                 Action.BLOCK,
                 detail=f"role {ctx.principal.role!r} may not call {ctx.tool!r}",
+            )
+        ]
+    if policy.principal(ctx.principal.id).status == "quarantined" and not any(
+        fnmatch(ctx.tool, pat) for pat in policy.quarantine.tools
+    ):
+        return [
+            finding(
+                "tool_access",
+                cfg,
+                "quarantined",
+                Action.BLOCK,
+                detail=f"{ctx.principal.id!r} is quarantined; only {policy.quarantine.tools} are allowed",
             )
         ]
     if any(fnmatch(ctx.tool, pat) for pat in cfg.irreversible):
