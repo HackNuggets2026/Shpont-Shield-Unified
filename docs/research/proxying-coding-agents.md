@@ -2,7 +2,7 @@
 
 Checked 2026-10-03 against official docs (sources at the end). **[?]** marks what we could not confirm in first-party docs.
 
-**Where we stand:** the gateway speaks OpenAI `/v1/chat/completions` (upstream called with `stream: false`, reply sent as one SSE chunk) and MCP JSON-RPC at `/mcp/<server>`, and authenticates callers with its own bearer key. It has no Anthropic Messages endpoint and no OpenAI Responses endpoint.
+**Where we stand:** the gateway speaks OpenAI `/v1/chat/completions` (upstream called with `stream: false`, reply sent as one SSE chunk), Anthropic Messages (`/v1/messages` with a real SSE relay checked per content block, `count_tokens`, `HEAD /api/hello`; a gateway-held org key or seat pass-through with `x-acl-key`) and MCP JSON-RPC at `/mcp/<server>`. Setup bundles live in `integrations/claude-code` and `integrations/coding-agents.md`. It has no OpenAI Responses endpoint.
 
 ## Matrix
 

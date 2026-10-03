@@ -60,7 +60,9 @@ def error(status: int, message: str, request_id: str | None = None, action: str 
 
 
 def _policy_error(v: Verdict) -> JSONResponse:
-    resp = error(v.status_code, f"blocked by policy: {v.reason}", v.request_id, v.action.value)
+    # A content or access block is a 400: Claude Code reports any 403 as a failed login.
+    status = 400 if v.status_code == 403 else v.status_code
+    resp = error(status, f"blocked by policy: {v.reason}", v.request_id, v.action.value)
     if any(f.category == "rate_limit" for f in v.findings if f.action is Action.BLOCK):
         resp.headers["x-should-retry"] = "true"  # a per-minute limit clears; other budgets do not
         resp.headers["retry-after"] = "30"
@@ -69,7 +71,7 @@ def _policy_error(v: Verdict) -> JSONResponse:
 
 def _unsafe(v: Verdict) -> JSONResponse:
     """A redaction that could not be applied precisely: refuse rather than forward the original."""
-    return error(403, f"cannot redact safely: {v.reason}", v.request_id)
+    return error(400, f"cannot redact safely: {v.reason}", v.request_id)
 
 
 def inspectable(o: Any) -> Any:

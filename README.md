@@ -93,7 +93,7 @@ An integration listed in `identity.integrations` (`{name: {token_env, max_level,
 
 ## Contextual PII (OpenAI Privacy Filter)
 
-`services/privacy_filter` serves `openai/privacy-filter` over HTTP (`docker compose` starts it). It finds names, addresses and similar spans that regexes cannot. In chat, those spans become placeholders (`<PRIVATE_PERSON_1>`) before the model sees them and are restored in the reply. Two override paths exist:
+`services/privacy_filter` serves `openai/privacy-filter` over HTTP (`docker compose` starts it). It finds names, addresses and similar spans that regexes cannot. In chat and `/v1/messages`, those spans become placeholders (`<PRIVATE_PERSON_1>`) before the model sees them and are restored in the reply, including tool-call arguments. A restored value that comes back as history is masked again wherever it appears. Two override paths exist:
 - **User:** roles in `override_roles` send `x-pii-override: <reason>`.
 - **Model:** the decision model judges whether the PII is needed for the task.
 
@@ -104,10 +104,24 @@ Both are audited, and neither can lift a `block`. The default `stub` backend is 
 | Traffic | How |
 |---|---|
 | App/agent → model | Point any OpenAI client at `http://gateway:8787/v1`, using a control-layer API key as the bearer token |
+| Claude Code, Anthropic SDKs → model | `ANTHROPIC_BASE_URL=http://gateway:8787` with a control-layer key, or a claude.ai seat plus `x-acl-key`: [`integrations/claude-code`](integrations/claude-code) |
+| OpenCode, Continue, Cline / Roo, Aider | [`integrations/coding-agents.md`](integrations/coding-agents.md) |
 | Agent → MCP tools | Point the MCP client at `http://gateway:8787/mcp/<server>` (servers are configured in `upstream.mcp_servers`) |
 | Agent → company resources | Point the agent's MCP client at `http://gateway:8787/mcp/company` with the agent's own key |
 | Anything else | `controllayer.sdk.Guard`: `guard.enforce(text, direction)` or the `@guard.tool` decorator |
 | Wazuh | [`integrations/wazuh`](integrations/wazuh): rules for the alert file sink, and an active response that posts risk signals back |
+
+## Anthropic Messages API (Claude Code)
+
+`POST /v1/messages` and `/v1/messages/count_tokens` speak Anthropic's format, streaming included, and apply the same controls as chat:
+
+- **Request.** Every system block, message block (text, thinking, `tool_use`, `tool_result`, images, unknown types) and tool definition is inspected on every call; a `tool_result` is checked as tool output, so a planted instruction or a leaked key in a file blocks the request. The new turn (everything after the last assistant message) is metered once for budgets and the loop guard. A token count is inspected the same way, since it sends the whole conversation upstream, but is not charged.
+- **Blocks** are `400 invalid_request_error` with the policy reason and `x-should-retry: false` (Claude Code shows any 403 as a failed login); a per-minute rate limit is a retryable 429.
+- **Reply.** Each content block is checked before release: a `tool_use` is withheld if it carries a secret (the turn then ends with `end_turn`), text is redacted, and a signed thinking block is released unchanged or replaced by a notice. Placeholders are restored in text and `tool_use` input.
+- **Streaming.** The upstream stream is relayed block by block: a block's deltas are held until its `content_block_stop`, checked, then re-emitted (unchanged blocks byte for byte). `ping` events keep the connection alive meanwhile.
+- **Auth.** A control-layer key in `x-api-key` or `Authorization` names the caller, and the gateway calls upstream with the org key from `upstream.anthropic.api_key_env`. A caller that names itself with `x-acl-key: <control-layer key>` (Claude Code: `ANTHROPIC_CUSTOM_HEADERS`) has its own `Authorization` / `x-api-key` and `anthropic-beta` forwarded, so a claude.ai seat keeps working (`passthrough_auth`). That login is never logged or stored, and a control-layer key is never forwarded.
+- **Upstream.** `upstream.anthropic.backend: anthropic` (any Messages-API URL in `url`) or `mock` (canned replies; `call-tool` in a prompt yields a `tool_use`). `anthropic-*` headers, query strings and unknown body fields pass through; upstream errors return unchanged with `retry-after`, `x-should-retry` and `anthropic-ratelimit-*`. `HEAD /api/hello` answers Claude Code's probe.
+- **Budgets** count prompt-cache writes and reads as tokens, priced at 1.25x and 0.1x the input price unless `usd_per_1m_cache_write` / `usd_per_1m_cache_read` say otherwise.
 
 ## Policy
 

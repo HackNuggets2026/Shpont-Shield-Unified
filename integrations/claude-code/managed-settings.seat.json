@@ -1,0 +1,12 @@
+{
+  "env": {
+    "ANTHROPIC_BASE_URL": "https://ai-gateway.example.com",
+    "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+    "CLAUDE_CODE_GATEWAY_HINT_HEADERS": "1"
+  },
+  "forceLoginMethod": "claudeai",
+  "forceLoginOrgUUID": "00000000-0000-0000-0000-000000000000",
+  "allowedProviders": ["customEndpoint"],
+  "allowManagedMcpServersOnly": true,
+  "allowManagedHooksOnly": true
+}

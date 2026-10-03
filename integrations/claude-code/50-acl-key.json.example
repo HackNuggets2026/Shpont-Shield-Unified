@@ -1,0 +1,5 @@
+{
+  "env": {
+    "ANTHROPIC_CUSTOM_HEADERS": "x-acl-key: <this employee's control-layer key>"
+  }
+}

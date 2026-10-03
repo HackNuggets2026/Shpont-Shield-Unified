@@ -15,7 +15,7 @@ Every interaction becomes a `Context`: principal, direction, text, model or tool
 
 Structured payloads (tool arguments, tool results, non-text message fields) are flattened to raw text for inspection, with JSON-in-strings decoded. Redaction is applied to every key and string in place and then re-checked. JSON inside a string is redacted value by value and re-serialised, so a span cannot swallow the JSON punctuation around it. If anything is still detected (a card number stored as an integer, a secret split across fields), the payload is refused, never forwarded.
 
-The directions are `input`, `output`, `tool_call`, `tool_result` and `tool_description`. Each control declares which directions it inspects. The chat proxy checks every message in the request on the way in, because the client owns the history and can forge it; repeats are served from a verdict cache. It checks the completion on the way out. The MCP proxy checks arguments, every result and the tool list itself, including names and schema strings, so a poisoned tool is removed before the agent ever sees it.
+The directions are `input`, `output`, `tool_call`, `tool_result` and `tool_description`. Each control declares which directions it inspects. The chat proxy checks every message in the request on the way in, because the client owns the history and can forge it; repeats are served from a verdict cache. It checks the completion on the way out. `/v1/messages` does the same per content block: each text, thinking and `tool_result` block is its own check (so a placeholder lands in the right block), every other block and key is checked together, and each reply block is checked before it is released, mid-stream included. The MCP proxy checks arguments, every result and the tool list itself, including names and schema strings, so a poisoned tool is removed before the agent ever sees it.
 
 ## Identities, resources and grants
 
@@ -51,7 +51,7 @@ An agent's event names its owner as the user (`actor.user`, ECS `user`), the age
 
 ## Contextual PII
 
-The Privacy Filter sidecar returns BIOES-decoded spans. The gateway applies `min_score`, maps labels to actions and merges the spans with regex findings. In chat, reversible labels become placeholders numbered per request, and are put back after the reply passes its own checks. PII values the caller supplied in the same request are not re-redacted in the reply. Overrides (user header or decision model) downgrade PII findings to `log`, never past `override_max`, and are written to the audit trail.
+The Privacy Filter sidecar returns BIOES-decoded spans. The gateway applies `min_score`, maps labels to actions and merges the spans with regex findings. In chat, reversible labels become placeholders numbered per request, and are put back after the reply passes its own checks. PII values the caller supplied in the same request are not re-redacted in the reply. Before the request leaves, every masked value is replaced by its placeholder wherever else it occurs (base64-like strings excepted), because a reply restored for the caller comes back as history where the detector may not find it again. Numbering follows the order of first appearance, so an unchanged conversation prefix is masked identically on every turn and prompt caching keeps working. Overrides (user header or decision model) downgrade PII findings to `log`, never past `override_max`, and are written to the audit trail.
 
 ## Why decision models
 
@@ -77,7 +77,7 @@ If the model is down or times out, `fail_mode: closed` blocks and `open` allows 
 
 ## Budgets
 
-Commercial models are priced per 1M input/output tokens. Local models are priced per compute-second, using measured upstream latency times `usd_per_compute_second`. Limits apply per principal, per team and globally per UTC day. The loop guard stops an agent that repeats the same call more than N times in a window.
+Commercial models are priced per 1M input/output tokens; Anthropic prompt-cache writes and reads count as input tokens priced at 1.25x and 0.1x unless the policy prices them. Local models are priced per compute-second, using measured upstream latency times `usd_per_compute_second`. Limits apply per principal, per team and globally per UTC day. The loop guard stops an agent that repeats the same call more than N times in a window.
 
 ## OWASP mapping
 
@@ -95,7 +95,7 @@ LLM04 (data poisoning), LLM08 (vector/embedding) and LLM09 (misinformation) are 
 
 ## Privacy
 
-Monitoring employees' AI use is personal-data processing. In the EU that means GDPR, and possibly works-council agreements. By default the audit log stores the text with every detected span masked (even when the action was only `log`), plus a SHA-256 of the original and the client's IP address (`audit.store_raw_text: false`). Blocked payloads are not stored at all. Content flagged only by a semantic control has no span to mask and is stored as sent. `shadow` and `log` modes allow monitoring without interfering.
+Monitoring employees' AI use is personal-data processing. In the EU that means GDPR, and possibly works-council agreements. By default the audit log stores the text with every detected span masked (even when the action was only `log`), plus a SHA-256 of the original and the client's IP address (`audit.store_raw_text: false`). Blocked payloads are not stored at all, and a gate-only row (auth, model, budgets) stores no text, since no detector ran on it. A client's own Anthropic login, forwarded in seat mode, is never written anywhere. Content flagged only by a semantic control has no span to mask and is stored as sent. `shadow` and `log` modes allow monitoring without interfering.
 
 ## Known gaps
 
@@ -105,6 +105,7 @@ Monitoring employees' AI use is personal-data processing. In the EU that means G
 - Risk scores live in memory and reset on restart; manual levels and grants persist.
 - The Privacy Filter sidecar and real decision models have not been run on the build VM; their contracts are tested against mocks.
 - Budgets and metrics are in-memory, so a restart resets them. Multiple replicas would need Redis for shared counters.
-- Streaming responses are buffered and released as a single checked chunk.
+- Chat streaming is emulated: the upstream is called without streaming and the checked reply is sent as one chunk. `/v1/messages` relays a real stream, but each content block arrives whole once checked, so long text appears a block at a time.
+- `/v1/messages` has been exercised with Claude Code 2.1.280 against the mock and a local fake of the API (seat pass-through included), not against `api.anthropic.com`. Redacting history rewrites signed content: the upstream then rejects the thinking signature and Claude Code retries without earlier thinking.
 - The MCP proxy speaks JSON-RPC over plain HTTP POST. SSE sessions and stdio servers are not proxied.
-- The heuristic backend is a keyword stand-in for demos without models, not a classifier.
+- The heuristic backend is a keyword stand-in for demos without models, not a classifier. Coding agents read files and docs that mention its keywords, so with it a real session meets false positives that a decision model would judge in context.
