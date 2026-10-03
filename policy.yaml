@@ -52,11 +52,12 @@ semantic:
 budgets:
   enabled: true
   shadow: false
-  global: { tokens_per_day: 20000000, usd_per_day: 400 }
+  # Sized for ~5,000 people (~$13k on a weekday, most of it Claude Code); live traffic has headroom on top.
+  global: { tokens_per_day: 6000000000, usd_per_day: 40000 }
   per_principal: { requests_per_minute: 60, tokens_per_day: 400000 }
   per_team:
-    engineering: { tokens_per_day: 8000000, usd_per_day: 200 }
-    finance: { tokens_per_day: 2000000, usd_per_day: 40 }
+    engineering: { tokens_per_day: 600000000, usd_per_day: 6000 }
+    finance: { tokens_per_day: 60000000, usd_per_day: 1500 }
     interns: { tokens_per_day: 20000, usd_per_day: 0.5, requests_per_minute: 10 }
   loop_guard: { max_identical_calls: 5, window_seconds: 60 }
   downgrade:                 # past 80% of a daily budget, answer with a cheaper model instead of refusing
@@ -193,14 +194,14 @@ menu:
     ui_qa:
       description: driving a mobile simulator through a user flow
       tier: heavy
-      teams: [engineering, interns]
+      teams: [engineering, mobile, web, qa-automation, interns]
       tools: ["read_*", "search_*", "*simulator*"]
       resources: { simulator: { max_concurrent: 2, max_minutes: 30 } }
       per_run: { usd: 5.0 }
       keywords: ["simulator", "tap", "ui test", "screen"]
     data_analysis:
       description: analysing spreadsheets, reports or business data
-      teams: [finance, engineering]
+      teams: [finance, treasury, risk, accounting, tax, engineering, analytics, ml, bi, data-governance, research]
       tools: ["read_*", "search_*"]
       resources: { external_email: {} }   # may email results out (an access grant included by the workflow)
       per_run: { tokens: 100000 }
@@ -208,7 +209,7 @@ menu:
     load_test:
       description: large automated test runs on dedicated VMs
       tier: heavy
-      teams: [engineering, platform]
+      teams: [engineering, platform, sre, qa-automation, payments, core-banking]
       approval: admin          # employees request it from /me; an admin approves per person
       tools: ["create_vm", "destroy_vm", "run_tests", "read_*"]
       resources: { vm: { max_concurrent: 1, max_minutes: 120 } }
@@ -409,6 +410,32 @@ principals: {}
 
 usage:
   path: data/usage.sqlite      # durable usage, leases, incidents, approvals
+
+# --- The organization: departments and their teams (the console's org units) --------
+# A team listed nowhere belongs to department "Unassigned". An API key may name its own `department`.
+
+org:
+  name: ACME Bank
+  departments:
+    Engineering:
+      owner: cto-office
+      teams: [engineering, payments, mobile, web, data-platform, sre, core-banking, cards, lending, identity,
+              api-gateway, devex, qa-automation, fraud-engineering]
+    Platform & Security:
+      owner: ciso-office
+      teams: [platform, security, it-ops, cloud-infra, network]
+    Data & Analytics:
+      owner: chief-data-office
+      teams: [analytics, ml, bi, data-governance, research]
+    Finance:
+      owner: cfo-office
+      teams: [finance, treasury, risk, accounting, tax]
+    Operations:
+      owner: coo-office
+      teams: [customer-ops, compliance, procurement, legal, hr, facilities]
+    Sales & Support:
+      owner: cro-office
+      teams: [sales-emea, sales-amer, sales-apac, support, marketing, interns]
 
 privacy:
   show_risk_to_employee: true  # employees see the incidents and score about them

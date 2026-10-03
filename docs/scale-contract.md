@@ -125,3 +125,24 @@ but returns at most 200 rows: everyone restricted or at risk first, then the hig
 - **Requests.** About 25 pending and about 300 decided.
 - **Budgets.** They scale with the org. The global and per-team limits in `policy.yaml` are raised to match,
   and the four live-demo teams keep headroom for today.
+
+## Deviations (backend)
+
+Small choices the contract left open, or where it could not be followed exactly.
+
+- **Windows.** `days=N` means N whole UTC days, today included (`window.since` is midnight UTC N-1 days ago);
+  `usd_prev` is the N days before that. The seeder writes the window before the seeded one as well (usage only,
+  one row per person and working day, ~8% lower spend), so `usd_prev` and `growth` have something to compare.
+- **`headcount`** counts people in the directory; **`active`** counts anyone with metered usage in the window
+  (a principal outside the directory, e.g. `unattributed`, can be active without adding to headcount).
+- **`people_at_risk`** is people with an open incident, or a risk score at or above `detections.response.alert`.
+  The score alone halves every 2 h, so it would empty out during a demo.
+- **`interventions`** are checks that ended in warn, redact or block; adherence is `1 - interventions/checks`.
+- **Team rows** carry `owner` (the team's manager in the directory, else the department owner) and `teams: 1`.
+- **`/admin/people`**: `status=limited` means status `active` with `budget_scale < 1`; `status=active` includes
+  limited people. Rows also carry `title`. `q` is a case-insensitive substring of id, name or email.
+- **Outliers.** `team_median` is the median spend of the team's members with any spend in the window (dormant
+  people would otherwise pull it to zero); teams with fewer than 3 spenders have no median. `growth` ignores a
+  previous window below $5 per 30 days.
+- **Seeded `interns` team** holds only carol and ivan: its tiny budget is part of the live demo.
+- **Cache.** The TTL is `ACL_ADMIN_CACHE_SECONDS` (default 15; 0 disables it, which the tests do).
