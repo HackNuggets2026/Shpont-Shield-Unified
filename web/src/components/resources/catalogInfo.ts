@@ -25,6 +25,12 @@ export const CLASS_INFO: Record<ResourceClass, { title: string; short: string; l
 
 const unitWord = (u: string) => (u === "minute" ? "minute" : u === "use" ? "use" : u);
 
+/** A unit price: "$0.008", "$0.0004", "$2.50" (no padded zeros on sub-cent prices). */
+export function unitUsd(v: number): string {
+  if (v >= 0.01) return usd(v);
+  return "$" + v.toFixed(6).replace(/0+$/, "");
+}
+
 /** "$2.50 / 1M input · $10.00 / 1M output tokens", "$0.01 / minute", "billed at cost". */
 export function priceLabel(r: CatalogItem): string {
   const p = r.price;
@@ -32,10 +38,10 @@ export function priceLabel(r: CatalogItem): string {
   if (p.usd_per_1m_input || p.usd_per_1m_output) {
     parts.push(`${usd(p.usd_per_1m_input)} / 1M input · ${usd(p.usd_per_1m_output)} / 1M output tokens`);
   }
-  if (p.usd_per_compute_second) parts.push(`${usd(p.usd_per_compute_second)} / GPU-second`);
+  if (p.usd_per_compute_second) parts.push(`${unitUsd(p.usd_per_compute_second)} / GPU-second`);
   if (p.usd_per_unit) {
     if (r.unit === "usd") parts.push(r.meter === "billing_export" ? "billed at cost (FOCUS import)" : "billed at cost");
-    else parts.push(`${usd(p.usd_per_unit)} / ${unitWord(r.unit)}`);
+    else parts.push(`${unitUsd(p.usd_per_unit)} / ${unitWord(r.unit)}`);
   }
   if (parts.length) return parts.join(" · ");
   if (r.class === "access_grant") return "no metered cost";
@@ -58,6 +64,7 @@ export function usageLabel(r: CatalogItem): string {
   if (u.tokens) bits.push(`${tokens(u.tokens)} tokens`);
   if (u.minutes) bits.push(`${num(u.minutes)} min${r.class === "leasable" ? " held" : ""}`);
   if (u.requests) bits.push(`${num(u.requests)} ${r.class === "access_grant" ? "uses" : "calls"}`);
+  if (!bits.length && u.usd > 0) return r.meter === "billing_export" ? "imported from the bill" : "cost only";
   return bits.join(" · ") || "no usage";
 }
 

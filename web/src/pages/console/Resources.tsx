@@ -17,7 +17,11 @@ export { priceLabel } from "../../components/resources/catalogInfo";
 /** The timeseries with catalog titles as series names, so the legend reads "Sandbox VM", not "vm". */
 function titled(ts: Timeseries, byName: Record<string, CatalogItem>): Timeseries {
   const series: Record<string, number[]> = {};
-  for (const [k, v] of Object.entries(ts.series)) series[byName[k]?.title || k] = v;
+  // Recharts reads a dataKey with "." as a path, so a title like "Llama 3.2" would plot nothing: keep the name then.
+  for (const [k, v] of Object.entries(ts.series)) {
+    const t = byName[k]?.title;
+    series[t && !t.includes(".") && !(t in series) ? t : k] = v;
+  }
   return { ...ts, series };
 }
 
@@ -31,7 +35,7 @@ function ClassTiles({ catalog, active, onPick }: { catalog: Catalog | undefined;
           c === "leasable"
             ? `${items.reduce((s, r) => s + r.live_leases, 0)} running`
             : c === "access_grant"
-              ? `${items.reduce((s, r) => s + r.live_grants, 0)} live grants`
+              ? `${items.reduce((s, r) => s + r.live_grants, 0)} live`
               : `${items.filter((r) => r.usage.usd > 0).length} with spend`;
         return (
           <button
@@ -49,7 +53,7 @@ function ClassTiles({ catalog, active, onPick }: { catalog: Catalog | undefined;
               <span className="text-xs text-muted">{catalog ? `${items.length} resources` : "…"}</span>
             </div>
             <div className="mt-2 text-sm font-medium text-ink">{CLASS_INFO[c].short}</div>
-            <p className="mt-1 text-xs leading-relaxed text-muted">{CLASS_INFO[c].long}</p>
+            <p className="mt-1 hidden text-xs leading-relaxed text-muted sm:block">{CLASS_INFO[c].long}</p>
             <div className="mt-3 flex items-baseline justify-between gap-2 border-t border-line pt-2 text-xs">
               <span className="text-muted">{c === "access_grant" ? "no metered cost" : `${usd(spend)} in 30 days`}</span>
               <span className="font-medium text-ink2">{catalog ? live : ""}</span>

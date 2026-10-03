@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import type { CatalogItem, Lease } from "../../api";
 import { ago, dateTime, minutes, usd } from "../../lib/format";
 import { useNow } from "../../lib/useNow";
+import { unitUsd } from "./catalogInfo";
 import { Button, Empty, ErrorBox, Meter, Pill, TableWrap, cx } from "../ui";
 import { IconStop } from "../icons";
 
@@ -25,8 +26,6 @@ export function LiveLeases({
   const [busy, setBusy] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
   const [error, setError] = useState<unknown>(null);
-  if (!leases.length) return <Empty title="Nothing running" hint="Leases appear here the moment an agent boots a simulator or creates a VM." />;
-
   const drift = Math.max(0, now - fetchedAt / 1000) / 60; // minutes since the snapshot
 
   const stop = async (l: Lease, label: string) => {
@@ -55,6 +54,9 @@ export function LiveLeases({
         </div>
       )}
       {msg && <div className="border-b border-line bg-good/10 px-4 py-2 text-xs text-good">{msg}</div>}
+      {leases.length === 0 ? (
+        <Empty title="Nothing running" hint="Leases appear here the moment an agent boots a simulator or creates a VM." />
+      ) : (
       <TableWrap>
         <table className="tbl min-w-[860px]">
           <thead>
@@ -127,7 +129,7 @@ export function LiveLeases({
                   </td>
                   <td className="tnum text-right text-xs">
                     <div className="font-medium text-ink">{usd(cost)}</div>
-                    {rate > 0 && <div className="text-muted">{usd(rate)}/min</div>}
+                    {rate > 0 && <div className="text-muted">{unitUsd(rate)}/min</div>}
                   </td>
                   <td className="text-right">
                     <Button size="sm" variant={zombie ? "danger" : "secondary"} onClick={() => stop(l, title)} disabled={busy === l.id}>
@@ -141,6 +143,7 @@ export function LiveLeases({
           </tbody>
         </table>
       </TableWrap>
+      )}
     </div>
   );
 }

@@ -3,7 +3,7 @@ import { Link } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { admin, type AccessRequest, type CatalogItem, type PrincipalRow, type Workflow } from "../../api";
 import { ReasonDialog } from "../../components/Dialog";
-import { RequestStatusPill, SensitivityPill, TierPill } from "../../components/pills";
+import { PersonStatusPill, RequestStatusPill, SensitivityPill, TierPill } from "../../components/pills";
 import { Button, Card, Empty, PageHeader, Pill, Q, Segmented, TableWrap, type Tone } from "../../components/ui";
 import { IconCheck, IconX } from "../../components/icons";
 import { ago, dateTime, minutes } from "../../lib/format";
@@ -88,7 +88,8 @@ function approveEffect(r: AccessRequest, lk: Lookups): string {
 
 export function Requests() {
   const qc = useQueryClient();
-  const now = useNow(15_000);
+  const tick = useNow(15_000);
+  const now = Math.max(tick, Date.now() / 1000); // renders on every poll too; never show a fresh decision as "in a moment"
   const q = useQuery({ queryKey: ["admin", "requests"], queryFn: () => admin.requests(), refetchInterval: 5_000 });
   const catalog = useQuery({ queryKey: ["admin", "catalog"], queryFn: () => admin.catalog(), refetchInterval: 60_000 });
   const people = useQuery({ queryKey: ["admin", "principals"], queryFn: admin.principals, refetchInterval: 30_000 });
@@ -171,6 +172,7 @@ export function Requests() {
                                   {p.team} · {p.role}
                                 </span>
                               )}
+                              {p && p.status !== "active" && <PersonStatusPill status={p.status} scale={p.budget_scale} />}
                             </div>
                             <div className="mt-1.5 text-sm">
                               <RequestDetail r={r} lk={lk} />

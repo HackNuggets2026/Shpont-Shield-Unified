@@ -77,8 +77,8 @@ export function CatalogTable({
         <th>Meter</th>
         <th>Sensitivity</th>
         <th>Owner</th>
-        <th className="text-right">30d spend</th>
-        <th>30d usage</th>
+        <th className="whitespace-nowrap text-right">30d spend</th>
+        <th className="whitespace-nowrap">30d usage</th>
         <th>Workflows</th>
       </tr>
     );
@@ -107,8 +107,8 @@ export function CatalogTable({
         <th>Meter</th>
         <th>Sensitivity</th>
         <th>Owner</th>
-        <th className="text-right">30d spend</th>
-        <th>30d usage</th>
+        <th className="whitespace-nowrap text-right">30d spend</th>
+        <th className="whitespace-nowrap">30d usage</th>
         <th>Now</th>
         <th>Workflows</th>
       </tr>
