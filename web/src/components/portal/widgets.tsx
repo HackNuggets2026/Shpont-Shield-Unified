@@ -401,7 +401,16 @@ export function MyAdminLog({ actions, empty = "No admin has acted on your accoun
               </div>
               {a.reason ? (
                 <div className="mt-1 break-words text-xs text-ink2">
-                  <span className="text-muted">Stated reason: </span>“{a.reason}”
+                  {isAutomatic(a.actor) ? (
+                    <>
+                      <span className="text-muted">Why: </span>
+                      {statusReason(a.reason)}
+                    </>
+                  ) : (
+                    <>
+                      <span className="text-muted">Stated reason: </span>“{a.reason}”
+                    </>
+                  )}
                 </div>
               ) : (
                 <div className="mt-1 text-xs text-muted">No reason given</div>

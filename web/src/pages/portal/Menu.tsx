@@ -38,7 +38,7 @@ function limitsText(w: Workflow): string[] {
   if (caps.length) out.push(`Stops at ${caps.join(" or ")} per run`);
   for (const [r, l] of Object.entries(w.resources)) {
     const bits = [l.max_concurrent !== null ? `up to ${l.max_concurrent} at a time` : null, l.max_minutes !== null ? `${minutes(l.max_minutes)} each` : null].filter(Boolean);
-    out.push(`${r}${bits.length ? `: ${bits.join(", ")}` : ""}`);
+    out.push(bits.length ? `${r}: ${bits.join(", ")}` : `includes ${r.replace(/_/g, " ")}`);
   }
   return out;
 }

@@ -56,6 +56,7 @@ export function PortalHome() {
   const qc = useQueryClient();
   const q = useMe();
   const [by, setBy] = useState<"workflow" | "source">("workflow");
+  const grants = useQuery({ queryKey: ["me", "grants"], queryFn: me.grants, staleTime: 60_000 });
   const ts = useQuery({ queryKey: ["me", "timeseries", by, 30], queryFn: () => me.timeseries(by, 30), refetchInterval: 60_000 });
   if (q.isPending) return <Loading rows={8} />;
   if (q.isError) return <ErrorBox error={q.error} retry={() => q.refetch()} />;
@@ -177,7 +178,7 @@ export function PortalHome() {
             </Link>
           }
         >
-          <RequestList requests={s.requests} limit={4} />
+          <RequestList requests={s.requests} limit={4} titles={Object.fromEntries((grants.data?.requestable ?? []).map((r) => [r.name, r.title]))} />
         </Card>
       </div>
     </div>

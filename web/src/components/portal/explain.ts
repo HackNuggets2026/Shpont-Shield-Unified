@@ -45,6 +45,7 @@ const NAMES: Record<string, string> = {
   ip_address: "an IP address",
 };
 const name = (n: string) => NAMES[n] ?? n.replace(/_/g, " ");
+const cap = (t: string) => t.charAt(0).toUpperCase() + t.slice(1);
 
 export interface Explained {
   /** One short sentence an employee understands. */
@@ -68,14 +69,14 @@ export function explainReason(reason: string | null | undefined, decision?: stri
   if (!m) return { title: raw, code: "" };
   const [, cat, sub, extra] = m;
   const code = `${cat}/${sub}`;
-  const out = (title: string, hint?: string): Explained => ({ title, hint, code, extra: extra || undefined });
+  const out = (title: string, hint?: string): Explained => ({ title, hint, code, extra: cleanExtra(extra, sub) });
   switch (cat) {
     case "secrets":
       return out(`Looked like it contained ${name(sub)}, so it was not sent`, "If it was a real credential, rotate it. Use a secrets manager reference instead of pasting keys.");
     case "pii":
       return decision === "block"
         ? out(`Contained ${name(sub)}, so it was not sent`)
-        : out(`${titleCase(name(sub)).replace(/^An? /i, "")} was masked before reaching the model`, "Nothing to do; the rest of your request went through.");
+        : out(`${cap(name(sub))} was masked before reaching the model`, "Nothing to do; the rest of your request went through.");
     case "prompt_injection":
       return out("Looked like an instruction trying to override the AI's rules", "Often caused by pasting text from an untrusted web page or document.");
     case "data_exfiltration":
@@ -83,7 +84,7 @@ export function explainReason(reason: string | null | undefined, decision?: stri
     case "confidential_output":
       return out("Asked for confidential customer data", "Customer records stay in the systems built for them.");
     case "harmful_request":
-      return out("The request was outside acceptable use");
+      return out(`Looked like a request for ${sub.replace(/_/g, " ")}, which is outside acceptable use`);
     case "access_grant":
       if (sub === "grant_required")
         return out("Needs time-boxed access you did not have at that moment", "Request access on the Access page; an admin approves it.");
@@ -122,6 +123,21 @@ export function explainReason(reason: string | null | undefined, decision?: stri
     default:
       return out(`${titleCase(cat)}: ${sub.replace(/_/g, " ")}`);
   }
+}
+
+/** Keeps the useful part of a policy's free-text detail; drops counters, scores and restatements. */
+function cleanExtra(extra: string | undefined, sub: string): string | undefined {
+  let x = (extra ?? "").trim();
+  if (!x) return undefined;
+  x = x.replace(new RegExp(`^${sub}\\s+`), "");
+  const score = /\bp=([\d.]+)(?:\s+conf=[\d.]+)?/.exec(x);
+  if (score) {
+    const rest = x.replace(score[0], "").trim();
+    const conf = `detector was ${Math.round(Number(score[1]) * 100)}% sure`;
+    return rest ? `${rest} (${conf})` : cap(conf);
+  }
+  if (/^\d+ x \w+$/.test(x) || /is quarantined; only/.test(x)) return undefined;
+  return x;
 }
 
 /** What a detection rule means, in a sentence. */
@@ -186,6 +202,9 @@ export function myActionLabel(a: AdminAction): string {
     case "revoke_grant":
       return "Ended a grant early";
     case "approve_request":
+      if (typeof d.resource === "string") return `Approved your request: ${d.resource}${typeof d.minutes === "number" ? ` for ${minutes(Math.round(d.minutes))}` : ""}`;
+      if (typeof d.budget_scale === "number") return `Approved more budget: ${Math.round(d.budget_scale * 100)}% of normal`;
+      if (Array.isArray(d.approved_workflows)) return "Approved your workflow request";
       return "Approved your request";
     case "deny_request":
       return "Declined your request";

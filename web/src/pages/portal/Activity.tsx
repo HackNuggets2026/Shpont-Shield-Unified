@@ -128,18 +128,19 @@ function StoppedCard({ events, loading, error, retry }: { events: ActivityEvent[
 
 function SessionRow({ s }: { s: CcSession }) {
   return (
-    <li className="flex flex-wrap items-start gap-x-4 gap-y-1.5 px-4 py-3 text-sm">
-      <div className="min-w-0 flex-1 basis-56">
-        <div className="flex flex-wrap items-center gap-2">
+    <li className="px-4 py-3 text-sm">
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex min-w-0 flex-wrap items-center gap-x-2">
           <span className="font-medium text-ink">{s.workflow ? seriesLabel(s.workflow) : "Unlabeled session"}</span>
           {s.task && <span className="font-mono text-xs text-ink2">{s.task}</span>}
         </div>
-        <div className="mt-0.5 text-[11px] text-muted" title={`${dateTime(s.start)} → ${dateTime(s.end)}`}>
-          {ago(s.end)} · {s.models.join(", ") || "no model calls"}
-          {s.activeSeconds ? ` · ${minutes(s.activeSeconds / 60)} active` : ""}
-        </div>
+        <span className="tnum shrink-0 font-medium text-ink">{usd(s.usd)}</span>
       </div>
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-ink2">
+      <div className="mt-0.5 text-[11px] text-muted" title={`${dateTime(s.start)} → ${dateTime(s.end)}`}>
+        {ago(s.end)} · {s.models.join(", ") || "no model calls"} · {num(s.requests)} requests
+        {s.activeSeconds ? ` · ${minutes(s.activeSeconds / 60)} active` : ""}
+      </div>
+      <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-ink2">
         <span className="tnum">
           <span className="text-good">+{num(s.added)}</span> <span className="text-bad">−{num(s.removed)}</span> lines
         </span>
@@ -147,9 +148,12 @@ function SessionRow({ s }: { s: CcSession }) {
           {num(s.commits)} commit{s.commits === 1 ? "" : "s"}
         </span>
         {s.prs > 0 && <span className="tnum">{num(s.prs)} PR{s.prs === 1 ? "" : "s"}</span>}
-        {s.toolRejects > 0 && <span className="text-muted">{s.toolRejects} tool calls you declined</span>}
+        {s.toolRejects > 0 && (
+          <span className="text-muted">
+            {s.toolRejects} tool call{s.toolRejects === 1 ? "" : "s"} you declined
+          </span>
+        )}
       </div>
-      <div className="tnum w-16 shrink-0 text-right font-medium text-ink">{usd(s.usd)}</div>
     </li>
   );
 }
