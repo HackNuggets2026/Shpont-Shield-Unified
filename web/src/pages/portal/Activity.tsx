@@ -1,91 +1,122 @@
-import { useMemo } from "react";
-import { useQuery } from "@tanstack/react-query";
-import { me, type ActivityEvent } from "../../api";
+import { useMemo, useState } from "react";
+import { me, type ActivityEvent, type Breakdown } from "../../api";
 import { ActivityFeed } from "../../components/ActivityFeed";
 import { seriesLabel } from "../../components/charts";
 import { DecisionPill } from "../../components/pills";
-import { Card, Empty, ErrorBox, Loading, PageHeader, Q, TableWrap } from "../../components/ui";
+import { Button, Card, Empty, ErrorBox, Kpi, Loading, PageHeader, Pill, Q } from "../../components/ui";
 import { IconTerminal } from "../../components/icons";
-import { ago, dateTime, num, tokens, usd } from "../../lib/format";
+import { explainReason } from "../../components/portal/explain";
+import { ccSessions, isStopped, useMyEvents, type CcSession } from "../../components/portal/useMyEvents";
+import { ago, dateTime, minutes, num, tokens, usd } from "../../lib/format";
 import { kindLabel } from "../../lib/events";
 import { useMe } from "./Home";
 
-interface CcSession {
-  id: string;
-  start: number;
-  end: number;
-  requests: number;
-  usd: number;
-  tokens: number;
-  models: Set<string>;
-  commits: number;
-  lines: number;
-  task: string | null;
-  workflow: string | null;
-  client: string | null;
-}
+// ---- runs grouped by task -----------------------------------------------------------------------
 
-function ccSessions(events: ActivityEvent[]): CcSession[] {
-  const by = new Map<string, CcSession>();
-  for (const e of events) {
-    if (e.source !== "claude_code") continue;
-    const id = e.session ?? "(no session)";
-    let s = by.get(id);
-    if (!s) {
-      s = { id, start: e.ts, end: e.ts, requests: 0, usd: 0, tokens: 0, models: new Set(), commits: 0, lines: 0, task: e.task, workflow: e.workflow, client: e.client };
-      by.set(id, s);
+function RunsByTask({ runs }: { runs: Breakdown[] }) {
+  const groups = useMemo(() => {
+    const by = new Map<string, { workflow: string; usd: number; requests: number; tasks: Breakdown[] }>();
+    for (const r of runs) {
+      if (!r.usd && !r.tokens && !r.requests && !r.minutes) continue;
+      const wf = String(r.workflow ?? "(none)");
+      const g = by.get(wf) ?? { workflow: wf, usd: 0, requests: 0, tasks: [] };
+      g.usd += r.usd || 0;
+      g.requests += r.requests || 0;
+      g.tasks.push(r);
+      by.set(wf, g);
     }
-    s.start = Math.min(s.start, e.ts);
-    s.end = Math.max(s.end, e.ts);
-    s.task ??= e.task;
-    s.workflow ??= e.workflow;
-    const v = (e.detail as { value?: number } | null)?.value ?? 0;
-    if (e.kind === "cc.api_request") {
-      s.requests += 1;
-      s.usd += e.usd ?? 0;
-      s.tokens += e.tokens ?? 0;
-      if (e.model) s.models.add(e.model);
-    } else if (e.kind === "metric.commit") s.commits += v;
-    else if (e.kind === "metric.lines_of_code" && e.decision === "added") s.lines += v;
-  }
-  return [...by.values()].sort((a, b) => b.end - a.end);
+    return [...by.values()].sort((a, b) => b.usd - a.usd);
+  }, [runs]);
+  if (!groups.length) return <Empty title="No runs this week" hint="Calls you make through the gateway, MCP tools or Claude Code show up here." />;
+  return (
+    <div className="max-h-[440px] divide-y divide-line overflow-y-auto">
+      {groups.map((g) => (
+        <section key={g.workflow}>
+          <header className="sticky top-0 z-[1] flex items-baseline justify-between gap-2 bg-raised/90 px-4 py-1.5 backdrop-blur">
+            <span className="text-xs font-semibold text-ink">{seriesLabel(g.workflow)}</span>
+            <span className="tnum text-xs text-ink2">
+              {usd(g.usd)} · {g.tasks.length} task{g.tasks.length === 1 ? "" : "s"}
+            </span>
+          </header>
+          <ul className="divide-y divide-line/50">
+            {[...g.tasks]
+              .sort((a, b) => b.usd - a.usd)
+              .map((r, i) => (
+                <li key={`${r.task}-${i}`} className="flex items-center justify-between gap-3 px-4 py-2 text-sm">
+                  <div className="min-w-0">
+                    <div className="truncate font-mono text-xs text-ink">{r.task === "(none)" ? <span className="font-sans text-muted">no task label</span> : r.task}</div>
+                    <div className="text-[11px] text-muted">
+                      {num(r.requests)} calls · {tokens(r.tokens)} tokens{r.minutes ? ` · ${minutes(r.minutes)} of resources` : ""}
+                    </div>
+                  </div>
+                  <span className="tnum shrink-0 font-medium text-ink">{usd(r.usd)}</span>
+                </li>
+              ))}
+          </ul>
+        </section>
+      ))}
+    </div>
+  );
 }
 
-const STOPPED = new Set(["block", "redact", "warn"]);
+// ---- blocked and masked -------------------------------------------------------------------------
 
-/** Calls the policy stopped or changed. Built from the activity stream, which survives restarts. */
-function BlockedCard() {
-  const q = useQuery({ queryKey: ["me", "activity", 500], queryFn: () => me.activity(500), refetchInterval: 30_000 });
-  const rows = (q.data ?? []).filter((e) => e.kind.startsWith("check.") && e.decision && STOPPED.has(e.decision));
+function StoppedRow({ e }: { e: ActivityEvent }) {
+  const reason = (e.detail as { reason?: string } | null)?.reason;
+  const x = explainReason(reason, e.decision);
+  const where = e.tool ? `tool ${e.tool}` : e.model ?? e.resource ?? "";
   return (
-    <Card title="Blocked and flagged" subtitle="Calls the policy stopped or changed, and why" flush>
-      {q.isPending ? (
+    <li className="px-4 py-3 text-sm">
+      <div className="flex flex-wrap items-center gap-2">
+        <DecisionPill decision={e.decision === "redact" ? "redact" : e.decision} />
+        <span className="font-medium text-ink">{x.title}</span>
+      </div>
+      {x.hint && <div className="mt-1 text-xs text-ink2">{x.hint}</div>}
+      <div className="mt-1 flex flex-wrap gap-x-2 text-[11px] text-muted">
+        <span title={dateTime(e.ts)}>{ago(e.ts)}</span>
+        <span>{kindLabel(e.kind)}</span>
+        {where && <span>{where}</span>}
+        {e.workflow && <span>{seriesLabel(e.workflow)}</span>}
+        {e.task && <span className="font-mono">{e.task}</span>}
+        {x.code && <span className="font-mono">{x.code}</span>}
+      </div>
+      {x.extra && <div className="mt-1 break-words text-[11px] text-muted">Policy note: {x.extra}</div>}
+    </li>
+  );
+}
+
+function StoppedCard({ events, loading, error, retry }: { events: ActivityEvent[]; loading: boolean; error: unknown; retry: () => void }) {
+  const rows = events.filter(isStopped);
+  const blocked = rows.filter((e) => e.decision === "block").length;
+  const masked = rows.filter((e) => e.decision === "redact").length;
+  return (
+    <Card
+      title="Blocked or changed, and why"
+      subtitle="Last 30 days. The text of a blocked prompt is never stored, only the reason."
+      flush
+      actions={
+        rows.length ? (
+          <span className="flex gap-1.5">
+            {blocked > 0 && <Pill tone="bad">{blocked} blocked</Pill>}
+            {masked > 0 && <Pill tone="serious">{masked} masked</Pill>}
+          </span>
+        ) : undefined
+      }
+    >
+      {loading ? (
         <div className="p-4">
           <Loading rows={4} />
         </div>
-      ) : q.isError ? (
+      ) : error ? (
         <div className="p-4">
-          <ErrorBox error={q.error} retry={() => q.refetch()} />
+          <ErrorBox error={error} retry={retry} />
         </div>
       ) : rows.length === 0 ? (
-        <Empty title="Nothing blocked" hint="Every recent call went through untouched." />
+        <Empty title="Nothing was blocked or changed" hint="Every call in the last 30 days went through as sent." />
       ) : (
-        <ul className="max-h-[380px] divide-y divide-line/60 overflow-y-auto">
+        <ul className="max-h-[440px] divide-y divide-line/60 overflow-y-auto">
           {rows.map((e) => (
-            <li key={e.id} className="px-4 py-2.5 text-sm">
-              <div className="flex flex-wrap items-center gap-2">
-                <DecisionPill decision={e.decision} />
-                <span className="text-xs text-ink2">
-                  {kindLabel(e.kind)}
-                  {e.tool ? ` · ${e.tool}` : e.model ? ` · ${e.model}` : ""}
-                  {e.workflow ? ` · ${seriesLabel(e.workflow)}` : ""}
-                </span>
-                <span className="ml-auto text-[11px] text-muted" title={dateTime(e.ts)}>
-                  {ago(e.ts)}
-                </span>
-              </div>
-              <div className="mt-1 break-words text-xs text-ink2">{String((e.detail as { reason?: string } | null)?.reason || "—")}</div>
-            </li>
+            <StoppedRow key={e.id} e={e} />
           ))}
         </ul>
       )}
@@ -93,10 +124,44 @@ function BlockedCard() {
   );
 }
 
-function ClaudeCodeCard() {
-  const q = useQuery({ queryKey: ["me", "activity", 500], queryFn: () => me.activity(500), refetchInterval: 30_000 });
-  const sessions = useMemo(() => ccSessions(q.data ?? []), [q.data]);
-  const total = sessions.reduce((a, s) => a + s.usd, 0);
+// ---- Claude Code ------------------------------------------------------------------------------
+
+function SessionRow({ s }: { s: CcSession }) {
+  return (
+    <li className="flex flex-wrap items-start gap-x-4 gap-y-1.5 px-4 py-3 text-sm">
+      <div className="min-w-0 flex-1 basis-56">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="font-medium text-ink">{s.workflow ? seriesLabel(s.workflow) : "Unlabeled session"}</span>
+          {s.task && <span className="font-mono text-xs text-ink2">{s.task}</span>}
+        </div>
+        <div className="mt-0.5 text-[11px] text-muted" title={`${dateTime(s.start)} → ${dateTime(s.end)}`}>
+          {ago(s.end)} · {s.models.join(", ") || "no model calls"}
+          {s.activeSeconds ? ` · ${minutes(s.activeSeconds / 60)} active` : ""}
+        </div>
+      </div>
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-ink2">
+        <span className="tnum">
+          <span className="text-good">+{num(s.added)}</span> <span className="text-bad">−{num(s.removed)}</span> lines
+        </span>
+        <span className="tnum">
+          {num(s.commits)} commit{s.commits === 1 ? "" : "s"}
+        </span>
+        {s.prs > 0 && <span className="tnum">{num(s.prs)} PR{s.prs === 1 ? "" : "s"}</span>}
+        {s.toolRejects > 0 && <span className="text-muted">{s.toolRejects} tool calls you declined</span>}
+      </div>
+      <div className="tnum w-16 shrink-0 text-right font-medium text-ink">{usd(s.usd)}</div>
+    </li>
+  );
+}
+
+function ClaudeCodeCard({ events, loading, error, retry, partial }: { events: ActivityEvent[]; loading: boolean; error: unknown; retry: () => void; partial: boolean }) {
+  const sessions = useMemo(() => ccSessions(events), [events]);
+  const [all, setAll] = useState(false);
+  const t = sessions.reduce(
+    (a, s) => ({ usd: a.usd + s.usd, added: a.added + s.added, removed: a.removed + s.removed, commits: a.commits + s.commits, prs: a.prs + s.prs }),
+    { usd: 0, added: 0, removed: 0, commits: 0, prs: 0 },
+  );
+  const shown = all ? sessions : sessions.slice(0, 8);
   return (
     <Card
       flush
@@ -108,57 +173,57 @@ function ClaudeCodeCard() {
           Claude Code sessions
         </span>
       }
-      subtitle={q.data ? `${sessions.length} sessions · ${usd(total)} in your last ${q.data.length} events` : "From Claude Code telemetry"}
+      subtitle={`Last 30 days${partial ? " (most recent part)" : ""}, from Claude Code telemetry. Your prompts are never stored.`}
     >
-      {q.isPending ? (
+      {loading ? (
         <div className="p-4">
           <Loading rows={4} />
         </div>
-      ) : q.isError ? (
+      ) : error ? (
         <div className="p-4">
-          <ErrorBox error={q.error} retry={() => q.refetch()} />
+          <ErrorBox error={error} retry={retry} />
         </div>
       ) : sessions.length === 0 ? (
-        <Empty title="No Claude Code sessions" hint="Sessions appear here once Claude Code telemetry points at the gateway." />
+        <Empty title="No Claude Code sessions" hint="Sessions appear once Claude Code sends its telemetry to the gateway." />
       ) : (
-        <TableWrap maxH="380px">
-          <table className="tbl min-w-[760px]">
-            <thead>
-              <tr>
-                <th>Session</th>
-                <th>Task</th>
-                <th>Models</th>
-                <th className="text-right">Requests</th>
-                <th className="text-right">Tokens</th>
-                <th className="text-right">Commits</th>
-                <th className="text-right">Lines +</th>
-                <th className="text-right">Cost</th>
-              </tr>
-            </thead>
-            <tbody>
-              {sessions.map((s) => (
-                <tr key={s.id}>
-                  <td>
-                    <div className="font-mono text-[11px] text-ink2">{s.id.slice(0, 8)}</div>
-                    <div className="text-[11px] text-muted" title={`${dateTime(s.start)} → ${dateTime(s.end)}`}>
-                      {ago(s.end)}
-                    </div>
-                  </td>
-                  <td className="text-xs">
-                    <div>{s.workflow ? seriesLabel(s.workflow) : "—"}</div>
-                    {s.task && <div className="font-mono text-[11px] text-muted">{s.task}</div>}
-                  </td>
-                  <td className="font-mono text-[11px] text-ink2">{[...s.models].join(", ") || "—"}</td>
-                  <td className="tnum text-right">{num(s.requests)}</td>
-                  <td className="tnum text-right">{tokens(s.tokens)}</td>
-                  <td className="tnum text-right">{num(s.commits)}</td>
-                  <td className="tnum text-right">{num(s.lines)}</td>
-                  <td className="tnum text-right font-medium">{usd(s.usd)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </TableWrap>
+        <>
+          <div className="grid grid-cols-2 gap-3 border-b border-line px-4 py-3 text-xs sm:grid-cols-5">
+            <div>
+              <div className="text-muted">Sessions</div>
+              <div className="tnum mt-0.5 text-base font-semibold text-ink">{sessions.length}</div>
+            </div>
+            <div>
+              <div className="text-muted">Cost</div>
+              <div className="tnum mt-0.5 text-base font-semibold text-ink">{usd(t.usd)}</div>
+            </div>
+            <div>
+              <div className="text-muted">Lines</div>
+              <div className="tnum mt-0.5 text-base font-semibold">
+                <span className="text-good">+{num(t.added)}</span> <span className="text-bad">−{num(t.removed)}</span>
+              </div>
+            </div>
+            <div>
+              <div className="text-muted">Commits</div>
+              <div className="tnum mt-0.5 text-base font-semibold text-ink">{num(t.commits)}</div>
+            </div>
+            <div>
+              <div className="text-muted">Pull requests</div>
+              <div className="tnum mt-0.5 text-base font-semibold text-ink">{num(t.prs)}</div>
+            </div>
+          </div>
+          <ul className="divide-y divide-line/60">
+            {shown.map((s) => (
+              <SessionRow key={s.id} s={s} />
+            ))}
+          </ul>
+          {sessions.length > 8 && (
+            <div className="flex justify-center border-t border-line p-2">
+              <Button size="sm" variant="ghost" onClick={() => setAll((x) => !x)}>
+                {all ? "Show fewer" : `Show all ${sessions.length} sessions`}
+              </Button>
+            </div>
+          )}
+        </>
       )}
     </Card>
   );
@@ -166,50 +231,30 @@ function ClaudeCodeCard() {
 
 export function PortalActivity() {
   const q = useMe();
+  const ev = useMyEvents(30);
+  const events = ev.data?.events ?? [];
+  const stopped = events.filter(isStopped).length;
+  const cc = events.filter((e) => e.source === "claude_code" && e.kind === "cc.api_request").reduce((a, e) => a + (e.usd ?? 0), 0);
+  const tasks = (q.data?.runs ?? []).filter((r) => r.task !== "(none)" && (r.usd || r.requests)).length;
   return (
     <div className="space-y-4">
-      <PageHeader title="My activity" subtitle="What you ran, what it cost, and anything that was blocked and why." />
+      <PageHeader title="My activity" subtitle="What you ran, what it cost, and anything that was blocked or changed, with the reason." />
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <Kpi label="Spend this week" value={q.data ? usd(q.data.by_workflow.reduce((a, r) => a + (r.usd || 0), 0)) : "…"} sub="all sources" />
+        <Kpi label="Tasks this week" value={q.data ? (tasks >= 30 ? "30+" : tasks) : "…"} sub="with a task label" />
+        <Kpi label="Claude Code, 30 days" value={ev.data ? usd(cc) : "…"} sub="model requests" />
+        <Kpi label="Blocked or changed" value={ev.data ? stopped : "…"} tone={stopped ? "warn" : undefined} sub="last 30 days" />
+      </div>
       <div className="grid gap-4 xl:grid-cols-2">
-        <Card title="Runs by task" subtitle="Last 7 days" flush>
+        <Card title="Runs by task" subtitle="Last 7 days, grouped by workflow (top 30 tasks)" flush>
           <Q q={q} rows={5}>
-            {(s) =>
-              s.runs.filter((r) => r.usd || r.tokens || r.requests).length === 0 ? (
-                <Empty title="No runs this week" />
-              ) : (
-                <TableWrap maxH="380px">
-                  <table className="tbl">
-                    <thead>
-                      <tr>
-                        <th>Workflow</th>
-                        <th>Task</th>
-                        <th className="text-right">Calls</th>
-                        <th className="text-right">Tokens</th>
-                        <th className="text-right">Cost</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {s.runs
-                        .filter((r) => r.usd || r.tokens || r.requests)
-                        .map((r, i) => (
-                          <tr key={i}>
-                            <td className="font-medium">{seriesLabel(String(r.workflow))}</td>
-                            <td className="font-mono text-xs">{r.task === "(none)" ? <span className="text-muted">no task label</span> : r.task}</td>
-                            <td className="tnum text-right">{num(r.requests)}</td>
-                            <td className="tnum text-right">{tokens(r.tokens)}</td>
-                            <td className="tnum text-right font-medium">{usd(r.usd)}</td>
-                          </tr>
-                        ))}
-                    </tbody>
-                  </table>
-                </TableWrap>
-              )
-            }
+            {(s) => <RunsByTask runs={s.runs} />}
           </Q>
         </Card>
-        <BlockedCard />
+        <StoppedCard events={events} loading={ev.isPending} error={ev.error} retry={() => ev.refetch()} />
       </div>
-      <ClaudeCodeCard />
-      <Card title="Activity feed" subtitle="Everything recorded under your key, newest first" flush>
+      <ClaudeCodeCard events={events} loading={ev.isPending} error={ev.error} retry={() => ev.refetch()} partial={ev.data ? !ev.data.complete : false} />
+      <Card title="Everything recorded under your key" subtitle="Newest first. Metadata only: who, what, cost and decision." flush>
         <ActivityFeed load={(p) => me.activity(p.limit, p.before)} queryKey={["me", "activity"]} serverFilters={false} interval={5000} />
       </Card>
     </div>
