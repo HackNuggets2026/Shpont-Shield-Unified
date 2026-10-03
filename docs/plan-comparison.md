@@ -28,8 +28,10 @@ Everything is configured in one hot-reloaded `policy.yaml`. An ethics rule is on
 | Corporate guardrails: ethics, client privacy, project confidentiality | **Shared.** Semantic controls in YAML, per-team overrides |
 | Packaged as a proxy | **Shared,** plus the MCP proxy for agents |
 | Jev / tev1 / nimble as decision model | **Shared, the core.** Two-tier cascade on `/v1/systemone`. Not yet run on real models (this VM can't host them) |
-| Flag malicious employees, monitor closely, silently alert security | **Being added:** risk score with decay, watch levels, silent webhook alerts |
-| OpenAI Privacy Filter for PII, minimally invasive, overridable | **Being added:** contextual PII spans, reversible masking, user and model overrides |
+| Flag malicious employees, monitor closely, silently alert security | **Built:** decaying risk score, watch (stricter policy + full capture) / restricted levels, silent alerts to console, file or webhook |
+| OpenAI Privacy Filter for PII, minimally invasive, overridable | **Built:** sidecar + contextual spans, reversible masking restored in replies, user and model overrides that never lift a block |
+| Employee panel | **Built:** `/me`. Usage, activity, and grants of company resources (servers, credentials, SaaS, MCP) to their agents |
+| Security panel | **Built:** `/security`. Everything above plus risk levels, alerts, grant revocation, resource suspension |
 
 ## Why Privacy Filter fits so well
 

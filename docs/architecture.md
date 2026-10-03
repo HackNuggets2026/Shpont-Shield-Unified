@@ -17,6 +17,26 @@ Structured payloads (tool arguments, tool results, non-text message fields) are 
 
 The directions are `input`, `output`, `tool_call`, `tool_result` and `tool_description`. Each control declares which directions it inspects. The chat proxy checks every message in the request on the way in, because the client owns the history and can forge it; repeats are served from a verdict cache. It checks the completion on the way out. The MCP proxy checks arguments, every result and the tool list itself, including names and schema strings, so a poisoned tool is removed before the agent ever sees it.
 
+## Identities, resources and grants
+
+API keys map to principals of kind `human` or `agent`, and every agent has an owner. The resource catalog (`resources:` in the policy) is security-owned and lists who is entitled to each resource. Grants are runtime state in `data/state.json`, written atomically and changed only through the panels. Security edits the policy; employees edit grants.
+
+A broker call has a resource and a scope. It passes the gate only if all of these hold at that moment:
+- the agent holds a grant with that scope;
+- the grant has not expired;
+- the owner is still entitled;
+- the resource is not suspended.
+
+Such decisions are never cached, because expiry depends on time. Reaching a catalogued MCP server needs a grant too, but per-tool RBAC and the irreversible-tool rule still apply on that server. Agents cannot reach uncatalogued servers at all.
+
+## Insider risk
+
+`RiskEngine` keeps a decaying score per principal. Points come from each finding's *proposed* action, so shadowed and capped findings still count as intent, plus category weights. Rate limits, outages and auth failures are not evidence. The effective level is the highest of: the score-based level, a manual level set by security, and the owner's level (for agents). The level selects the policy variant (`watch_controls`), turns on raw capture, or blocks (`restricted`). It is part of the verdict cache key.
+
+## Contextual PII
+
+The Privacy Filter sidecar returns BIOES-decoded spans. The gateway applies `min_score`, maps labels to actions and merges the spans with regex findings. In chat, reversible labels become placeholders numbered per request, and are put back after the reply passes its own checks. PII values the caller supplied in the same request are not re-redacted in the reply. Overrides (user header or decision model) downgrade PII findings to `log`, never past `override_max`, and are written to the audit trail.
+
 ## Why decision models
 
 Ollama's `/v1/systemone` takes text plus up to 64 typed questions and returns a probability per answer. That fits the brief's "Block vs Redact or adherence %" requirement directly:
@@ -64,6 +84,9 @@ Monitoring employees' AI use is personal-data processing. In the EU that means G
 ## Known gaps
 
 - No approval workflow yet: irreversible tools are simply blocked.
+- `run_command` on server resources is simulated; production would hand off to a bastion or SSH CA.
+- Risk scores live in memory and reset on restart; manual levels and grants persist.
+- The Privacy Filter sidecar and real decision models have not been run on the build VM; their contracts are tested against mocks.
 - Budgets and metrics are in-memory, so a restart resets them. Multiple replicas would need Redis for shared counters.
 - Streaming responses are buffered and released as a single checked chunk.
 - The MCP proxy speaks JSON-RPC over plain HTTP POST. SSE sessions and stdio servers are not proxied.

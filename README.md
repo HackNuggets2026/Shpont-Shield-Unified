@@ -43,11 +43,34 @@ By default the policy uses the `mock` upstream and the `heuristic` semantic back
 ## With real models
 
 ```bash
-docker compose up -d            # Ollama + pulls tev1:0.8b, nimble, llama3.2:1b + gateway
+docker compose up -d            # Ollama (tev1:0.8b, nimble, llama3.2:1b) + Privacy Filter + gateway
 ACL_LIVE=1 pytest -m live       # contract test against the real /v1/systemone
 ```
 
 Without Docker, set `ACL_SEMANTIC=ollama ACL_UPSTREAM=ollama` before starting the gateway. You can also edit `semantic.backend` / `upstream.backend` in `policy.yaml` while it runs. nimble needs about 10 GB of memory. On smaller machines, set `deep_model: null` to use the fast tier alone, or `deep_model: tev1` after `ollama pull tev1`.
+
+## Panels
+
+| URL | Who | What |
+|---|---|---|
+| `/me` | Employees (sign in with their own key) | Usage, a monitoring notice, recent activity of themselves and their agents, and **company resources**: grant or revoke each of their agents' access to servers, credentials, SaaS and MCP servers, with scope and expiry |
+| `/security` (also `/`) | Security staff (`?token=`) | Posture, threats, controls, budgets, latency, audit trail, **insider risk** (scores, set watch/restricted levels), **silent alerts**, all agent grants (revoke), resource catalog (suspend) |
+
+## Company resources for agents
+
+Security defines a catalog in `policy.yaml` (`resources:`) with who is entitled to each resource and the longest grant allowed. Employees delegate entitled resources to their agents in `/me`. Agents use them through the gateway's built-in `company` MCP server (`list_resources`, `call_api`, `run_command`). The gateway checks the live grant on every call, including expiry, the owner's entitlement and suspension. It then performs the call and **injects the credential itself**, so agents never hold secrets. Results still pass through every content check.
+
+## Insider risk
+
+Every finding adds points to the person's score, which decays with a 24 h half-life. An agent's points also count half against its owner. At `watch` the person gets a stricter policy (`insider_risk.watch_controls`) and full-text capture. At `restricted` everything is blocked until security clears it. Level changes, blocks while watched and selected categories (exfiltration, malware, leaked keys) raise **silent alerts** to the console, a JSONL file or a SIEM webhook. The employee's response is unchanged. Monitoring itself is disclosed (GDPR, Polish Labour Code art. 22³).
+
+## Contextual PII (OpenAI Privacy Filter)
+
+`services/privacy_filter` serves `openai/privacy-filter` over HTTP (`docker compose` starts it). It finds names, addresses and similar spans that regexes cannot. In chat, those spans become placeholders (`<PRIVATE_PERSON_1>`) before the model sees them and are restored in the reply. Two override paths exist:
+- **User:** roles in `override_roles` send `x-pii-override: <reason>`.
+- **Model:** the decision model judges whether the PII is needed for the task.
+
+Both are audited, and neither can lift a `block`. The default `stub` backend is a tiny offline stand-in for demos.
 
 ## Integrating
 
@@ -55,6 +78,7 @@ Without Docker, set `ACL_SEMANTIC=ollama ACL_UPSTREAM=ollama` before starting th
 |---|---|
 | App/agent → model | Point any OpenAI client at `http://gateway:8787/v1`, using a control-layer API key as the bearer token |
 | Agent → MCP tools | Point the MCP client at `http://gateway:8787/mcp/<server>` (servers are configured in `upstream.mcp_servers`) |
+| Agent → company resources | Point the agent's MCP client at `http://gateway:8787/mcp/company` with the agent's own key |
 | Anything else | `controllayer.sdk.Guard`: `guard.enforce(text, direction)` or the `@guard.tool` decorator |
 
 ## Policy
