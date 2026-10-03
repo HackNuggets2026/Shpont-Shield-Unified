@@ -318,3 +318,58 @@ def test_switching_model_does_not_rescore_history(client):
         r = client.post("/v1/chat/completions", headers=KEYS["alice"], json={"model": model, "messages": hist})
         hist.append({"role": "assistant", "content": r.json()["choices"][0]["message"]["content"]})
     assert score(client, "alice")["score"] == 9
+
+
+AGENT = {"Authorization": "Bearer alice-agent-key"}
+
+
+def test_auto_level_climbing_under_an_override_still_alerts(client):
+    client.post("/admin/risk/alice", json={"level": "normal", "reason": "reviewed"})
+    for i in range(4):  # 40 points: auto would be watch
+        guard(client, f"key AKIAIOSFODNN7EXAMP{i}A")
+    assert score(client, "alice")["level"] == "normal"  # the override holds
+    reasons = [a["reason"] for a in client.get("/admin/alerts").json()["alerts"]]
+    assert (
+        reasons[0] == "auto level normal -> watch, held at normal by security override; alert category: aws_access_key"
+    )
+
+
+def test_owner_drift_through_an_agent_alerts_on_the_owner(client):
+    client.post("/admin/risk/alice", json={"level": "normal"})
+    for i in range(8):  # half of each agent block counts against alice: 40 points
+        client.post("/v1/guard", json={"text": f"key AKIAIOSFODNN7EXAMP{i}A"}, headers=AGENT)
+    alerts = [a for a in client.get("/admin/alerts").json()["alerts"] if a["principal"] == "alice"]
+    assert [a["reason"] for a in alerts] == [
+        "auto level normal -> watch, held at normal by security override (via agent alice-coder)"
+    ]
+
+
+def test_signal_under_an_override_alerts(client, monkeypatch):
+    monkeypatch.setenv("ACL_WAZUH_TOKEN", "wz")
+    client.post("/admin/risk/alice", json={"level": "normal"})
+    client.post(
+        "/admin/risk/alice/signal",
+        json={"level": "watch", "ttl_seconds": 60},
+        headers={"Authorization": "Bearer wz", "x-admin-token": ""},
+    )
+    assert score(client, "alice")["level"] == "normal"
+    reasons = [a["reason"] for a in client.get("/admin/alerts").json()["alerts"]]
+    assert reasons == ["auto level normal -> watch, held at normal by security override: signal from wazuh"]
+
+
+def test_security_resets_a_score(client):
+    for i in range(4):
+        guard(client, f"key AKIAIOSFODNN7EXAMP{i}A")
+    assert client.post("/admin/risk/alice/reset", headers={"x-admin-token": ""}).status_code == 401
+    assert client.post("/admin/risk/alice/reset").json() == {"principal": "alice", "score": 0}
+    assert score(client, "alice") is None  # no score, no override: off the list
+    assert client.app.state.layer.audit.notes[-1]["kind"] == "risk_reset"
+    assert client.post("/admin/risk/mallory/reset").status_code == 404
+
+
+def test_level_click_keeps_the_reason_on_file(client):
+    client.post("/admin/risk/alice", json={"level": "watch", "reason": "case 42"})
+    client.post("/admin/risk/alice", json={"level": "restricted"})
+    assert score(client, "alice")["manual"]["reason"] == "case 42"
+    client.post("/admin/risk/alice", json={"level": "watch", "reason": "case 43"})
+    assert score(client, "alice")["manual"]["reason"] == "case 43"

@@ -904,7 +904,8 @@ def create_app(
             raise BadRequest("level must be auto, normal, watch or restricted")
         if not any(k.principal == pid for k in store.policy.identity.api_keys.values()):
             return JSONResponse({"error": f"unknown principal {pid!r}"}, status_code=404)
-        reason = str(body.get("reason") or "")
+        # A click without a reason keeps the one already on file.
+        reason = str(body.get("reason") or "") or (layer.state.watch.get(pid) or {}).get("reason", "")
         if level == "auto":
             layer.state.watch.pop(pid, None)
         else:
@@ -970,6 +971,7 @@ def create_app(
             raise BadRequest(f"ttl_seconds must be a number in (0, {cfg.max_ttl_hours * 3600:g}]")
         reason = str(body.get("reason") or "")[:500]
         before = layer.risk.level(policy, principal)
+        auto_before = layer.risk.own_level(policy, pid, manual=False)
         now = time.time()
         signal = None
         if applied != "normal":
@@ -989,8 +991,11 @@ def create_app(
             reason=reason,
         )
         after = layer.risk.level(policy, principal)
-        if LEVELS.index(after) > LEVELS.index(before):
-            layer.risk.emit(policy, principal, after, f"level {before} -> {after}: signal from {key}", channel="signal")
+        reasons = [f"level {before} -> {after}"] if LEVELS.index(after) > LEVELS.index(before) else []
+        if drift := layer.risk.drift(policy, pid, auto_before):
+            reasons.append(drift)
+        if reasons:
+            layer.risk.emit(policy, principal, after, "; ".join(reasons) + f": signal from {key}", channel="signal")
         return {
             "principal": pid,
             "source": key,
@@ -1007,6 +1012,15 @@ def create_app(
             return JSONResponse({"error": f"no active signal {source!r} for {pid!r}"}, status_code=404)
         layer.audit.note("risk_signal_dismissed", "security", principal=pid, source=source)
         return {"principal": pid, "source": source, "dismissed": True}
+
+    @app.post("/admin/risk/{pid}/reset")
+    async def risk_reset(pid: str):
+        """Clear a principal's score, e.g. after a review found nothing."""
+        if not any(k.principal == pid for k in store.policy.identity.api_keys.values()):
+            return JSONResponse({"error": f"unknown principal {pid!r}"}, status_code=404)
+        layer.risk.reset(pid)
+        layer.audit.note("risk_reset", "security", principal=pid)
+        return {"principal": pid, "score": 0}
 
     @app.get("/admin/alerts")
     async def alerts(limit: int = 100):

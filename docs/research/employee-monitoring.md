@@ -2,8 +2,8 @@
 
 Checked 2026-10-03. Licenses read from each repo's LICENSE file, activity from GitHub releases.
 
-**What we already emit:** silent alerts (`file` JSONL or `webhook` POST: principal, owner, team, level, score, reason, findings), audit log (`/admin/audit/export` JSONL/CSV, `/admin/events`), Prometheus `/metrics`.
-**What we already accept:** `POST /admin/risk/{pid}` `{"level": "watch"|"restricted"|"normal"}`, which is the hook for risk signals coming back from another tool.
+**What we already emit:** silent alerts (`file` JSONL or `webhook` POST, each as native JSON, OCSF 1.9 Detection Finding or ECS), audit log (`/admin/audit/export` as JSONL/CSV, or OCSF/ECS NDJSON with admin actions and alerts included; `/admin/events`), Prometheus `/metrics`.
+**What we already accept:** `POST /admin/risk/{pid}/signal` `{"level"` or `"score", "ttl_seconds", "source", "reason"}`, authenticated by a per-integration token from `identity.integrations`. This is the hook for risk signals coming back from another tool. A signal only raises a person's level, is capped at the integration's `max_level` and expires. `POST /admin/risk/{pid}` is security's manual override and is not for integrations.
 
 ## Comparison
 
@@ -40,13 +40,19 @@ Checked 2026-10-03. Licenses read from each repo's LICENSE file, activity from G
 
 ## Top 3 integrations (startup potential x hackathon effort)
 
-1. **Wazuh (alerts in, watch level back).** Our file sink plus a Wazuh decoder and rules turns gateway alerts into Wazuh alerts, and an active-response script calls `POST /admin/risk/{pid}` when Wazuh sees the same user doing something risky on the endpoint. Biggest free install base (17k stars, SMB/EU/public sector without Purview E5 budget), about half a day, demoable end to end.
+1. **Wazuh (alerts in, watch level back).** Our file sink plus a Wazuh decoder and rules turns gateway alerts into Wazuh alerts, and an active-response script calls `POST /admin/risk/{pid}/signal` when Wazuh sees the same user doing something risky on the endpoint (built: `integrations/wazuh`). Biggest free install base (17k stars, SMB/EU/public sector without Purview E5 budget), about half a day, demoable end to end.
 2. **Elastic Security entity risk (enrich their user score, read it back).** Ship ECS events with `user.name`, so Elastic detection rules fire and feed the 0-100 entity risk score, then poll `risk-score-latest` and raise our level when the score crosses a threshold. Elastic Platinum customers already pay for entity analytics and lack AI-usage telemetry. About 1 day.
 3. **OCSF export to OpenSearch Security Analytics (one format, many SIEMs).** Emit OCSF Detection Findings, load them as a custom log type with one Sigma rule, and the same export also feeds Amazon Security Lake, Splunk and other OCSF consumers. This is the "plugs into whatever SIEM you have" sales line. About 1 day, and it reuses the schema work from pick 2.
 
 Honorable mention: the Purview Insider Risk Indicators connector is the strongest enterprise sales story ("AI gateway detections inside Purview IRM"), but it needs an E5 tenant, so it is not hackathon-feasible.
 
-**Our-side gap common to all three:** `POST /admin/risk/{pid}` sets the same manual floor that security sets by hand, so an external tool sending `normal` would clear a human's decision. External signals need their own floor (e.g. a `source` field), and the effective level should be the max of the two.
+**Level precedence integrators can rely on:**
+
+1. A level security set by hand is the person's level, in either direction. Signals and scores do not change it, but a rise of the auto level underneath still raises a silent alert.
+2. Without one (auto), the level is the higher of the score-based level and the strongest active signal.
+3. An agent is at least as restricted as its owner.
+
+Each integration source keeps one signal, which its next signal replaces. Sending `normal` withdraws it. A source can never touch another integration's signals or security's override.
 
 ## Schema recommendation
 

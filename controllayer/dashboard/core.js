@@ -135,7 +135,7 @@
 
     const risk = d.risk.principals.length ? table(["Who", "Score", "Level"], d.risk.principals.map((r) => [
       `<b>${esc(r.principal)}</b><br>${muted(esc(r.team) + (r.owner ? " · agent of " + esc(r.owner) : "") + (r.manual?.reason ? " · " + esc(r.manual.reason) : ""))}${r.signals?.length ? "<br>" + signals(r) : ""}`,
-      `<span class="acl-big-sm ${FG[tone(r.computed)]}">${r.score}</span>`, levelControl(r),
+      `<span class="acl-big-sm ${FG[tone(r.computed)]}">${r.score}</span>${r.score > 0 ? button("reset", `data-act="reset-score" data-p="${esc(r.principal)}" title="Clear this score"`, "invisible") : ""}`, levelControl(r),
     ]), [1]) : empty("No risk signals yet.");
 
     const alerts = d.alerts.alerts.length ? d.alerts.alerts.map((a) => `<div class="Box-row px-0 py-2">
@@ -297,6 +297,7 @@
     try {
       switch (d.act) {
         case "level": await send(`/admin/risk/${encodeURIComponent(d.p)}`, "POST", { level: d.v }); break;
+        case "reset-score": await send(`/admin/risk/${encodeURIComponent(d.p)}/reset`, "POST"); break;
         case "dismiss-signal": await send(`/admin/risk/${encodeURIComponent(d.p)}/signal/${encodeURIComponent(d.src)}`, "DELETE"); break;
         case "admin-revoke": await send(`/admin/grants/${encodeURIComponent(d.agent)}/${encodeURIComponent(d.rid)}`, "DELETE"); break;
         case "suspend": await send(`/admin/resources/${encodeURIComponent(d.rid)}/suspend`, "POST", { suspended: d.on === "1" }); break;

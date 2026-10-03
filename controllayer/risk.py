@@ -112,6 +112,7 @@ class RiskEngine:
             for f in evidence
         )
         now = time.time()
+        held = {pid: self.own_level(policy, pid, manual=False) for pid in (p.id, p.owner) if pid in self.state.watch}
         if points:
             self._add(policy, p.id, points, now)
             if p.owner:
@@ -120,6 +121,11 @@ class RiskEngine:
         reasons = []
         if LEVELS.index(after) > LEVELS.index(level_before):
             reasons.append(f"level {level_before} -> {after}")
+        if p.id in held and (drift := self.drift(policy, p.id, held[p.id])):
+            reasons.append(drift)
+        if p.owner in held and (drift := self.drift(policy, p.owner, held[p.owner])):
+            owner = self.principal(policy, p.owner)
+            self.emit(policy, owner, self.level(policy, owner), f"{drift} (via agent {p.id})", channel=ctx.channel)
         if level_before != "normal" and v.blocked and cfg.alert_on_block_while_watched:
             reasons.append("blocked while under watch")
         hits = sorted({f.category for f in evidence if f.category in cfg.alert_categories})
@@ -127,6 +133,18 @@ class RiskEngine:
             reasons.append("alert category: " + ", ".join(hits))
         if reasons:
             self.alert(policy, ctx, v, after, "; ".join(reasons))
+
+    def drift(self, policy: Policy, pid: str, auto_before: str) -> str | None:
+        """While security's override holds a level, the auto level can still climb; say so."""
+        auto = self.own_level(policy, pid, manual=False)
+        if pid in self.state.watch and LEVELS.index(auto) > LEVELS.index(auto_before):
+            return f"auto level {auto_before} -> {auto}, held at {self.state.watch[pid]['level']} by security override"
+        return None
+
+    @staticmethod
+    def principal(policy: Policy, pid: str) -> Principal:
+        k = next(k for k in policy.identity.api_keys.values() if k.principal == pid)
+        return Principal(k.principal, k.team, k.role, kind=k.kind, owner=k.owner)
 
     def alert(self, policy: Policy, ctx: Context, v: Verdict, level: str, reason: str) -> dict[str, Any]:
         return self.emit(
@@ -196,7 +214,7 @@ class RiskEngine:
         for k in policy.identity.api_keys.values():
             if k.principal not in pids:
                 continue
-            principal = Principal(k.principal, k.team, k.role, kind=k.kind, owner=k.owner)
+            principal = self.principal(policy, k.principal)
             rows.append(
                 {
                     "principal": k.principal,

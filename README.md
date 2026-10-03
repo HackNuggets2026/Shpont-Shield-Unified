@@ -68,7 +68,7 @@ Every finding adds points to the person's score, which decays with a 24 h half-l
 
 A person's level, strongest rule first:
 
-1. **Override.** A level security set (`POST /admin/risk/{pid}` `{"level": "normal"|"watch"|"restricted"}`) is the level, in either direction. Scores and signals do not change it. `auto` removes it.
+1. **Override.** A level security set (`POST /admin/risk/{pid}` `{"level": "normal"|"watch"|"restricted"}`) is the level, in either direction. Scores and signals do not change it, but a rise of the auto level underneath still raises a silent alert. `auto` removes the override, and `POST /admin/risk/{pid}/reset` clears the score.
 2. **Auto.** Otherwise the higher of the score-based level and the strongest active external signal.
 3. **Owner.** An agent's level is the higher of its own and its owner's.
 
