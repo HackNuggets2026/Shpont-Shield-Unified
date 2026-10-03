@@ -222,7 +222,8 @@ def create_app(
                     channel="chat",
                     metered=False,
                     resent=i != last,
-                    fetched=ours,
+                    # Only the reply's own tool_calls are the model's; any other field was added by the caller.
+                    fetched=ours and set(rest) <= {"tool_calls"} and not parts,
                 )
                 rv = await layer.evaluate(rctx)
                 if rv.blocked:
@@ -321,8 +322,7 @@ def create_app(
             # The reason goes in `control`, not the text: clients re-send this text as history.
             content, finish = f"[Response withheld by policy, request {metered_ctx.request_id}]", "content_filter"
         else:
-            for placeholder, original in mask_map.items():  # the employee sees their own data again
-                content = content.replace(placeholder, original)
+            content = _unmask(content, mask_map)  # the employee sees their own data again
         if ov.action is Action.WARN:
             warnings.append(ov.reason)
 
@@ -330,6 +330,9 @@ def create_app(
         tool_calls = None
         if not ov.blocked and completion.raw:
             tool_calls = ((completion.raw.get("choices") or [{}])[0].get("message") or {}).get("tool_calls")
+        if tool_calls and not (isinstance(tool_calls, list) and all(isinstance(tc, dict) for tc in tool_calls)):
+            tool_calls, finish = None, "content_filter"
+            warnings.append("tool calls withheld: malformed upstream tool_calls")
         if tool_calls:
             tv = await layer.evaluate(
                 Context(
@@ -350,8 +353,10 @@ def create_app(
             if tv.blocked or tool_calls is None:
                 tool_calls, finish = None, "content_filter"
                 warnings.append(f"tool calls withheld: {tv.reason}")
-            elif finish == "stop":
-                finish = "tool_calls"
+            else:
+                tool_calls = _unmask(tool_calls, mask_map)  # the agent acts on the real values
+                if finish == "stop":
+                    finish = "tool_calls"
         message: dict[str, Any] = {"role": "assistant", "content": content}
         if tool_calls:
             message["tool_calls"] = tool_calls
@@ -942,6 +947,18 @@ async def _json_object(request: Request) -> dict[str, Any]:
     if not isinstance(body, dict):
         raise BadRequest("body must be a JSON object")
     return body
+
+
+def _unmask(obj: Any, mask_map: dict[str, str]) -> Any:
+    if isinstance(obj, str):
+        for placeholder, original in mask_map.items():
+            obj = obj.replace(placeholder, original)
+        return obj
+    if isinstance(obj, list):
+        return [_unmask(v, mask_map) for v in obj]
+    if isinstance(obj, dict):
+        return {k: _unmask(v, mask_map) for k, v in obj.items()}
+    return obj
 
 
 def _reply_signature(m: dict[str, Any]) -> str:

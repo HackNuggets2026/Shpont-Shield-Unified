@@ -34,7 +34,7 @@ class RiskEngine:
         self.alerts: deque[dict[str, Any]] = deque(maxlen=500)
         self.sink_errors: deque[str] = deque(maxlen=50)
         self._tasks: set[asyncio.Task] = set()
-        self._scored: OrderedDict[tuple[str, str, str | None, str], None] = OrderedDict()
+        self._scored: OrderedDict[tuple[str, str, str], None] = OrderedDict()
 
     def score(self, policy: Policy, pid: str, now: float | None = None) -> float:
         s, at = self._scores.get(pid, (0.0, 0.0))
@@ -69,7 +69,7 @@ class RiskEngine:
         evidence = [f for f in v.findings if f.control not in _IGNORED_CONTROLS]
         if ctx.fetched:
             evidence = []
-        key = (p.id, ctx.direction.value, ctx.model, hashlib.sha256(ctx.text.encode()).hexdigest())
+        key = (p.id, ctx.direction.value, hashlib.sha256(ctx.text.encode()).hexdigest())
         if ctx.resent and key in self._scored:
             evidence = []
         self._scored[key] = None

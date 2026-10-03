@@ -266,3 +266,12 @@ def test_injection_written_by_the_model_does_not_score_the_employee(policy_dir):
     )
     _conversation(c, ["hi", "and?"])
     assert score(c, "alice") is None
+
+
+def test_switching_model_does_not_rescore_history(client):
+    hist = []
+    for i, model in enumerate(["mock-model", "mock-model", "mock-b"]):
+        hist.append({"role": "user", "content": f"customer Jan Kowalski turn {i}"})
+        r = client.post("/v1/chat/completions", headers=KEYS["alice"], json={"model": model, "messages": hist})
+        hist.append({"role": "assistant", "content": r.json()["choices"][0]["message"]["content"]})
+    assert score(client, "alice")["score"] == 9
