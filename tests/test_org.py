@@ -408,7 +408,7 @@ def test_incidents_carry_a_workflow(org, make_client):
     rows = c.get("/api/admin/incidents", params={"limit": 1000}).json()["incidents"]
     assert sum(1 for i in rows if i.get("workflow")) > 0.8 * len(rows)
     frank = c.get("/api/admin/incidents", params={"principal": "frank", "workflow": "data_analysis"}).json()
-    assert frank["total"] == 4
+    assert frank["total"] == 5  # tool drift, exfiltration, usage spike, the trap, probing
     s = c.get("/api/admin/incidents/summary").json()
     assert {"bugfix", "chat_assist"} <= {w["workflow"] for w in s["by_workflow"]}
     live = make_client()

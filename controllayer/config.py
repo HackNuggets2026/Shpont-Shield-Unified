@@ -285,6 +285,12 @@ class GrantSpec(_Strict):
     max_minutes: float = Field(480, gt=0)  # longest grant an approver may give
 
 
+def _check_urn(v: str) -> str:
+    if not re.fullmatch(r"urn:shield:[a-z0-9_.-]+(:[a-zA-Z0-9_.*-]+)+", v):
+        raise ValueError(f"urn must look like urn:shield:<category>:<provider>:<type>, got {v!r}")
+    return v
+
+
 class ResourceType(_Strict):
     """One catalog entry."""
 
@@ -310,9 +316,7 @@ class ResourceType(_Strict):
     @field_validator("urn")
     @classmethod
     def _urn(cls, v: str) -> str:
-        if not re.fullmatch(r"urn:shield:[a-z0-9_.-]+(:[a-zA-Z0-9_.*-]+)+", v):
-            raise ValueError(f"urn must look like urn:shield:<category>:<provider>:<type>, got {v!r}")
-        return v
+        return _check_urn(v)
 
     @model_validator(mode="after")
     def _shape(self) -> ResourceType:
@@ -330,6 +334,37 @@ class ResourceType(_Strict):
         lease = self.lease.model_dump() if self.lease else {"idle_minutes": None}
         per = self.price.usd_per_unit
         return Resource(usd_per_minute=per if self.unit == "minute" else 0.0, usd_per_unit=per, **lease)
+
+
+class Decoy(_Strict):
+    """A trap: something that looks real and valuable but serves no purpose, so nobody has a reason to touch it.
+
+    Opening it (a tool call naming one of its identifiers) or moving its content on (its marker anywhere outside
+    the reply that served it) is almost always deliberate: it opens a `decoy_touch` incident. Asking for it by
+    name in a prompt opens a lighter `decoy_mention`. Listing it never counts. The gateway answers an opening
+    call itself with `content`, so the decoy needs no real system and the person sees nothing unusual.
+    """
+
+    title: str
+    urn: str
+    kind: Literal["document", "dataset", "credential", "system"] = "document"
+    planted_in: str = ""  # where people come across it, for admins
+    identifiers: list[str] = Field(min_length=1)  # file names, ids, paths: naming one in a tool call opens it
+    phrases: list[str] = Field(default_factory=list)  # wording that asks for it in a prompt
+    marker: str = Field(min_length=8)  # unique string inside `content`: seen elsewhere, the content moved on
+    content: str = ""  # served instead of calling the real tool
+    serve: bool = True
+
+    @field_validator("urn")
+    @classmethod
+    def _urn(cls, v: str) -> str:
+        return _check_urn(v)
+
+    @model_validator(mode="after")
+    def _marker_in_content(self) -> Decoy:
+        if self.content and self.marker not in self.content:
+            raise ValueError("a decoy's `content` must contain its `marker`, so a copy of it can be recognised")
+        return self
 
 
 class Grant(_Strict):
@@ -435,6 +470,8 @@ DETECTION_RULES = (
     "permission_bypass",
     "unapproved_mcp_server",
     "rejected_edit_storm",
+    "decoy_touch",
+    "decoy_mention",
 )
 
 
@@ -533,6 +570,7 @@ class Policy(_Strict):
     audit: Audit = Field(default_factory=Audit)
     menu: Menu = Field(default_factory=Menu)
     catalog: dict[str, ResourceType] = Field(default_factory=dict)
+    decoys: dict[str, Decoy] = Field(default_factory=dict)  # traps; never shown to employees
     # Derived from `catalog` (older policies set these directly; the loader folds them into the catalog).
     resources: dict[str, Resource] = Field(default_factory=dict, exclude=True)
     principals: dict[str, PrincipalPolicy] = Field(default_factory=dict)
@@ -579,6 +617,9 @@ class Policy(_Strict):
             unknown = {g.resource for g in pp.grants} - set(self.catalog)
             if unknown:
                 raise ValueError(f"principals.{who}: grants for unknown resources {sorted(unknown)}")
+        clash = set(self.decoys) & set(self.catalog)
+        if clash:
+            raise ValueError(f"decoys and catalog share names {sorted(clash)}; a trap must not look like a resource")
         return self
 
     # ---- catalog lookups -----------------------------------------------------------

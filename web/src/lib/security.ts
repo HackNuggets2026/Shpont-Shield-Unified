@@ -23,6 +23,8 @@ export const RULES: Record<string, RuleMeta> = {
   permission_bypass: { label: "Claude Code bypass mode", what: "Claude Code switched to a mode that skips permission prompts", cc: true },
   unapproved_mcp_server: { label: "Unapproved MCP server", what: "Claude Code connected to an MCP server that is not on the approved list", cc: true },
   rejected_edit_storm: { label: "Rejected edit storm", what: "Many Claude Code tool calls rejected in a few minutes", cc: true },
+  decoy_touch: { label: "Trap opened", what: "Opened a decoy, or moved its content on: nobody has a reason to touch one" },
+  decoy_mention: { label: "Trap asked for", what: "Asked for a decoy by name in a prompt: maybe curiosity, worth a look" },
 };
 
 export const ruleLabel = (rule: string): string => RULES[rule]?.label ?? titleCase(rule);

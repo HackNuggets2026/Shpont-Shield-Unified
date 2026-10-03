@@ -47,6 +47,30 @@ def _day_start(now: float) -> float:
     return calendar.timegm((t.tm_year, t.tm_mon, t.tm_mday, 0, 0, 0))
 
 
+DECOY_RULES = ("decoy_touch", "decoy_mention")
+
+
+def masked_for_employee(x: dict[str, Any]) -> dict[str, Any]:
+    """An incident, check or event as the person it concerns may see it: a trap stays a trap. They learn that
+    they touched restricted material, never that it was a decoy."""
+    out = dict(x)
+    if out.get("rule") in DECOY_RULES:
+        out.update(rule="restricted_material", detail="touched company material restricted to a few people")
+        out["evidence"] = []
+    if out.get("decision") in DECOY_RULES:
+        out["decision"] = "restricted_material"
+        out["detail"] = {"detail": "touched company material restricted to a few people"}
+    if isinstance(out.get("findings"), list):
+        out["findings"] = [
+            f for f in out["findings"]
+            if not (f.get("control") == "decoys" if isinstance(f, dict) else str(f).startswith("decoys/"))
+        ]  # fmt: skip
+    d = out.get("detail")
+    if isinstance(d, dict) and isinstance(d.get("findings"), list):
+        out["detail"] = {**d, "findings": [f for f in d["findings"] if not str(f).startswith("decoys/")]}
+    return out
+
+
 def _audit_shape(e: dict[str, Any], direction: str) -> dict[str, Any]:
     """A persisted check event in the audit log's shape (its text is not persisted: `text` is None)."""
     d = e.get("detail") or {}
@@ -393,6 +417,35 @@ def register(
             i = live.get(i["id"], i)
             rows.append({**i, "scored": i["id"] in live, **who_fields(i["principal"])})
         return rows
+
+    @app.get("/admin/decoys")
+    async def admin_decoys():
+        """The traps, where they are planted, and everyone who touched one (newest first)."""
+        p = store.policy
+        hits = [i for i in all_incidents(0.0) if i["rule"] in DECOY_RULES]
+        out = []
+        for name, d in p.decoys.items():
+            mine = [i for i in hits if repr(d.title) in (i.get("detail") or "")]
+            out.append(
+                {
+                    "name": name,
+                    "title": d.title,
+                    "kind": d.kind,
+                    "urn": d.urn,
+                    "planted_in": d.planted_in,
+                    "identifiers": d.identifiers,
+                    "touches": len(mine),
+                    "people": len({i["principal"] for i in mine}),
+                    "recent": [
+                        {
+                            k: i.get(k)
+                            for k in ("id", "ts", "principal", "name", "team", "department", "rule", "status", "detail")
+                        }  # fmt: skip
+                        for i in mine[:10]
+                    ],
+                }
+            )
+        return {"decoys": out, "touches": len(hits)}
 
     @app.get("/admin/incidents")
     async def admin_incidents(
@@ -879,7 +932,7 @@ def register(
             "runs_total": len(runs),
             "leases": leases,
             "menu": menu_view(p, who),
-            "events": events_of(who.id, 50, interesting=True),
+            "events": [masked_for_employee(e) for e in events_of(who.id, 50, interesting=True)],
             "requests": usage.requests(principal=who.id),
             # Status changes of their incidents too, unless the policy keeps risk from employees.
             "admin_activity": person_actions(who.id)
@@ -906,7 +959,9 @@ def register(
                     "quarantine": r.quarantine,
                     "half_life_minutes": p.detections.half_life_minutes,
                 },  # fmt: skip
-                "incidents": [i for i in reversed(layer.risk.incidents) if i["principal"] == who.id][:20],
+                "incidents": [
+                    masked_for_employee(i) for i in reversed(layer.risk.incidents) if i["principal"] == who.id
+                ][:20],
             }
         return out
 
@@ -948,7 +1003,7 @@ def register(
         who = me(request)
         if who is None:
             return err("your API key is required", 401)
-        return events_of(who.id, limit)
+        return [masked_for_employee(e) for e in events_of(who.id, limit)]
 
     @app.post("/me/leases/{lease_id}/release")
     async def me_release(lease_id: str, request: Request):
@@ -977,9 +1032,12 @@ def register(
         who = me(request)
         if who is None:
             return err("your API key is required", 401)
-        return usage.events(principal=who.id, limit=max(1, min(limit, 2000)), before=before,
+        if decision in DECOY_RULES:
+            return []
+        rows = usage.events(principal=who.id, limit=max(1, min(limit, 2000)), before=before,
                             exclude_sources=hidden_from(who.id), source=source, kind=kind, severity=severity,
                             decision=decision)  # fmt: skip
+        return [masked_for_employee(e) for e in rows]
 
     @app.get("/me/value")
     async def me_value(request: Request, by: str = "workflow", days: float = 30):

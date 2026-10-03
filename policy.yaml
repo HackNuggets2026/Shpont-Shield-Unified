@@ -382,6 +382,39 @@ catalog:
     owner: security
     grant: { approval: workflow }    # included by workflows that list it; otherwise ask for a grant
 
+# Traps: things that look real and valuable but serve no purpose, so nobody has a reason to touch them.
+# They are listed where people look (search results, the data catalog) but never in the resource catalog.
+# The gateway answers an opening call itself with `content`; the person sees nothing unusual.
+decoys:
+  board_pack:
+    title: Q3 2026 board pack (unpublished)
+    urn: urn:shield:data:sharepoint:board-pack-q3-2026
+    kind: document
+    planted_in: shared drive, finance/ (shows up in document search)
+    identifiers: [finance/board-pack-Q3-2026-UNPUBLISHED.pdf, board-pack-Q3-2026-UNPUBLISHED]
+    phrases: [unpublished board pack, unpublished q3 results, unpublished financial results, unpublished financial report]
+    marker: ACME-BP-Q3-7F2K
+    content: |
+      ACME Bank plc · Board pack Q3 2026 · STRICTLY CONFIDENTIAL · DRAFT, NOT FOR DISTRIBUTION · ref ACME-BP-Q3-7F2K
+      1. Results: net revenue EUR 1.84bn (+6.2% y/y); cost/income 51.3%; CET1 14.1%.
+      2. Guidance: full-year revenue growth lowered to 4-5% (market consensus 6.5%).
+      3. Restructuring: retail branch network reduced by 38 sites in Q1 2027; announcement 14 November.
+      4. Market-sensitive until publication. Questions: office of the CFO.
+  customer_export:
+    title: Full customer master export (all accounts)
+    urn: urn:shield:data:internal:customers-master-full
+    kind: dataset
+    planted_in: data catalog, table customers_master_full (looks like a nightly export)
+    identifiers: [customers_master_full, exports/customers_master_full.csv]
+    phrases: [full customer master export, all customer records with card numbers]
+    marker: ACME-CUST-9Q4M
+    content: |
+      export customers_master_full · ref ACME-CUST-9Q4M · 2,418,331 rows · showing 3
+      customer_id,name,iban,segment
+      C-0001842,Harriet Vale,GB29NWBK60161331926819,private
+      C-0001843,Tomasz Wrobel,PL61109010140000071219812874,retail
+      C-0001844,Ines Marchetti,IT60X0542811101000000123456,retail
+
 quarantine:                    # what a quarantined principal keeps
   tools: ["read_*", "search_*", Read, Glob, Grep]
   budget_scale: 0.1
@@ -403,6 +436,8 @@ detections:
     permission_bypass: { weight: 30, window_minutes: 60 }                 # --dangerously-skip-permissions
     unapproved_mcp_server: { weight: 25, window_minutes: 60, tools: [demo, argent, github, "acme-*"] }
     rejected_edit_storm: { weight: 15, count: 5, window_minutes: 10 }     # an agent pushing past "no"
+    decoy_touch: { weight: 100, window_minutes: 60 }     # opened a trap or moved its content on: quarantine at once
+    decoy_mention: { weight: 30, window_minutes: 60 }    # asked for a trap by name: an alert, maybe just curiosity
   response:
     auto: true
     alert: 30

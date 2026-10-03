@@ -110,6 +110,12 @@ class RiskEngine:
         self._events[pid] += 1
 
     def _observe(self, ctx: Context, v: Verdict, policy: Policy, pid: str, now: float, rules) -> None:
+        for f in v.findings:
+            if f.control == "decoys":
+                # Opening a trap or moving its content on is deliberate; naming it in a prompt is curiosity.
+                rule = "decoy_mention" if f.category.endswith(":mentioned") else "decoy_touch"
+                self._fire(rule, pid, f.detail, [v.request_id])
+
         if v.blocked:
             blocker = next(f for f in v.findings if f.action is Action.BLOCK)
             if blocker.control not in _NOT_PROBING and self._count(pid, "probing", now, rules):

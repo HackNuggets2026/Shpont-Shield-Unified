@@ -50,7 +50,7 @@ ORG = [
     Person("judy", "engineering", {"bugfix": 1.0, "pr_review": 0.8, "ui_qa": 0.3}, 2.0, (7, 16)),
     Person("bob", "finance", {"data_analysis": 2.0, "chat_assist": 2}, live_demo=True),
     Person("grace", "finance", {"data_analysis": 2.5, "chat_assist": 1}),
-    Person("mallory", "finance", {"data_analysis": 1.0, "chat_assist": 3}),
+    Person("mallory", "finance", {"data_analysis": 1.0, "chat_assist": 3}, live_demo=True),
     Person("heidi", "platform", {"bugfix": 0.6, "load_test": 0.3, "chat_assist": 1}, 1.0),
     Person("ops-agent", "platform", {"nightly": 1.0}, hours=(1, 4), weekend=1.0, live_demo=True),
     Person("carol", "interns", {"chat_assist": 3, "ui_qa": 0.4}, hours=(9, 17), live_demo=True),
@@ -285,7 +285,8 @@ class Seeder:
                 ("mallory", "new_client"): "data_analysis", ("ivan", "probing"): "chat_assist",
                 ("dan", "usage_spike"): "bugfix", ("grace", "secret_paste"): "data_analysis",
                 ("frank", "tool_drift"): "data_analysis", ("frank", "exfiltration"): "data_analysis",
-                ("frank", "usage_spike"): "data_analysis", ("frank", "probing"): "data_analysis"}  # fmt: skip
+                ("frank", "usage_spike"): "data_analysis", ("frank", "probing"): "data_analysis",
+                ("frank", "decoy_touch"): "data_analysis", ("mallory", "decoy_mention"): "data_analysis"}  # fmt: skip
 
     def incident(self, ts: float, pid: str, rule: str, detail: str, status: str, weight: float | None = None,
                  evidence: list[str] | None = None, note: str = "") -> str:  # fmt: skip
@@ -305,6 +306,10 @@ class Seeder:
                                          "evidence": evidence or []}})  # fmt: skip
         self.stats["incidents"] += 1
         return inc["id"]
+
+    def decoy_title(self, name: str) -> str:
+        d = self.policies.policy.decoys.get(name)
+        return d.title if d else name
 
     def grant(self, pid: str, resource: str, start: float, minutes: float, by: str, reason: str,
               workflow: str | None = None) -> dict:  # fmt: skip
@@ -361,6 +366,8 @@ class Seeder:
              "large refactor, expected"),
             (4, "grace", "secret_paste", "repeatedly sends credentials to AI tools", "acknowledged",
              "follow-up booked"),
+            (3, "mallory", "decoy_mention", f"asked for the decoy {self.decoy_title('board_pack')!r} by name",
+             "acknowledged", "heard about it in a meeting; reminded that results are market-sensitive"),
         ]  # fmt: skip
         for days_ago, pid, rule, detail, status, note in closed:
             ts = now - days_ago * D + self.rng.uniform(-3, 3) * 3600
@@ -460,17 +467,26 @@ class Seeder:
                       f"confidential_output/customer_data, data_exfiltration/upload_external (block), with a usage "
                       f"spike: {spike}", "open", weight=80, evidence=attempts[:2])  # fmt: skip
         self.incident(now - 20 * 60, "frank", "usage_spike", spike, "open", evidence=attempts[1:2])
+        # Then he takes the bait: the "full customer master export" in the drive is a trap.
+        trap = self.id()
+        t_trap = now - 17 * 60
+        self.ev(ts=t_trap, id=trap, request_id=trap, kind="check.tool_call", source="mcp", decision="allow",
+                tool="read_file", workflow="data_analysis", task="FIN-990",
+                detail={"args": "exports/customers_master_full.csv",
+                        "findings": ["decoys/customer_export:opened:allow"]}, **base)  # fmt: skip
+        self.incident(t_trap + 1, "frank", "decoy_touch",
+                      f"opened the decoy {self.decoy_title('customer_export')!r} with read_file", "open",
+                      evidence=[trap])  # fmt: skip
         self.incident(now - 14 * 60, "frank", "probing", "3+ blocked attempts, latest access_grant/grant_required",
                       "open", evidence=[*attempts, mail, *refused])  # fmt: skip
-        # Detections responded on their own: tighten, then quarantine.
+        # Detections responded on their own: tighten after the exfiltration, quarantine the moment he opened the trap.
         auto = "auto:detections"
+        quarantined = "risk score 196.8 reached quarantine (80)"
         self.store.log_admin(auto, "tighten", "frank", "risk score 72.4 reached tighten (60)",
                              {"budget_scale": 0.25}, ts=t_exfil + 1)  # fmt: skip
-        self.store.log_admin(auto, "quarantine", "frank", "risk score 118.9 reached quarantine (80)",
-                             {"status": "quarantined"}, ts=now - 14 * 60 + 1)  # fmt: skip
+        self.store.log_admin(auto, "quarantine", "frank", quarantined, {"status": "quarantined"}, ts=t_trap + 2)
         self.overlay["principals"].setdefault("frank", {}).update(
-            status="quarantined", budget_scale=0.25, reason="risk score 118.9 reached quarantine (80)", by=auto,
-            since=now - 14 * 60 + 1,
+            status="quarantined", budget_scale=0.25, reason=quarantined, by=auto, since=t_trap + 2,
         )  # fmt: skip
         self.store.log_admin(dana, "view_events", "frank", "reviewing the exfiltration incident", ts=now - 6 * 60)
 

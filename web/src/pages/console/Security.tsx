@@ -14,6 +14,7 @@ import { IncidentsTable } from "../../components/security/IncidentsTable";
 import { OpenedClosedChart } from "../../components/security/OpenedClosedChart";
 import { RiskMeter } from "../../components/security/RiskMeter";
 import { RuleDeptHeatmap, type Cell } from "../../components/security/RuleDeptHeatmap";
+import { Traps } from "../../components/security/Traps";
 import { countC } from "../../lib/compact";
 import { pct } from "../../lib/format";
 import { detectionPolicy, isAuto, ruleLabel, RULES } from "../../lib/security";
@@ -482,6 +483,8 @@ export function Security() {
           </Q>
         </Card>
       </div>
+
+      <Traps />
 
       <Card
         title="Security signal"

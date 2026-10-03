@@ -140,6 +140,20 @@ The catalog is built on existing standards rather than a home-grown format:
 
 Older policies with `resources:` and `budgets.pricing` still load: they are folded into the catalog.
 
+## Traps
+
+Some things in a company should never be touched by anyone: nothing legitimate needs them. `decoys:` in `policy.yaml` plants a few that look real and valuable, like an unpublished Q3 board pack in the finance folder or a "full customer master export" in the data catalog. They are listed where people and agents look (document search, the catalog), so finding one is harmless. Using one is not:
+
+| What happened | Rule | Effect |
+|---|---|---|
+| A tool call names the decoy (MCP, or a Claude Code `Read` of a planted file) | `decoy_touch` (weight 100) | High-severity incident, quarantine at once |
+| The decoy's marker shows up in a prompt or tool call: its content is being moved on | `decoy_touch` | Same |
+| A prompt asks for it by name ("the unpublished board pack") | `decoy_mention` (weight 30) | An alert: maybe just curiosity |
+
+The gateway answers an opening call itself with the decoy's fake `content`, so no real system is involved and the person sees an ordinary result. Search results, tool results and conversation history never count. Employees never learn that it was a trap: in everything they can see about themselves it is "restricted material". Admins see each trap, where it is planted and who touched it on the Security page (`GET /admin/decoys`).
+
+To catch Claude Code too, put a file with a decoy's name in the repositories people work in (for example `finance/board-pack-Q3-2026-UNPUBLISHED.pdf`): the `PreToolUse` hook sees the `Read`. Decoy strings that work without any of this, through the signature feed, live in [Shpont-Shield-Redteam](https://github.com/HackNuggets2026/Shpont-Shield-Redteam)'s Tripwire.
+
 ## Claude Code
 
 Claude Code reports to the gateway and is governed by the same `policy.yaml`. The setup is in [`deploy/claude-code/`](deploy/claude-code/README.md).

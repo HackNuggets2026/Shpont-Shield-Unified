@@ -415,8 +415,22 @@ export interface Ok {
 // ---- admin ------------------------------------------------------------------------------------
 
 const A = "/api/admin";
+/** A trap (policy `decoys`) and the people who touched it, newest first. */
+export interface DecoyRow {
+  name: string;
+  title: string;
+  kind: "document" | "dataset" | "credential" | "system";
+  urn: string;
+  planted_in: string;
+  identifiers: string[];
+  touches: number;
+  people: number;
+  recent: { id: string; ts: number; principal: string; name?: string | null; team?: string | null; department?: string | null; rule: string; status: string; detail: string }[];
+}
+
 export const admin = {
   overview: () => get<Overview>(`${A}/overview`),
+  decoys: () => get<{ decoys: DecoyRow[]; touches: number }>(`${A}/decoys`),
   timeseries: (by: string, days = 30, metric = "usd") => get<Timeseries>(`${A}/timeseries${qs({ metric, by, days })}`),
   adherence: (by: string, days = 30) => get<Adherence>(`${A}/adherence${qs({ by, days })}`),
   usage: (by: string, days = 30) => get<Breakdown[]>(`${A}/usage${qs({ by, days })}`),

@@ -20,6 +20,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, Response, StreamingResponse
 
 from ..config import PolicyStore
+from ..controls import decoys
 from ..controls.access import authenticate
 from ..decision import DecisionBackend
 from ..engine import ControlLayer, flatten
@@ -46,7 +47,9 @@ def _api_key(request: Request) -> str | None:
     return request.headers.get("x-api-key")
 
 
-def _verdict_json(v: Verdict) -> dict[str, Any]:
+def _verdict_json(v: Verdict, for_caller: bool = False) -> dict[str, Any]:
+    """`for_caller`: the reply goes to the person or agent being checked, who must never learn of a trap."""
+    shown = [f for f in v.findings if not (for_caller and decoys.is_decoy_finding(f))]
     return {
         "request_id": v.request_id,
         "action": v.action.value,
@@ -65,7 +68,7 @@ def _verdict_json(v: Verdict) -> dict[str, Any]:
                 "detail": f.detail,
                 "shadow": f.shadow,
             }
-            for f in v.findings
+            for f in shown
         ],
     }
 
@@ -456,6 +459,11 @@ def create_app(
             v = await layer.evaluate(ctx, {"server": server})
             if v.blocked:
                 return blocked(v)
+            trap = decoys.opened(v.findings, layer.policy_for(principal.team))
+            if trap is not None:
+                # A trap has no real system behind it: the gateway answers, and the caller sees an ordinary result.
+                served = {"content": [{"type": "text", "text": trap.content}], "isError": False}
+                return JSONResponse({"jsonrpc": "2.0", "id": rid, "result": served})
             if v.action is Action.REDACT:
                 cleaned = layer.redact_tree(params, principal, Direction.TOOL_CALL) if layer.spans_only(v) else None
                 if cleaned is None:
@@ -555,7 +563,7 @@ def create_app(
             **attribution(request, principal),
         )
         v = await layer.evaluate(ctx)
-        return JSONResponse(_verdict_json(v), status_code=v.status_code if v.blocked else 200)
+        return JSONResponse(_verdict_json(v, for_caller=True), status_code=v.status_code if v.blocked else 200)
 
     # ---- reporting ------------------------------------------------------------
 

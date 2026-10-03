@@ -11,7 +11,7 @@ from typing import Any
 
 from .audit import AuditLog
 from .config import Policy, PolicyStore
-from .controls import access, signatures, workflows
+from .controls import access, decoys, signatures, workflows
 from .controls.budget import BudgetLedger
 from .controls.patterns import pii, redact, secrets
 from .controls.resources import LeaseTracker, check_grants
@@ -187,6 +187,8 @@ class ControlLayer:
             findings += access.check_model(ctx, policy) + access.check_tool(ctx, policy)
             findings += workflows.check(ctx, policy)
             findings += check_grants(ctx, policy)
+        # Traps are noticed whatever else happens to the request, and never change its outcome.
+        findings += decoys.check(ctx, policy)
         t = lap("gates", t_start)
 
         if not _blocked(findings) and ctx.metered and ctx.direction in (Direction.INPUT, Direction.TOOL_CALL):
