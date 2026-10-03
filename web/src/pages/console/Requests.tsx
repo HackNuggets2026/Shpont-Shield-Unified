@@ -138,7 +138,15 @@ export function Requests() {
   });
   const history = useQuery({
     queryKey: ["admin", "requests", "history", kind, department, hStatus, h.page],
-    queryFn: () => ops.requests({ status: hStatus, kind, department, limit: HISTORY_PAGE, offset: h.page * HISTORY_PAGE }),
+    queryFn: async () => {
+      if (hStatus) return ops.requests({ status: hStatus, kind, department, limit: HISTORY_PAGE, offset: h.page * HISTORY_PAGE });
+      // No "approved or denied" status on the server: read from the top past the pending rows mixed in, then page here.
+      const extra = (await ops.requests({ status: "pending", kind, department, limit: 1000 })).rows.length;
+      const want = (h.page + 1) * HISTORY_PAGE;
+      const r = await ops.requests({ kind, department, limit: want + extra });
+      const all = r.rows.filter((x) => x.status !== "pending");
+      return { rows: all.slice(h.page * HISTORY_PAGE, want), total: r.hasMore ? null : all.length, hasMore: r.hasMore || all.length > want };
+    },
     placeholderData: keepPreviousData,
     refetchInterval: 10_000,
   });
