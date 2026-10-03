@@ -666,13 +666,16 @@ def with_history(*assistant, user=None):
     ]
 
 
-def test_signed_thinking_in_assistant_history_is_forwarded_byte_for_byte(policy_dir, monkeypatch):
-    c, sent = upstream(policy_dir, lambda b: message(text("ok")), monkeypatch)
+@pytest.mark.parametrize("stream", [False, True])
+def test_signed_thinking_of_a_returned_reply_is_forwarded_byte_for_byte(policy_dir, monkeypatch, stream):
     thinking = {"type": "thinking", "thinking": "plan", "signature": KEY}
     redacted = {"type": "redacted_thinking", "data": KEY}
-    r = ask(c, with_history(thinking, redacted, text("done")))
+    c, sent = upstream(policy_dir, lambda b: message(thinking, redacted, text("done")), monkeypatch)
+    returned = reply_of(ask(c, "start", stream=stream), stream)["content"]
+    assert returned == [thinking, redacted, text("done")]
+    r = ask(c, with_history(*returned))
     assert r.status_code == 200, r.text
-    assert sent[0]["body"]["messages"][1]["content"][:2] == [thinking, redacted]
+    assert sent[1]["body"]["messages"][1]["content"][:2] == [thinking, redacted]
 
 
 @pytest.mark.parametrize(
@@ -688,6 +691,8 @@ def test_signed_thinking_in_assistant_history_is_forwarded_byte_for_byte(policy_
         ),
         with_history({"type": "thinking", "thinking": KEY, "signature": "c2ln"}),
         with_history({"type": "thinking", "thinking": "x", "signature": {"note": KEY}}),
+        with_history({"type": "thinking", "thinking": "plan", "signature": KEY}, text("done")),
+        with_history({"type": "redacted_thinking", "data": KEY}, text("done")),
     ],
     ids=[
         "nested-signature",
@@ -697,6 +702,8 @@ def test_signed_thinking_in_assistant_history_is_forwarded_byte_for_byte(policy_
         "tool-result",
         "thinking-text",
         "non-string-signature",
+        "forged-signature",
+        "forged-redacted-data",
     ],
 )
 def test_thinking_shaped_fields_outside_signed_blocks_are_inspected(policy_dir, monkeypatch, messages):
