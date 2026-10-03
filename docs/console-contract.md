@@ -49,7 +49,7 @@ The URL is the state; every link is `<a href data-nav>` and the router intercept
 
 ### Helpers (`ACL.h`)
 
-`esc`, `usd`, `num`, `pct(fraction)`, `ago(ts)`, `dur(hours)`, `periodLabel(days)`, `tone(action|level|sensitivity)`, `muted`, `empty`, `badge(tone, text)`, `note(html, tone)`, `button(label, attrs, kind)`, `link(label, href)`, `person(id, name)` (link to the person page), `card(title, body, tools)`, `table(cols, rows, {sort, rowAttrs})` (sortable headers link to `?sort=`), `segmented`, `navSegmented(param, options, current)`, `navSelect(param, options, current)`, `pill(on, label, attrs, {disabled, title})` (the colour-coded on/off toggle; disabled = greyed and inert), `meter(fraction)` (budget bar: blue, amber from 80%, red over 100%), `tiles([{label, value, sub, tone, href, meter}])`, `pager(peopleResponse)`.
+`esc`, `usd`, `num`, `pct(fraction)`, `ago(ts)`, `dur(hours)`, `periodLabel(days)`, `tone(action|level|sensitivity)`, `muted`, `empty`, `badge(tone, text)`, `note(html, tone)`, `button(label, attrs, kind)`, `link(label, href)`, `person(id, name)` (link to the person page), `card(title, body, tools)`, `table(cols, rows, {sort, rowAttrs, detail})` (sortable headers link to `?sort=`; `detail(i)` returning html adds a full-width row under row i), `segmented`, `navSegmented(param, options, current)`, `navSelect(param, options, current)`, `pill(on, label, attrs, {disabled, title})` (the colour-coded on/off toggle; disabled = greyed and inert), `meter(fraction)` (budget bar: blue, amber from 80%, red over 100%), `tiles([{label, value, sub, tone, href, meter}])`, `pager(peopleResponse)`.
 
 Layout: `<div class="acl-cols">` with children `acl-c3`..`acl-c12` (12-column grid). Greyed table row: `<tr class="acl-greyed">`.
 
@@ -138,7 +138,7 @@ Params: `q` (id, name or team, case-insensitive), `team`, `risk` (`normal|watch|
 | `DELETE /admin/risk/{pid}/signal/{source}` | | dismisses an external signal |
 | `POST /admin/try` | `{principal, text, direction}` | playground verdict |
 
-Existing reads: `/admin/summary` (controls, threats, budgets today, latency, policy, `demo_mode`), `/admin/events?limit=&action=&control=&principal=` (principal matches the actor or the agent's owner), `/admin/alerts`, `/admin/risk`, `/admin/grants`, `/admin/audit/export?format=jsonl|csv|ocsf|ecs`, `/metrics`.
+Existing reads: `/admin/summary` (controls, threats, budgets today, latency, policy, `demo_mode`), `/admin/events?limit=&action=&control=&principal=&channel=&direction=&q=` (principal matches the actor or the agent's owner; q is a case-insensitive substring of principal, owner, team, tool, model, reason or a finding's control, category or detail), `/admin/alerts`, `/admin/risk`, `/admin/grants`, `/admin/audit/export?format=jsonl|csv|ocsf|ecs`, `/metrics`.
 
 ## Data
 

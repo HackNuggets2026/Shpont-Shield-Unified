@@ -81,7 +81,7 @@
   h.card = (title, body, tools, cls = "") => `<section class="Box acl-card ${cls}">
       <div class="Box-header py-2 d-flex flex-items-center flex-wrap"><h3 class="Box-title flex-auto f5">${h.esc(title)}</h3><div class="acl-tools">${tools || ""}</div></div>
       <div class="Box-body p-3">${body}</div></section>`;
-  // cols: [{label, num?, sort?: key}], rows: [[cell html...]], opts: {sort, rowAttrs: (i) => attrs}
+  // cols: [{label, num?, sort?: key}], rows: [[cell html...]], opts: {sort, rowAttrs: (i) => attrs, detail: (i) => html|null}
   h.table = (cols, rows, opts = {}) => `<div class="acl-scroll"><table class="acl-table">
       <thead><tr>${cols.map((c) => {
         const cls = c.num ? "acl-num" : "";
@@ -91,7 +91,11 @@
         const arrow = cur === c.sort ? (desc ? " ↓" : " ↑") : "";
         return `<th class="${cls}" aria-sort="${cur === c.sort ? (desc ? "descending" : "ascending") : "none"}"><a class="Link--secondary" href="${h.esc(ACL.href({ sort: next, page: null }, false))}" data-nav>${h.esc(c.label)}${arrow}</a></th>`;
       }).join("")}</tr></thead>
-      <tbody>${rows.map((r, i) => `<tr ${opts.rowAttrs ? opts.rowAttrs(i) : ""}>${r.map((cell, j) => `<td class="${cols[j]?.num ? "acl-num" : ""}">${cell}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`;
+      <tbody>${rows.map((r, i) => {
+        const detail = opts.detail ? opts.detail(i) : null;
+        return `<tr ${opts.rowAttrs ? opts.rowAttrs(i) : ""}>${r.map((cell, j) => `<td class="${cols[j]?.num ? "acl-num" : ""}">${cell}</td>`).join("")}</tr>`
+          + (detail == null ? "" : `<tr class="acl-detail"><td colspan="${cols.length}">${detail}</td></tr>`);
+      }).join("")}</tbody></table></div>`;
   // One click picks an option: [{label, active, attrs}].
   h.segmented = (items) => `<div class="BtnGroup" role="group">${items.map((o) =>
     `<button type="button" class="btn btn-sm BtnGroup-item${o.active ? " btn-primary" : ""}" aria-pressed="${!!o.active}" ${o.attrs}${o.title ? ` title="${h.esc(o.title)}"` : ""}>${h.esc(o.label)}</button>`).join("")}</div>`;

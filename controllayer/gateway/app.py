@@ -791,15 +791,33 @@ def create_app(
 
     @app.get("/admin/events")
     async def events(
-        limit: int = 100, action: str | None = None, control: str | None = None, principal: str | None = None
+        limit: int = 100,
+        action: str | None = None,
+        control: str | None = None,
+        principal: str | None = None,
+        channel: str | None = None,
+        direction: str | None = None,
+        q: str | None = None,
     ):
-        """`principal` matches the actor or, for an agent's events, its owner."""
+        """`principal` matches the actor or, for an agent's events, its owner. `q` is a case-insensitive
+        substring of the principal, owner, team, tool, model, reason or a finding's control, category
+        or detail."""
+        needle = (q or "").lower()
+
+        def matches(e: dict[str, Any]) -> bool:
+            fields = [e.get(k) for k in ("principal", "owner", "team", "tool", "model", "reason")]
+            fields += [f.get(k) for f in e["findings"] for k in ("control", "category", "detail")]
+            return any(needle in str(v).lower() for v in fields if v)
+
         out = [
             e
             for e in reversed(layer.audit.events)
             if (not action or e["action"] == action)
             and (not control or any(f["control"] == control for f in e["findings"]))
             and (not principal or principal in (e["principal"], e.get("owner")))
+            and (not channel or e["channel"] == channel)
+            and (not direction or e["direction"] == direction)
+            and (not needle or matches(e))
         ]
         return out[:limit]
 

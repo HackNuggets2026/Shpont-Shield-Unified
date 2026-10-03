@@ -300,3 +300,20 @@ def test_people_summary_and_facet_counts(org):
     watch = client.get("/admin/analytics/people?risk=watch&per_page=200").json()
     assert watch["total"] == s["levels"]["watch"] and watch["summary"]["levels"] == s["levels"]
     assert [i["usd"] for i in everyone["items"]] == sorted((i["usd"] for i in everyone["items"]), reverse=True)
+
+
+def test_events_filter_by_channel_direction_and_text(client):
+    chat(client, "Summarise the onboarding doc")  # chat input and output
+    client.post("/v1/guard", json={"text": "card 4111 1111 1111 1111"}, headers={"Authorization": "Bearer fin-bob-key"})
+
+    def ids(**params):
+        return [
+            (e["channel"], e["direction"], e["principal"]) for e in client.get("/admin/events", params=params).json()
+        ]
+
+    assert ids(channel="sdk") == [("sdk", "input", "bob")]
+    assert ids(channel="chat", direction="output") == [("chat", "output", "alice")]
+    assert ids(direction="input") == [("sdk", "input", "bob"), ("chat", "input", "alice")]
+    assert ids(q="CREDIT_CARD") == [("sdk", "input", "bob")]  # a finding's category, any case
+    assert ids(q="FINANCE") == [("sdk", "input", "bob")]  # team
+    assert ids(q="no-such-thing") == []
