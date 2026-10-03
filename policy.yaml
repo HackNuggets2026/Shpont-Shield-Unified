@@ -1,5 +1,5 @@
 # AI Control Layer policy - the single source of truth for every control.
-# Edits are picked up within ~1s without a restart. An invalid edit is rejected and
+# ${VAR:-default} reads the environment. Edits are picked up within ~1s without a restart. An invalid edit is rejected and
 # the previous policy stays live (see GET /admin/policy for the active version and last error).
 #
 # Enforcement ladder, weakest to strongest:  allow < log < warn < redact < block
@@ -12,7 +12,7 @@ name: acme-corp-default
 
 identity:
   require_auth: true
-  admin_token: demo-admin-token   # dashboard: http://127.0.0.1:8787/?token=demo-admin-token
+  admin_token: ${ACL_ADMIN_TOKEN:-demo-admin-token}   # dashboard: http://127.0.0.1:8787/?token=demo-admin-token
   api_keys:
     dev-alice-key: { principal: alice, team: engineering, role: developer }
     fin-bob-key: { principal: bob, team: finance, role: analyst }
@@ -24,14 +24,14 @@ models:
   allowed: ["llama3.2:*", "qwen3:*", "gpt-4o-mini", "mock-*"]
 
 upstream:
-  backend: mock            # ollama | openai | mock (canned replies; no model needed)
-  url: http://localhost:11434
+  backend: ${ACL_UPSTREAM:-mock}   # ollama | openai | mock (canned replies; no model needed)
+  url: ${OLLAMA_URL:-http://localhost:11434}
   mcp_servers:
     demo: builtin          # in-process demo tools; or a URL of a JSON-RPC MCP endpoint
 
 semantic:
-  backend: heuristic       # ollama (real decision models) | heuristic (offline keyword stand-in) | off
-  url: http://localhost:11434
+  backend: ${ACL_SEMANTIC:-heuristic}   # ollama (real decision models) | heuristic (offline keyword stand-in) | off
+  url: ${OLLAMA_URL:-http://localhost:11434}
   fast_model: tev1:0.8b    # tier 1: every request
   deep_model: nimble       # tier 2: only answers the fast model was unsure about
   escalate_band: [0.3, 0.85]

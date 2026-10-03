@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import os
+import re
 from pathlib import Path
 from typing import Any, Literal
 
@@ -203,8 +205,16 @@ def _merge(base: dict, patch: dict) -> None:
             base[k] = v
 
 
+_ENV = re.compile(r"\$\{(\w+)(?::-([^}]*))?\}")
+
+
+def _expand_env(text: str) -> str:
+    """${VAR} or ${VAR:-default}, so secrets and per-deployment URLs stay out of the file."""
+    return _ENV.sub(lambda m: os.environ.get(m.group(1), m.group(2) if m.group(2) is not None else ""), text)
+
+
 def parse_policy(text: str) -> Policy:
-    raw = yaml.safe_load(text) or {}
+    raw = yaml.safe_load(_expand_env(text)) or {}
     raw.pop("version", None)
     policy = Policy.model_validate(raw)
     policy.version = hashlib.sha256(text.encode()).hexdigest()[:12]

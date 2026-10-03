@@ -1,0 +1,32 @@
+# Full stack: Ollama (decision models + a chat model) and the gateway.
+#   docker compose up -d && docker compose logs -f models   # first run pulls ~15 GB
+# Edit ./policy.yaml on the host; the gateway reloads it within a second.
+services:
+  ollama:
+    image: ollama/ollama:latest   # needs >= 0.35 for /v1/systemone
+    volumes: [ollama:/root/.ollama]
+    ports: ["11434:11434"]
+
+  models:
+    image: ollama/ollama:latest
+    depends_on: [ollama]
+    environment: { OLLAMA_HOST: "http://ollama:11434" }
+    entrypoint: ["sh", "-c", "ollama pull tev1:0.8b && ollama pull nimble && ollama pull llama3.2:1b"]
+    restart: "no"
+
+  gateway:
+    build: .
+    depends_on: [ollama]
+    environment:
+      ACL_SEMANTIC: ollama
+      ACL_UPSTREAM: ollama
+      OLLAMA_URL: http://ollama:11434
+      ACL_ADMIN_TOKEN: ${ACL_ADMIN_TOKEN:-demo-admin-token}
+    # The whole directory, not the file: editors replace policy.yaml with a new inode,
+    # which a single-file bind mount would never see.
+    volumes: ["./:/srv"]
+    command: ["python", "-m", "controllayer", "--host", "0.0.0.0", "--port", "8787", "--policy", "/srv/policy.yaml"]
+    ports: ["8787:8787"]
+
+volumes:
+  ollama:

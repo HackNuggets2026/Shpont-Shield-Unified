@@ -111,3 +111,13 @@ def test_shadow_mode_on_deterministic_control(client, policy_dir):
     body = guard(client, "AKIAIOSFODNN7EXAMPLE").json()
     assert body["action"] == "allow"
     assert body["findings"][0]["proposed"] == "block" and body["findings"][0]["shadow"]
+
+
+def test_env_expansion(monkeypatch):
+    monkeypatch.setenv("ACL_SEMANTIC", "ollama")
+    monkeypatch.delenv("OLLAMA_URL", raising=False)
+    p = parse_policy((ROOT / "policy.yaml").read_text())
+    assert p.semantic.backend == "ollama"
+    assert p.semantic.url == "http://localhost:11434"
+    monkeypatch.setenv("OLLAMA_URL", "http://ollama:11434")
+    assert parse_policy((ROOT / "policy.yaml").read_text()).upstream.url == "http://ollama:11434"
