@@ -73,7 +73,7 @@ Monitoring employees' AI use is personal-data processing. In the EU that means G
 | Leases | `controls/resources.LeaseTracker` | Start, stop, stop-all and activity tools come from the policy. `handle.pattern` finds the id in the start result, so stop calls close the right lease. The sweep runs every 10 s, and a reclaim calls the first stop tool on the lease's MCP server. |
 | Store | `usage.UsageStore` (SQLite, WAL) | One row per LLM call, policy-check call (`resource=guard`, `metered=0`, never charged), closed lease, or reported usage. The in-memory ledger is rebuilt from today's rows at startup. |
 | Detections | `detections.RiskEngine` | Rules are code; their parameters live in the policy. One incident per rule per person per window; later evidence joins it. Score = sum of weight x 0.5^(age / half-life) over open and acknowledged incidents. Responses only escalate; recommend-only when `response.auto: false`. |
-| Restrictions | `PolicyStore.write_overlay` | Merged over `policy.yaml` (only `principals`, `menu`, `budgets`, `resources`, `detections`, `quarantine`). Validated before it is written. A broken overlay at startup is ignored and reported, and the base policy applies. |
+| Restrictions | `PolicyStore.write_overlay` | Merged over `policy.yaml` (only `principals`, `menu`, `budgets`, `catalog`, `resources`, `detections`, `quarantine`). Validated before it is written. A broken overlay at startup is ignored and reported, and the base policy applies. |
 
 Design choices:
 
@@ -83,16 +83,30 @@ Design choices:
 
 Ideas not built yet:
 
-- **Approval for one call.** Irreversible tools could park the call and wait for an admin click, using the same requests queue as workflow approvals.
+- **Approval for one call.** A sensitive call could be parked until an admin clicks, using the same requests queue that grants use today.
+- **Real Cedar.** The evaluator already uses Cedar's model; compiling the catalog and grants to Cedar policies (`cedarpy`) would make them verifiable and shareable.
 - **Budget the run, not the day.** Keep a forecast per task, warn when a run is heading past its p90, and suggest stopping before the hard limit.
 - **Argent over stdio.** A small `controllayer mcp-wrap -- argent mcp` shim so stdio MCP servers go through the gateway and get leases.
 - **Cost-aware routing per workflow.** Light workflows could default to the cheapest allowed model, with the menu price showing what the upgrade costs.
 - **Team leaderboard of savings.** Show savings (downgrades, reclaimed zombies, avoided runs), never raw individual usage, so the numbers encourage people rather than single them out.
 - **Detection feed.** Ship detection parameters like the signature feed, so thresholds can be tuned centrally.
 
+## Resources, events and Claude Code
+
+| Piece | Where | Notes |
+|---|---|---|
+| Catalog | `config.ResourceType`, `policy.yaml: catalog` | One entry per resource, named by URN, in one of three classes: consumable, leasable or access grant. The older `resources:` and `budgets.pricing` keys are folded into it at load. The legacy views the lease tracker and pricing read are derived from the catalog and excluded from dumps, so a dump-and-validate round trip is stable. |
+| Evaluator | `controls/resources.authorize` | Takes Cedar's (principal, action, resource, context) and returns a `Decision`. Consumables are decided by budgets, leasables by concurrency caps and the workflow, and access grants by a live grant or by `approval: workflow` plus a workflow that includes the resource. It is used on every gateway and hook tool call, and by `POST /v1/authorize`. |
+| Grants | `principals.<id>.grants` in the admin overlay | Shaped like RFC 9396 `authorization_details`. They are time-boxed, clamped to the resource's `max_minutes`, and optionally scoped to one workflow. A live grant lets its tools past the role list, the workflow's tool list and the irreversible list, but never past quarantine. |
+| Events | `usage.events`, `events.Ingestor` | One activity stream. Verdicts are mirrored by the engine; leases, incidents and reports write their own events; external producers come in through `ingest()`. An event that carries cost and is metered also writes a usage row. The price comes from the catalog when the producer sent none. |
+| Claude Code | `claude_code.py`, `gateway/otel.py`, `gateway/hooks.py` | Telemetry is observed and hooks enforce. Money comes from `api_request` log events only, not the duplicate cost metrics. Hooks run deterministic tiers only, because they sit on the user's path. Permission mode and MCP servers come from hook input: the telemetry's MCP connection event carries no server name. |
+| Exports | `focus.py`, `/admin/export/backstage` | Spend goes out as FOCUS 1.1 with attribution in `x_` columns and Tags. Importing that file into an empty data dir gives the same totals per resource and person (tested). |
+| Seeder | `seed/` | A separate package that the server never imports (tested). It writes through `Ingestor` with historical timestamps, and is deterministic for a given seed and end time. |
+
 ## Known gaps
 
-- Approvals cover workflows and quota. Irreversible tools are still simply blocked.
+- Approvals cover workflows, quota and time-boxed access grants. One call cannot yet be parked while it waits for a human click: the agent retries after the grant is approved.
+- Claude Code telemetry needs its `OTEL_*` variables in the process environment (shell, user or managed settings). In a test with 2.1.288, project-level `env` enabled the hooks but not telemetry. HTTP hooks fail open; the command-hook variant fails closed.
 - Budgets, usage, leases and incidents persist in a local SQLite file. Rate-limit windows, the loop guard and the detection baselines for new clients and tool drift are in memory. Multiple replicas would need a shared store (Postgres or Redis).
 - Leases only see resources started through MCP tools or reported to `/v1/usage`. A simulator started by hand is invisible.
 - Streaming responses are buffered and released as a single checked chunk.
