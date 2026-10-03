@@ -941,6 +941,17 @@ def test_unknown_delta_types_are_inspected(policy_dir, monkeypatch):
     assert "AKIA" not in r.text and "_deltas" not in r.text
 
 
+def test_a_reply_with_unknown_delta_types_resent_as_history_is_not_scored(policy_dir, monkeypatch):
+    split = one_block_stream({"type": "text_delta", "text": RISKY}, {"type": "future_delta", "note": "more"})
+    c = raw_upstream(policy_dir, monkeypatch, sse_text(split))
+    returned = assemble(events(ask(c, "hi", stream=True)))["content"]
+    assert returned == [text(RISKY)]
+    history = [{"role": "user", "content": "hi"}, {"role": "assistant", "content": returned}]
+    assert ask(c, [*history, {"role": "user", "content": "go on"}], stream=True).status_code == 400
+    risk = c.get("/admin/risk", headers={"x-admin-token": ADMIN}).json()
+    assert "alice" not in {x["principal"] for x in risk["principals"]}
+
+
 @pytest.mark.parametrize("data", ["[1, 2]", '"text"', "7", "null"])
 def test_upstream_event_data_that_is_not_an_object_ends_the_stream_with_an_error(policy_dir, monkeypatch, data):
     start = anthropic.message_events(message(text("x")))[0]

@@ -402,6 +402,11 @@ class _Reply:
         self.released.append(out)
         return out
 
+    def remember(self) -> None:
+        """Marks the released blocks as the gateway's own, in the form a client re-sends them."""
+        sent = [{k: v for k, v in b.items() if k != "_deltas"} for b in self.released]
+        self.layer.remember_reply(self.principal, reply_signature(sent))
+
     def stop_reason(self, upstream: Any) -> Any:
         # Every tool_use withheld: nothing left for the agent to run.
         return "end_turn" if upstream == "tool_use" and not self.tool_uses else upstream
@@ -736,7 +741,7 @@ def mount(app: FastAPI, layer: ControlLayer, store: PolicyStore, http: httpx.Asy
             for k, block in enumerate(content):
                 await reply.check(block, cost if k == len(content) - 1 else None)
             msg = {**msg, "content": reply.released, "stop_reason": reply.stop_reason(msg.get("stop_reason"))}
-            layer.remember_reply(principal, reply_signature(reply.released))
+            reply.remember()
             headers |= upstream_headers | {"x-control-action": reply.action.value}
             return JSONResponse(msg, headers=headers)
 
@@ -856,7 +861,7 @@ def mount(app: FastAPI, layer: ControlLayer, store: PolicyStore, http: httpx.Asy
                 await closer()
             if charged is None and usage:
                 charge_usage(usage)  # the client went away or the stream ended early: still spent
-            layer.remember_reply(reply.principal, reply_signature(reply.released))
+            reply.remember()
 
 
 async def _replay(events: list[tuple[str, dict[str, Any]]]) -> AsyncIterator[tuple[str, dict[str, Any]]]:
