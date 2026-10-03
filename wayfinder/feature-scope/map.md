@@ -4,7 +4,7 @@ Labels: wayfinder:map
 
 ## Destination
 
-Every feature in shpont-shield-mikolaj is marked Now, Later or Cut, so later sessions build and polish only what the HackYeah demo needs, and know what to delete or hide.
+Every feature in shpont-shield-mikolaj is marked Keep or Ditch (everything starts as Keep), and every feature marked Explain has been explained, so later sessions know what to delete or hide before the HackYeah demo.
 
 ## Notes
 
@@ -18,9 +18,9 @@ Every feature in shpont-shield-mikolaj is marked Now, Later or Cut, so later ses
 
 ## Not yet specified
 
-- What to do with each Cut feature: delete the code, hide it in the UI, or leave it dormant. Depends on the review.
+- What to do with each ditched feature: delete the code, hide it in the UI, or leave it dormant. Depends on the review.
 - Whether the employee portal shrinks to Home and Menu only.
-- Which usage detections the story needs; the rest may be trimmed once the Now set is known.
+- Which usage detections the story needs; the rest may be trimmed once the kept set is known.
 
 ## Out of scope
 
