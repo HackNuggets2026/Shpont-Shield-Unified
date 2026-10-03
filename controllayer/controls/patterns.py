@@ -44,11 +44,11 @@ class Detector:
 
 PII: dict[str, Detector] = {
     "email": Detector(re.compile(r"\b[\w.+-]+@[\w-]+(?:\.[\w-]+)*\.[A-Za-z]{2,}\b")),
-    "credit_card": Detector(re.compile(r"\b(?:\d[ -]?){12,18}\d\b"), _luhn),
     "iban": Detector(re.compile(r"\b[A-Z]{2}\d{2}(?: ?[A-Z0-9]{4}){2,7}(?: ?[A-Z0-9]{1,4})?\b"), _iban),
+    "credit_card": Detector(re.compile(r"\b(?:\d[ -]?){12,18}\d\b"), _luhn),
     "pesel": Detector(re.compile(r"\b\d{11}\b"), _pesel),
     "us_ssn": Detector(re.compile(r"\b(?!000|666|9\d\d)\d{3}-(?!00)\d{2}-(?!0000)\d{4}\b")),
-    "phone": Detector(re.compile(r"(?<![\w+])\+?\d{1,3}[ -]?\(?\d{2,3}\)?[ -]?\d{3}[ -]?\d{3,4}\b")),
+    "phone": Detector(re.compile(r"(?<![\w+])(?:\+\d{1,3}[ -]?)?\(?\d{2,3}\)?[ -]\d{3}[ -]\d{3,4}\b")),
     "ipv4": Detector(re.compile(r"\b(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|1?\d?\d)\b")),
 }
 
