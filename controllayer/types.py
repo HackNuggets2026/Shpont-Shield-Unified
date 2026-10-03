@@ -3,11 +3,11 @@ from __future__ import annotations
 import time
 import uuid
 from dataclasses import dataclass, field
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 
 
-class Action(str, Enum):
+class Action(StrEnum):
     """Enforcement ladder, weakest first. A control's `mode` caps how far up it may go."""
 
     ALLOW = "allow"
@@ -27,7 +27,7 @@ class Action(str, Enum):
 _RANK = {a: i for i, a in enumerate(Action)}
 
 
-class Direction(str, Enum):
+class Direction(StrEnum):
     INPUT = "input"  # prompt going to a model
     OUTPUT = "output"  # model completion coming back
     TOOL_CALL = "tool_call"  # agent invoking a tool

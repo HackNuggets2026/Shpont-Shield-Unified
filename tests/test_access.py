@@ -14,8 +14,11 @@ def test_missing_key_is_401(client):
 
 
 def test_forged_key_is_401(client):
-    r = client.post("/v1/chat/completions", json={"model": "mock-model", "messages": [{"role": "user", "content": "hi"}]},
-                    headers={"Authorization": "Bearer dev-alice-key-forged"})
+    r = client.post(
+        "/v1/chat/completions",
+        json={"model": "mock-model", "messages": [{"role": "user", "content": "hi"}]},
+        headers={"Authorization": "Bearer dev-alice-key-forged"},
+    )
     assert r.status_code == 401
 
 

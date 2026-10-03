@@ -93,7 +93,9 @@ class SemanticGuard:
         tiers: dict[str, str] = {}
         try:
             t0 = time.perf_counter()
-            answers = await asyncio.wait_for(self._ask(eng.fast_model, chunks, ctx, controls, stats), eng.timeout_seconds)
+            answers = await asyncio.wait_for(
+                self._ask(eng.fast_model, chunks, ctx, controls, stats), eng.timeout_seconds
+            )
             stats.fast_ms = (time.perf_counter() - t0) * 1000
             tiers = dict.fromkeys(answers, "fast")
             lo, hi = eng.escalate_band
@@ -104,7 +106,9 @@ class SemanticGuard:
             }
             if unsure and eng.deep_model and eng.deep_model != eng.fast_model:
                 t1 = time.perf_counter()
-                deep = await asyncio.wait_for(self._ask(eng.deep_model, chunks, ctx, unsure, stats), eng.timeout_seconds)
+                deep = await asyncio.wait_for(
+                    self._ask(eng.deep_model, chunks, ctx, unsure, stats), eng.timeout_seconds
+                )
                 stats.deep_ms = (time.perf_counter() - t1) * 1000
                 answers.update(deep)
                 tiers.update(dict.fromkeys(deep, "deep"))

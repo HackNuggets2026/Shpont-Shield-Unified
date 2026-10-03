@@ -34,7 +34,12 @@ def test_cost_budget_commercial_pricing(make_client):
 
 
 def test_local_model_cost_uses_compute_seconds(make_client):
-    c = make_client(mutate=lambda p: p["budgets"]["pricing"].update({"mock-local": {"usd_per_compute_second": 1000.0}}) or p["models"]["allowed"].append("mock-local"))
+    c = make_client(
+        mutate=lambda p: (
+            p["budgets"]["pricing"].update({"mock-local": {"usd_per_compute_second": 1000.0}})
+            or p["models"]["allowed"].append("mock-local")
+        )
+    )
     assert chat(c, "hello", model="mock-local").status_code == 200
     models = c.get("/admin/summary").json()["budgets"]["models"]
     row = next(m for m in models if m["model"] == "mock-local")
@@ -71,7 +76,9 @@ def test_mcp_tool_calls_are_rate_limited(make_client):
     from .conftest import mcp
 
     c = make_client(mutate=_limits(requests_per_minute=2))
-    codes = [("error" in mcp(c, "tools/call", {"name": "search_docs", "arguments": {"query": f"q{i}"}})) for i in range(3)]
+    codes = [
+        ("error" in mcp(c, "tools/call", {"name": "search_docs", "arguments": {"query": f"q{i}"}})) for i in range(3)
+    ]
     assert codes == [False, False, True]
 
 
@@ -85,9 +92,18 @@ def test_tool_only_turns_are_not_mistaken_for_a_loop(client):
 
     codes = []
     for i in range(7):
-        r = client.post("/v1/chat/completions", headers=KEYS["alice"], json={"model": "mock-model", "messages": [
-            {"role": "user", "content": "run the tool"}, {"role": "assistant", "content": "calling"},
-            {"role": "tool", "content": f"result number {i}"}]})
+        r = client.post(
+            "/v1/chat/completions",
+            headers=KEYS["alice"],
+            json={
+                "model": "mock-model",
+                "messages": [
+                    {"role": "user", "content": "run the tool"},
+                    {"role": "assistant", "content": "calling"},
+                    {"role": "tool", "content": f"result number {i}"},
+                ],
+            },
+        )
         codes.append(r.status_code)
     assert codes == [200] * 7
 
@@ -96,7 +112,19 @@ def test_tool_only_turns_are_still_metered(make_client):
     from .conftest import KEYS
 
     c = make_client(mutate=_limits(requests_per_minute=2))
-    codes = [c.post("/v1/chat/completions", headers=KEYS["alice"], json={"model": "mock-model", "messages": [
-        {"role": "user", "content": "x"}, {"role": "assistant", "content": "y"}, {"role": "tool", "content": f"r{i}"}]}).status_code
-        for i in range(3)]
+    codes = [
+        c.post(
+            "/v1/chat/completions",
+            headers=KEYS["alice"],
+            json={
+                "model": "mock-model",
+                "messages": [
+                    {"role": "user", "content": "x"},
+                    {"role": "assistant", "content": "y"},
+                    {"role": "tool", "content": f"r{i}"},
+                ],
+            },
+        ).status_code
+        for i in range(3)
+    ]
     assert codes == [200, 200, 429]

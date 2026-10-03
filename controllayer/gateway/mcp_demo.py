@@ -5,12 +5,36 @@ from __future__ import annotations
 from typing import Any
 
 TOOLS = [
-    {"name": "search_docs", "description": "Search the internal wiki.", "inputSchema": {"type": "object", "properties": {"query": {"type": "string"}}}},
-    {"name": "read_file", "description": "Read a file from the shared drive.", "inputSchema": {"type": "object", "properties": {"path": {"type": "string"}}}},
-    {"name": "http_get", "description": "Fetch a URL.", "inputSchema": {"type": "object", "properties": {"url": {"type": "string"}}}},
-    {"name": "send_email", "description": "Send an email.", "inputSchema": {"type": "object", "properties": {"to": {"type": "string"}, "body": {"type": "string"}}}},
-    {"name": "delete_records", "description": "Delete rows from a database table.", "inputSchema": {"type": "object", "properties": {"table": {"type": "string"}}}},
-    {"name": "run_tests", "description": "Run the project's test suite.", "inputSchema": {"type": "object", "properties": {}}},
+    {
+        "name": "search_docs",
+        "description": "Search the internal wiki.",
+        "inputSchema": {"type": "object", "properties": {"query": {"type": "string"}}},
+    },
+    {
+        "name": "read_file",
+        "description": "Read a file from the shared drive.",
+        "inputSchema": {"type": "object", "properties": {"path": {"type": "string"}}},
+    },
+    {
+        "name": "http_get",
+        "description": "Fetch a URL.",
+        "inputSchema": {"type": "object", "properties": {"url": {"type": "string"}}},
+    },
+    {
+        "name": "send_email",
+        "description": "Send an email.",
+        "inputSchema": {"type": "object", "properties": {"to": {"type": "string"}, "body": {"type": "string"}}},
+    },
+    {
+        "name": "delete_records",
+        "description": "Delete rows from a database table.",
+        "inputSchema": {"type": "object", "properties": {"table": {"type": "string"}}},
+    },
+    {
+        "name": "run_tests",
+        "description": "Run the project's test suite.",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
     {
         "name": "get_weather",
         "description": (
@@ -52,7 +76,11 @@ def call(name: str, args: dict[str, Any]) -> str:
 def handle(req: dict) -> dict:
     method, rid = req.get("method"), req.get("id")
     if method == "initialize":
-        result: Any = {"protocolVersion": "2025-06-18", "serverInfo": {"name": "demo", "version": "0.1"}, "capabilities": {"tools": {}}}
+        result: Any = {
+            "protocolVersion": "2025-06-18",
+            "serverInfo": {"name": "demo", "version": "0.1"},
+            "capabilities": {"tools": {}},
+        }
     elif method == "tools/list":
         result = {"tools": TOOLS}
     elif method == "tools/call":

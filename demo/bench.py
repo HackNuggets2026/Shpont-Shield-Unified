@@ -11,12 +11,11 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import shutil
 import statistics
+import tempfile
 import time
 from collections import Counter
-
-import shutil
-import tempfile
 from pathlib import Path
 
 import httpx
@@ -77,8 +76,8 @@ async def main() -> None:
 
     print(f"{args.n} decisions, concurrency {args.concurrency}, {args.n / wall:.0f} req/s")
     print("outcomes:", dict(actions))
-    print(f"round trip ms   p50 {statistics.median(lat):.2f}  p95 {q(lat, .95):.2f}  p99 {q(lat, .99):.2f}")
-    print(f"in-layer ms     p50 {statistics.median(server):.2f}  p95 {q(server, .95):.2f}  p99 {q(server, .99):.2f}")
+    print(f"round trip ms   p50 {statistics.median(lat):.2f}  p95 {q(lat, 0.95):.2f}  p99 {q(lat, 0.99):.2f}")
+    print(f"in-layer ms     p50 {statistics.median(server):.2f}  p95 {q(server, 0.95):.2f}  p99 {q(server, 0.99):.2f}")
 
 
 if __name__ == "__main__":

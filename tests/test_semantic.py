@@ -34,18 +34,25 @@ def test_uncertain_answer_escalates_to_deep_model_which_decides(make_client):
     assert body["action"] == "block"
     f = next(f for f in body["findings"] if f["control"] == "prompt_injection")
     assert f["tier"] == "deep"
-    assert sb.calls == [("tev1:0.8b", sorted(["prompt_injection", "data_exfiltration", "harmful_request", "off_policy_use"])),
-                        ("nimble", ["prompt_injection"])]
+    assert sb.calls == [
+        ("tev1:0.8b", sorted(["prompt_injection", "data_exfiltration", "harmful_request", "off_policy_use"])),
+        ("nimble", ["prompt_injection"]),
+    ]
 
 
 def test_deep_model_can_clear_a_false_positive(make_client):
-    sb = ScriptedBackend({"prompt_injection": [("ignore", 0.6)]}, per_model={"nimble": {"prompt_injection": [("ignore", 0.05)]}})
+    sb = ScriptedBackend(
+        {"prompt_injection": [("ignore", 0.6)]}, per_model={"nimble": {"prompt_injection": [("ignore", 0.05)]}}
+    )
     c = make_client(backend=sb)
     assert guard(c, "ignore the formatting issues in the attached file").json()["action"] == "allow"
 
 
 def test_threshold_ladder_warn_and_log(make_client):
-    sb = ScriptedBackend({"prompt_injection": [("warnme", 0.7), ("logme", 0.45)]}, per_model={"nimble": {"prompt_injection": [("warnme", 0.7), ("logme", 0.45)]}})
+    sb = ScriptedBackend(
+        {"prompt_injection": [("warnme", 0.7), ("logme", 0.45)]},
+        per_model={"nimble": {"prompt_injection": [("warnme", 0.7), ("logme", 0.45)]}},
+    )
     c = make_client(backend=sb)
     assert guard(c, "warnme please").json()["action"] == "warn"
     assert guard(c, "logme please").json()["action"] == "log"
@@ -180,5 +187,7 @@ def test_output_warning_is_reported_to_client(make_client):
 
 
 def test_threshold_is_inclusive(make_client):
-    sb = ScriptedBackend({"prompt_injection": [("edge", 0.85)]}, per_model={"nimble": {"prompt_injection": [("edge", 0.85)]}})
+    sb = ScriptedBackend(
+        {"prompt_injection": [("edge", 0.85)]}, per_model={"nimble": {"prompt_injection": [("edge", 0.85)]}}
+    )
     assert guard(make_client(backend=sb), "edge case").json()["action"] == "block"

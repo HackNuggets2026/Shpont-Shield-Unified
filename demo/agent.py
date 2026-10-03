@@ -24,7 +24,11 @@ STEPS = [
     ("mcp", "alice", ("tools/call", {"name": "read_file", "arguments": {"path": "docs/handbook.md"}})),
     ("mcp", "alice", ("tools/call", {"name": "read_file", "arguments": {"path": "docs/vendor_invoice.txt"}})),
     ("mcp", "alice", ("tools/call", {"name": "read_file", "arguments": {"path": "docs/customer_export.csv"}})),
-    ("mcp", "alice", ("tools/call", {"name": "http_get", "arguments": {"url": "http://169.254.169.254/latest/meta-data"}})),
+    (
+        "mcp",
+        "alice",
+        ("tools/call", {"name": "http_get", "arguments": {"url": "http://169.254.169.254/latest/meta-data"}}),
+    ),
     ("mcp", "ops", ("tools/call", {"name": "delete_records", "arguments": {"table": "customers"}})),
 ]
 KEYS = {"alice": "dev-alice-key", "bob": "fin-bob-key", "carol": "intern-key", "ops": "ops-agent-key"}
@@ -39,8 +43,11 @@ def main() -> None:
     for kind, who, payload in STEPS:
         h = {"Authorization": f"Bearer {KEYS[who]}"}
         if kind == "chat":
-            r = http.post("/v1/chat/completions", headers=h,
-                          json={"model": args.model, "messages": [{"role": "user", "content": payload}]})
+            r = http.post(
+                "/v1/chat/completions",
+                headers=h,
+                json={"model": args.model, "messages": [{"role": "user", "content": payload}]},
+            )
             body = r.json()
             out = body["error"]["message"] if "error" in body else body["choices"][0]["message"]["content"]
             print(f"[{r.status_code}] {who:5} chat  {payload[:60]!r}\n        -> {out[:140]}")

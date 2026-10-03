@@ -46,8 +46,16 @@ def _verdict_json(v: Verdict) -> dict[str, Any]:
         "policy_version": v.policy_version,
         "latency_ms": {k: round(x, 2) for k, x in v.latency_ms.items()},
         "findings": [
-            {"control": f.control, "category": f.category, "action": f.action.value, "proposed": f.proposed.value,
-             "tier": f.tier, "score": round(f.score, 3), "detail": f.detail, "shadow": f.shadow}
+            {
+                "control": f.control,
+                "category": f.category,
+                "action": f.action.value,
+                "proposed": f.proposed.value,
+                "tier": f.tier,
+                "score": round(f.score, 3),
+                "detail": f.detail,
+                "shadow": f.shadow,
+            }
             for f in v.findings
         ],
     }
@@ -98,6 +106,7 @@ def create_app(
     @app.exception_handler(BadRequest)
     async def bad_request(request: Request, exc: BadRequest):
         return JSONResponse({"error": {"type": "invalid_request", "message": str(exc)}}, status_code=400)
+
     app.state.layer = layer
     app.state.store = store
 
@@ -151,15 +160,23 @@ def create_app(
                 if not isinstance(fn, dict):
                     continue
                 args = fn.get("arguments")
-                actx = Context(principal, Direction.INPUT, args if isinstance(args, str) else json.dumps(args),
-                               model=model, channel="chat", metered=False)
+                actx = Context(
+                    principal,
+                    Direction.INPUT,
+                    args if isinstance(args, str) else json.dumps(args),
+                    model=model,
+                    channel="chat",
+                    metered=False,
+                )
                 av = await layer.evaluate(actx)
                 if av.blocked:
                     return _policy_error(av)
                 if av.text != actx.text:
                     fn["arguments"] = av.text
         if metered_ctx is None:  # turn ends in a tool result, already inspected: gates and budgets still apply
-            metered_ctx = Context(principal, Direction.INPUT, _text(messages[-1].get("content")), model=model, channel="chat")
+            metered_ctx = Context(
+                principal, Direction.INPUT, _text(messages[-1].get("content")), model=model, channel="chat"
+            )
             v = await layer.gate(metered_ctx)
             if v.blocked:
                 return _policy_error(v)
@@ -167,16 +184,29 @@ def create_app(
         try:
             completion = await upstream().chat({**body, "messages": messages})
         except (httpx.HTTPError, ValueError, KeyError, IndexError, TypeError) as e:
-            return JSONResponse({"error": {"type": "upstream_error", "message": f"{type(e).__name__}: {e}"}},
-                                status_code=502)
+            return JSONResponse(
+                {"error": {"type": "upstream_error", "message": f"{type(e).__name__}: {e}"}}, status_code=502
+            )
         cost = layer.ledger.record(
-            metered_ctx, layer.policy_for(principal.team), model or "unknown",
-            completion.input_tokens, completion.output_tokens, completion.compute_seconds,
+            metered_ctx,
+            layer.policy_for(principal.team),
+            model or "unknown",
+            completion.input_tokens,
+            completion.output_tokens,
+            completion.compute_seconds,
         )
 
-        out_ctx = Context(principal, Direction.OUTPUT, completion.content, model=model, channel="chat",
-                          request_id=metered_ctx.request_id)
-        ov = await layer.evaluate(out_ctx, {"usd": round(cost, 6), "tokens": completion.input_tokens + completion.output_tokens})
+        out_ctx = Context(
+            principal,
+            Direction.OUTPUT,
+            completion.content,
+            model=model,
+            channel="chat",
+            request_id=metered_ctx.request_id,
+        )
+        ov = await layer.evaluate(
+            out_ctx, {"usd": round(cost, 6), "tokens": completion.input_tokens + completion.output_tokens}
+        )
         content, finish = ov.text, "stop"
         if ov.blocked:
             content, finish = f"[Response withheld by policy: {ov.reason}]", "content_filter"
@@ -189,15 +219,25 @@ def create_app(
             "created": int(time.time()),
             "model": model,
             "choices": [{"index": 0, "message": {"role": "assistant", "content": content}, "finish_reason": finish}],
-            "usage": {"prompt_tokens": completion.input_tokens, "completion_tokens": completion.output_tokens,
-                      "total_tokens": completion.input_tokens + completion.output_tokens},
-            "control": {"input_request_id": metered_ctx.request_id, "output_action": ov.action.value, "warnings": warnings},
+            "usage": {
+                "prompt_tokens": completion.input_tokens,
+                "completion_tokens": completion.output_tokens,
+                "total_tokens": completion.input_tokens + completion.output_tokens,
+            },
+            "control": {
+                "input_request_id": metered_ctx.request_id,
+                "output_action": ov.action.value,
+                "warnings": warnings,
+            },
         }
         headers = {"x-control-request-id": metered_ctx.request_id, "x-control-action": ov.action.value}
         if body.get("stream"):
             # The full reply must be inspected before release, so it is sent as a single chunk.
-            chunk = {**resp, "object": "chat.completion.chunk",
-                     "choices": [{"index": 0, "delta": {"role": "assistant", "content": content}, "finish_reason": finish}]}
+            chunk = {
+                **resp,
+                "object": "chat.completion.chunk",
+                "choices": [{"index": 0, "delta": {"role": "assistant", "content": content}, "finish_reason": finish}],
+            }
             payload = f"data: {json.dumps(chunk)}\n\ndata: [DONE]\n\n"
             return StreamingResponse(iter([payload]), media_type="text/event-stream", headers=headers)
         return JSONResponse(resp, headers=headers)
@@ -228,7 +268,9 @@ def create_app(
             return rpc(rid, -32004, f"unknown MCP server {server!r}")
 
         def blocked(v: Verdict) -> JSONResponse:
-            return rpc(rid, -32001, f"blocked by policy: {v.reason}", {"request_id": v.request_id, "action": v.action.value})
+            return rpc(
+                rid, -32001, f"blocked by policy: {v.reason}", {"request_id": v.request_id, "action": v.action.value}
+            )
 
         async def forward(r: dict) -> dict:
             if target == "builtin":
@@ -252,7 +294,10 @@ def create_app(
             if v.action is Action.REDACT:
                 if not layer.spans_only(v):
                     return blocked(v)  # nothing to cut out of the arguments, so the call cannot go ahead
-                req = {**req, "params": {**params, "arguments": layer.redact_tree(args, principal, Direction.TOOL_CALL)}}
+                req = {
+                    **req,
+                    "params": {**params, "arguments": layer.redact_tree(args, principal, Direction.TOOL_CALL)},
+                }
             request_id = ctx.request_id
         elif not principal.authenticated and store.policy.identity.require_auth:
             return blocked(await layer.evaluate(Context(principal, Direction.TOOL_CALL, "", channel="mcp")))
@@ -271,14 +316,22 @@ def create_app(
                 if not isinstance(tool, dict):
                     continue
                 # Name, description and every schema string: poisoning hides in parameter descriptions too.
-                tctx = Context(principal, Direction.TOOL_DESCRIPTION, _flatten(tool), tool=tool.get("name"), channel="mcp")
+                tctx = Context(
+                    principal, Direction.TOOL_DESCRIPTION, _flatten(tool), tool=tool.get("name"), channel="mcp"
+                )
                 if not (await layer.evaluate(tctx, {"server": server})).blocked:
                     kept.append(tool)
             return JSONResponse({**resp, "result": {**result, "tools": kept}})
 
         # Every other result (tool output, resources, prompts) flows back into the agent: inspect all of it.
-        rctx = Context(principal, Direction.TOOL_RESULT, _flatten(result), tool=name, channel="mcp",
-                       request_id=request_id or uuid.uuid4().hex[:16])
+        rctx = Context(
+            principal,
+            Direction.TOOL_RESULT,
+            _flatten(result),
+            tool=name,
+            channel="mcp",
+            request_id=request_id or uuid.uuid4().hex[:16],
+        )
         rv = await layer.evaluate(rctx, {"server": server, "method": method})
         if rv.blocked:
             return blocked(rv)
@@ -301,8 +354,14 @@ def create_app(
             direction = Direction(body.get("direction", "input"))
         except ValueError:
             return JSONResponse({"error": f"direction must be one of {[d.value for d in Direction]}"}, status_code=400)
-        ctx = Context(principal, direction, _text(body.get("text", "")), model=body.get("model"),
-                      tool=body.get("tool"), channel="sdk")
+        ctx = Context(
+            principal,
+            direction,
+            _text(body.get("text", "")),
+            model=body.get("model"),
+            tool=body.get("tool"),
+            channel="sdk",
+        )
         v = await layer.evaluate(ctx)
         return JSONResponse(_verdict_json(v), status_code=v.status_code if v.blocked else 200)
 
@@ -313,20 +372,45 @@ def create_app(
         a = layer.audit
         p = store.policy
         controls = [
-            {"name": n, "kind": "deterministic", "enabled": c.enabled, "mode": c.mode.value, "shadow": c.shadow,
-             "hits": a.controls.get(n, 0)}
-            for n, c in (("secrets", p.secrets), ("pii", p.pii), ("signatures", p.signatures), ("tool_access", p.tool_access))
+            {
+                "name": n,
+                "kind": "deterministic",
+                "enabled": c.enabled,
+                "mode": c.mode.value,
+                "shadow": c.shadow,
+                "hits": a.controls.get(n, 0),
+            }
+            for n, c in (
+                ("secrets", p.secrets),
+                ("pii", p.pii),
+                ("signatures", p.signatures),
+                ("tool_access", p.tool_access),
+            )
         ] + [
-            {"name": n, "kind": "semantic", "enabled": c.enabled, "mode": c.mode.value, "shadow": c.shadow,
-             "hits": a.controls.get(n, 0)}
+            {
+                "name": n,
+                "kind": "semantic",
+                "enabled": c.enabled,
+                "mode": c.mode.value,
+                "shadow": c.shadow,
+                "hits": a.controls.get(n, 0),
+            }
             for n, c in p.semantic_controls.items()
         ]
         return {
             "policy": {"name": p.name, "version": p.version, "reloads": store.reloads, "last_error": store.last_error},
-            "feed": {"version": layer.feed.feed_version, "signatures": len(layer.feed.signatures),
-                     "loaded_at": layer.feed.loaded_at, "errors": layer.feed.errors},
-            "semantic": {"backend": p.semantic.backend, "fast_model": p.semantic.fast_model,
-                         "deep_model": p.semantic.deep_model, "fail_mode": p.semantic.fail_mode},
+            "feed": {
+                "version": layer.feed.feed_version,
+                "signatures": len(layer.feed.signatures),
+                "loaded_at": layer.feed.loaded_at,
+                "errors": layer.feed.errors,
+            },
+            "semantic": {
+                "backend": p.semantic.backend,
+                "fast_model": p.semantic.fast_model,
+                "deep_model": p.semantic.deep_model,
+                "fail_mode": p.semantic.fail_mode,
+            },
             "totals": {"events": a.total, **a.actions},
             "controls": controls,
             "top_categories": a.categories.most_common(15),
@@ -338,9 +422,12 @@ def create_app(
 
     @app.get("/admin/events")
     async def events(limit: int = 100, action: str | None = None, control: str | None = None):
-        out = [e for e in reversed(layer.audit.events)
-               if (not action or e["action"] == action)
-               and (not control or any(f["control"] == control for f in e["findings"]))]
+        out = [
+            e
+            for e in reversed(layer.audit.events)
+            if (not action or e["action"] == action)
+            and (not control or any(f["control"] == control for f in e["findings"]))
+        ]
         return out[:limit]
 
     @app.get("/admin/audit/export")
@@ -349,16 +436,49 @@ def create_app(
         if format == "csv":
             buf = io.StringIO()
             w = csv.writer(buf)
-            w.writerow(["ts", "request_id", "principal", "team", "channel", "direction", "model", "tool",
-                        "action", "status_code", "reason", "controls", "policy_version"])
+            w.writerow(
+                [
+                    "ts",
+                    "request_id",
+                    "principal",
+                    "team",
+                    "channel",
+                    "direction",
+                    "model",
+                    "tool",
+                    "action",
+                    "status_code",
+                    "reason",
+                    "controls",
+                    "policy_version",
+                ]
+            )
             for e in rows:
-                w.writerow([e["ts"], e["request_id"], e["principal"], e["team"], e["channel"], e["direction"],
-                            e["model"], e["tool"], e["action"], e["status_code"], e["reason"],
-                            ";".join(f"{f['control']}/{f['category']}" for f in e["findings"]), e["policy_version"]])
-            return Response(buf.getvalue(), media_type="text/csv",
-                            headers={"content-disposition": "attachment; filename=audit.csv"})
-        return Response("".join(json.dumps(e) + "\n" for e in rows), media_type="application/x-ndjson",
-                        headers={"content-disposition": "attachment; filename=audit.jsonl"})
+                w.writerow(
+                    [
+                        e["ts"],
+                        e["request_id"],
+                        e["principal"],
+                        e["team"],
+                        e["channel"],
+                        e["direction"],
+                        e["model"],
+                        e["tool"],
+                        e["action"],
+                        e["status_code"],
+                        e["reason"],
+                        ";".join(f"{f['control']}/{f['category']}" for f in e["findings"]),
+                        e["policy_version"],
+                    ]
+                )
+            return Response(
+                buf.getvalue(), media_type="text/csv", headers={"content-disposition": "attachment; filename=audit.csv"}
+            )
+        return Response(
+            "".join(json.dumps(e) + "\n" for e in rows),
+            media_type="application/x-ndjson",
+            headers={"content-disposition": "attachment; filename=audit.jsonl"},
+        )
 
     @app.get("/admin/policy")
     async def policy_view():
@@ -384,8 +504,9 @@ def create_app(
     @app.post("/admin/policy/reload")
     async def policy_reload():
         ok = store.reload()
-        return JSONResponse({"ok": ok, "version": store.policy.version, "error": store.last_error},
-                            status_code=200 if ok else 422)
+        return JSONResponse(
+            {"ok": ok, "version": store.policy.version, "error": store.last_error}, status_code=200 if ok else 422
+        )
 
     @app.get("/metrics")
     async def metrics():
@@ -396,8 +517,10 @@ def create_app(
         lines += [f'acl_findings_total{{control="{k}"}} {v}' for k, v in a.controls.items()]
         lines += ["# TYPE acl_latency_ms summary"]
         for stage, s in a.latency_summary().items():
-            lines += [f'acl_latency_ms{{stage="{stage}",quantile="0.5"}} {s["p50"]}',
-                      f'acl_latency_ms{{stage="{stage}",quantile="0.95"}} {s["p95"]}']
+            lines += [
+                f'acl_latency_ms{{stage="{stage}",quantile="0.5"}} {s["p50"]}',
+                f'acl_latency_ms{{stage="{stage}",quantile="0.95"}} {s["p95"]}',
+            ]
         snap = layer.ledger.snapshot(store.policy)
         lines += ["# TYPE acl_budget_usd gauge"]
         lines += [f'acl_budget_usd{{scope="{r["scope"]}",key="{r["key"]}"}} {r["usd"]}' for r in snap["scopes"]]

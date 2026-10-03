@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import hashlib
-from fnmatch import fnmatch
 import time
 from collections import defaultdict, deque
 from dataclasses import dataclass
+from fnmatch import fnmatch
 
 from ..config import BudgetLimits, Policy
 from ..types import Action, Context, Finding
@@ -58,9 +58,17 @@ class BudgetLedger:
         for scope, key, limits in self._scopes(ctx, policy):
             used = self.usage[(scope, key, day)]
             if limits.tokens_per_day is not None and used.tokens + est > limits.tokens_per_day:
-                out.append(self._f("token_budget", f"{scope}:{key} {used.tokens}+{est} > {limits.tokens_per_day} tokens/day", b.shadow))
+                out.append(
+                    self._f(
+                        "token_budget",
+                        f"{scope}:{key} {used.tokens}+{est} > {limits.tokens_per_day} tokens/day",
+                        b.shadow,
+                    )
+                )
             if limits.usd_per_day is not None and used.usd >= limits.usd_per_day:
-                out.append(self._f("cost_budget", f"{scope}:{key} ${used.usd:.4f} >= ${limits.usd_per_day}/day", b.shadow))
+                out.append(
+                    self._f("cost_budget", f"{scope}:{key} ${used.usd:.4f} >= ${limits.usd_per_day}/day", b.shadow)
+                )
             if limits.requests_per_minute is not None:
                 q = self._minute[f"{scope}:{key}"]
                 while q and now - q[0] > 60:
@@ -77,13 +85,17 @@ class BudgetLedger:
         g = policy.budgets.loop_guard
         sig = hashlib.sha256(f"{ctx.principal.id}|{ctx.direction.value}|{ctx.tool}|{ctx.text}".encode()).hexdigest()
         if len(self._calls) > 50_000:  # unique prompts would otherwise grow this map forever
-            self._calls = defaultdict(deque, {k: q for k, q in self._calls.items() if q and now - q[-1] <= g.window_seconds})
+            self._calls = defaultdict(
+                deque, {k: q for k, q in self._calls.items() if q and now - q[-1] <= g.window_seconds}
+            )
         q = self._calls[sig]
         while q and now - q[0] > g.window_seconds:
             q.popleft()
         q.append(now)
         if len(q) > g.max_identical_calls:
-            return [self._f("runaway_loop", f"{len(q)} identical calls in {g.window_seconds:.0f}s", policy.budgets.shadow)]
+            return [
+                self._f("runaway_loop", f"{len(q)} identical calls in {g.window_seconds:.0f}s", policy.budgets.shadow)
+            ]
         return []
 
     def record(
@@ -137,7 +149,13 @@ class BudgetLedger:
         rows += [row("team", t, lim) for t, lim in b.per_team.items()]
         rows += [row("principal", k, b.per_principal) for (s, k, d) in self.usage if s == "principal" and d == day]
         models = [
-            {"model": m, "requests": u.requests, "tokens": u.tokens, "usd": round(u.usd, 6), "compute_seconds": round(u.compute_seconds, 6)}
+            {
+                "model": m,
+                "requests": u.requests,
+                "tokens": u.tokens,
+                "usd": round(u.usd, 6),
+                "compute_seconds": round(u.compute_seconds, 6),
+            }
             for (m, d), u in self.by_model.items()
             if d == day
         ]

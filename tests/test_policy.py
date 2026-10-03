@@ -64,19 +64,30 @@ def test_new_semantic_control_added_purely_in_config(make_client, policy_dir):
     sb = ScriptedBackend({"competitor_talk": [("Globex", 0.95)]})
     c = make_client(backend=sb)
     assert guard(c, "compare us with Globex").json()["action"] == "allow"
-    edit_policy(policy_dir, lambda p: p["semantic_controls"].update(competitor_talk={
-        "mode": "warn", "directions": ["input"], "instructions": "Does it discuss competitors?",
-        "thresholds": {"warn": 0.8}}))
+    edit_policy(
+        policy_dir,
+        lambda p: p["semantic_controls"].update(
+            competitor_talk={
+                "mode": "warn",
+                "directions": ["input"],
+                "instructions": "Does it discuss competitors?",
+                "thresholds": {"warn": 0.8},
+            }
+        ),
+    )
     reload(c)
     assert guard(c, "compare us with Globex now").json()["action"] == "warn"
 
 
-@pytest.mark.parametrize("bad", [
-    lambda p: p["pii"].update(mood="block"),  # misspelled key
-    lambda p: p["pii"].update(mode="obliterate"),  # unknown action
-    lambda p: p["teams"].update(x={"controls": {"nonexistent": {"mode": "log"}}}),
-    lambda p: p["semantic_controls"]["harmful_request"]["actions"].update(unknown_cat="block"),
-])
+@pytest.mark.parametrize(
+    "bad",
+    [
+        lambda p: p["pii"].update(mood="block"),  # misspelled key
+        lambda p: p["pii"].update(mode="obliterate"),  # unknown action
+        lambda p: p["teams"].update(x={"controls": {"nonexistent": {"mode": "log"}}}),
+        lambda p: p["semantic_controls"]["harmful_request"]["actions"].update(unknown_cat="block"),
+    ],
+)
 def test_invalid_edit_is_rejected_and_old_policy_stays_live(client, policy_dir, bad):
     before = client.get("/admin/policy").json()["version"]
     edit_policy(policy_dir, bad)

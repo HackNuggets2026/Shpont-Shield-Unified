@@ -7,7 +7,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 from ..config import PatternControl
-from ..types import Action, Context, Finding, Span
+from ..types import Context, Finding, Span
 from .base import applies, finding
 
 
@@ -33,7 +33,7 @@ def _iban(s: str) -> bool:
 
 def _pesel(s: str) -> bool:
     w = (1, 3, 7, 9, 1, 3, 7, 9, 1, 3)
-    return (10 - sum(int(a) * b for a, b in zip(s[:10], w)) % 10) % 10 == int(s[10])
+    return (10 - sum(int(a) * b for a, b in zip(s[:10], w, strict=True)) % 10) % 10 == int(s[10])
 
 
 @dataclass(frozen=True)
