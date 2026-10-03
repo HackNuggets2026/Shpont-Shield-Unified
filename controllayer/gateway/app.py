@@ -161,46 +161,65 @@ def create_app(
             direction = Direction.TOOL_RESULT if m.get("role") == "tool" else Direction.INPUT
             metered = i == last and direction is Direction.INPUT
             content = m.get("content")
-            ctx = Context(principal, direction, _text(content), model=model, channel="chat", metered=metered)
+            text = _text(content)
+            ctx = Context(principal, direction, text, model=model, channel="chat", metered=metered)
             v = await layer.evaluate(ctx)
             if v.blocked:
                 return _policy_error(v)
-            if v.text != _text(content):
-                m["content"] = v.text
             if v.action is Action.WARN:
                 warnings.append(v.reason)
             if metered:
                 metered_ctx = ctx
-            # Everything else in the message: tool_calls, function_call, name, refusal, image URLs.
+            if v.text != text:
+                if not isinstance(content, list):
+                    m["content"] = v.text
+                elif layer.spans_only(v):
+                    cleaned = layer.redact_tree(content, principal, direction)
+                    if cleaned is None:
+                        return _refused(v)
+                    m["content"] = cleaned
+                else:  # withheld as a whole: replace the text, keep images and other parts
+                    m["content"] = [{"type": "text", "text": v.text}, *(p for p in content if not _is_text_part(p))]
+
+            # Everything else: tool_calls, function_call, name, refusal, image URLs, extra keys on parts.
             rest = {k: val for k, val in m.items() if k not in ("role", "content")}
-            parts = (
-                [p for p in content if not (isinstance(p, dict) and p.get("type") == "text")]
-                if isinstance(content, list)
-                else []
-            )
+            parts = []
+            if isinstance(content, list):
+                parts = [{k: val for k, val in p.items() if k != "text"} if _is_text_part(p) else p for p in content]
             if rest or parts:
                 rctx = Context(principal, direction, flatten([rest, parts]), model=model, channel="chat", metered=False)
                 rv = await layer.evaluate(rctx)
                 if rv.blocked:
                     return _policy_error(rv)
                 if rv.action is Action.REDACT:
-                    cleaned = (
-                        layer.redact_tree(rest, principal, direction) if layer.spans_only(rv) and not parts else None
-                    )
-                    if cleaned is None:
+                    fields = layer.redact_tree(rest, principal, direction) if layer.spans_only(rv) else None
+                    if fields is None or layer.redact_tree(parts, principal, direction) != parts:
                         return _refused(rv)
-                    m.update(cleaned)
-        tools = body.get("tools") or []
-        if not isinstance(tools, list):
-            raise BadRequest("tools must be a list")
-        for tool in tools:
-            tv = await layer.evaluate(
-                Context(
+                    messages[i] = {**{k: m[k] for k in ("role", "content") if k in m}, **fields}
+
+        for key in ("tools", "functions"):  # `functions` is the legacy spelling of `tools`
+            declared = body.get(key)
+            if declared is None:
+                continue
+            if not isinstance(declared, list):
+                raise BadRequest(f"{key} must be a list")
+            kept = []
+            for tool in declared:
+                tctx = Context(
                     principal, Direction.TOOL_DESCRIPTION, flatten(tool), model=model, channel="chat", metered=False
                 )
-            )
-            if tv.blocked:
-                return _policy_error(tv)
+                tv = await layer.evaluate(tctx)
+                if tv.blocked:
+                    return _policy_error(tv)
+                if tv.action is Action.REDACT:
+                    cleaned = (
+                        layer.redact_tree(tool, principal, Direction.TOOL_DESCRIPTION) if layer.spans_only(tv) else None
+                    )
+                    if cleaned is None:
+                        return _refused(tv)
+                    tool = cleaned
+                kept.append(tool)
+            body = {**body, key: kept}
         if metered_ctx is None:  # turn ends in a tool result, already inspected: gates and budgets still apply
             metered_ctx = Context(
                 principal, Direction.INPUT, _text(messages[-1].get("content")), model=model, channel="chat"
@@ -327,7 +346,8 @@ def create_app(
             request_id = ctx.request_id
         elif method not in ("initialize", "tools/list"):
             # resources/read, prompts/get, ...: their params reach the server too (and gates apply).
-            ctx = Context(principal, Direction.TOOL_CALL, flatten(params), channel="mcp")
+            # Not metered: pings, notifications and reads are protocol traffic, not tool spend.
+            ctx = Context(principal, Direction.TOOL_CALL, flatten(params), channel="mcp", metered=False)
             v = await layer.evaluate(ctx, {"server": server, "method": method})
             if v.blocked:
                 return blocked(v)
@@ -584,6 +604,10 @@ async def _json_object(request: Request) -> dict[str, Any]:
     if not isinstance(body, dict):
         raise BadRequest("body must be a JSON object")
     return body
+
+
+def _is_text_part(p: Any) -> bool:
+    return isinstance(p, dict) and p.get("type") == "text"
 
 
 def _text(content: Any) -> str:

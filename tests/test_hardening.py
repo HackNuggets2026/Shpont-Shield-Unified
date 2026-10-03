@@ -398,3 +398,64 @@ def test_feed_refresh_invalidates_cached_verdicts(client, policy_dir):
 
 def test_non_string_text_part_is_handled(client):
     assert post_chat(client, [{"role": "user", "content": [{"type": "text", "text": 5}]}]).status_code == 200
+
+
+# --- third review pass ----------------------------------------------------------------------
+
+
+def _recording_chat(policy_dir):
+    sent = []
+
+    def upstream(req):
+        sent.append(json.loads(req.content))
+        return httpx.Response(200, json={"choices": [{"message": {"content": "ok"}}], "usage": {}})
+
+    edit_policy(policy_dir, lambda p: p["upstream"].update(backend="ollama", url="http://llm.example"))
+    app = create_app(
+        policy_dir / "policy.yaml",
+        watch=False,
+        upstream_client=httpx.AsyncClient(transport=httpx.MockTransport(upstream)),
+    )
+    return TestClient(app), sent
+
+
+@pytest.mark.parametrize("key", ["password=hunter2secret", CARD])
+def test_redacted_message_key_replaces_original(policy_dir, key):
+    c, sent = _recording_chat(policy_dir)
+    r = post_chat(c, [{"role": "user", "content": "hi", key: 1}])
+    assert r.status_code == 200
+    forwarded = json.dumps(sent[0]["messages"])
+    assert "hunter2secret" not in forwarded and "4111" not in forwarded
+
+
+def test_declared_tool_redaction_is_applied(policy_dir):
+    c, sent = _recording_chat(policy_dir)
+    tools = [{"type": "function", "function": {"name": "t", "description": "use password=hunter2secret"}}]
+    assert post_chat(c, [{"role": "user", "content": "hi"}], tools=tools).status_code == 200
+    assert "hunter2secret" not in json.dumps(sent[0]["tools"])
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        {"messages": [{"role": "user", "content": [{"type": "text", "text": "hi", "note": f"key {AKIA}"}]}]},
+        {"messages": [{"role": "user", "content": "hi"}], "functions": [{"name": "f", "description": f"key {AKIA}"}]},
+    ],
+    ids=["text-part-extra-key", "legacy-functions"],
+)
+def test_remaining_chat_fields_are_inspected(client, extra):
+    r = client.post("/v1/chat/completions", headers=H, json={"model": "mock-model", **extra})
+    assert r.status_code == 403
+
+
+def test_mcp_keepalives_are_not_budget_blocked(client):
+    for _ in range(10):
+        assert "error" not in mcp(client, "ping")
+
+
+def test_multimodal_parts_survive_redaction(policy_dir):
+    c, sent = _recording_chat(policy_dir)
+    image = {"type": "image_url", "image_url": {"url": "https://acme.example/chart.png"}}
+    post_chat(c, [{"role": "user", "content": [{"type": "text", "text": f"card {CARD}"}, image]}])
+    content = sent[0]["messages"][0]["content"]
+    assert content == [{"type": "text", "text": "card [REDACTED:credit_card]"}, image]

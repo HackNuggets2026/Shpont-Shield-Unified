@@ -81,6 +81,8 @@ def handle(req: dict) -> dict:
             "serverInfo": {"name": "demo", "version": "0.1"},
             "capabilities": {"tools": {}},
         }
+    elif method == "ping":
+        result = {}
     elif method == "tools/list":
         result = {"tools": TOOLS}
     elif method == "tools/call":
