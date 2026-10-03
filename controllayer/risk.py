@@ -26,6 +26,11 @@ LEVELS = ("normal", "watch", "restricted")
 _IGNORED_CONTROLS = {"budget", "semantic_engine", "auth", "insider_risk"}
 
 
+def integration_of(source: str) -> str:
+    """The integration that wrote a signal source (`<integration>` or `<integration>/<source>`)."""
+    return source.split("/", 1)[0]
+
+
 class RiskEngine:
     def __init__(self, state: StateStore, base_dir: Path, http: httpx.AsyncClient | None = None):
         self.state = state
@@ -46,15 +51,29 @@ class RiskEngine:
         s, lv = self.score(policy, pid), policy.insider_risk.levels
         return "restricted" if s >= lv.restricted else "watch" if s >= lv.watch else "normal"
 
-    def signals(self, pid: str) -> dict[str, dict[str, Any]]:
-        """Unexpired external signals for a principal, by source."""
+    def stored(self, pid: str) -> dict[str, dict[str, Any]]:
+        """Unexpired stored signals for a principal, by source, as their integration wrote them."""
         now = time.time()
         return {src: sig for src, sig in self.state.signals.get(pid, {}).items() if sig["expires_at"] > now}
 
+    def signals(self, policy: Policy, pid: str) -> dict[str, dict[str, Any]]:
+        """The signals that count, by source: only those of integrations the policy still lists,
+        each capped to that integration's current `max_level` and `max_ttl_hours`."""
+        now = time.time()
+        out = {}
+        for src, sig in self.state.signals.get(pid, {}).items():
+            cfg = policy.identity.integrations.get(integration_of(src))
+            if cfg is None:
+                continue
+            expires = min(sig["expires_at"], sig["at"] + cfg.max_ttl_hours * 3600)
+            if expires > now:
+                out[src] = {**sig, "level": min(sig["level"], cfg.max_level, key=LEVELS.index), "expires_at": expires}
+        return out
+
     def put_signal(self, pid: str, source: str, signal: dict[str, Any] | None) -> bool:
         """Store a source's signal, replacing its previous one; None withdraws it. Expired ones are
-        dropped on the way. Returns whether the source had an active signal before."""
-        active = self.signals(pid)
+        dropped on the way. Returns whether the source had an unexpired signal before."""
+        active = self.stored(pid)
         had = active.pop(source, None) is not None
         if signal:
             active[source] = signal
@@ -70,7 +89,7 @@ class RiskEngine:
         the score-based level, raised to the strongest active external signal."""
         if manual and pid in self.state.watch:
             return self.state.watch[pid]["level"]
-        found = [self.computed_level(policy, pid), *(sig["level"] for sig in self.signals(pid).values())]
+        found = [self.computed_level(policy, pid), *(sig["level"] for sig in self.signals(policy, pid).values())]
         return max(found, key=LEVELS.index)
 
     def level(self, policy: Policy, principal: Principal, manual: bool = True) -> str:
@@ -209,7 +228,9 @@ class RiskEngine:
         task.add_done_callback(self._tasks.discard)
 
     def overview(self, policy: Policy) -> list[dict[str, Any]]:
-        pids = set(self._scores) | set(self.state.watch) | {pid for pid in self.state.signals if self.signals(pid)}
+        pids = (
+            set(self._scores) | set(self.state.watch) | {pid for pid in self.state.signals if self.signals(policy, pid)}
+        )
         rows = []
         for k in policy.identity.api_keys.values():
             if k.principal not in pids:
@@ -224,7 +245,9 @@ class RiskEngine:
                     "score": round(self.score(policy, k.principal), 2),
                     "computed": self.computed_level(policy, k.principal),
                     "manual": self.state.watch.get(k.principal),
-                    "signals": [{"source": src, **sig} for src, sig in sorted(self.signals(k.principal).items())],
+                    "signals": [
+                        {"source": src, **sig} for src, sig in sorted(self.signals(policy, k.principal).items())
+                    ],
                     "auto": self.level(policy, principal, manual=False),
                     "level": self.level(policy, principal),
                 }

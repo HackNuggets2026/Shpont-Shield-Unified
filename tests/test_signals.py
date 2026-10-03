@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 
 from controllayer.gateway.app import create_app
 
-from .conftest import ADMIN, guard
+from .conftest import ADMIN, edit_policy, guard
 from .test_export import SCHEMA, conforms
 
 WAZUH = {"Authorization": "Bearer wz-secret"}  # max_level watch (policy.yaml)
@@ -59,6 +59,7 @@ def test_signal_raises_the_auto_level_and_tightens_enforcement(c):
         "level": "watch",
         "expires_at": None,
         "withdrawn": False,
+        "evicted": None,
     }
     alice = row(c, "alice")
     assert (alice["computed"], alice["auto"], alice["level"]) == ("normal", "watch", "watch")
@@ -217,3 +218,66 @@ def test_signals_survive_a_restart(c, policy_dir):
     signal(c, level="watch")
     again = TestClient(create_app(policy_dir / "policy.yaml", watch=False), headers={"x-admin-token": ADMIN})
     assert level(again, "alice") == "watch"
+
+
+def reload_with(c, policy_dir, mutate):
+    edit_policy(policy_dir, mutate)
+    assert c.post("/admin/policy/reload").json()["ok"]
+
+
+def test_removing_an_integration_drops_its_stored_signals_at_once(c, policy_dir):
+    signal(c, who=EDR, level="restricted")
+    signal(c, level="watch", source="usb")
+    assert level(c, "alice") == "restricted"
+    reload_with(c, policy_dir, lambda p: p["identity"]["integrations"].pop("edr"))  # e.g. its token leaked
+    assert level(c, "alice") == "watch"
+    assert [s["source"] for s in row(c, "alice")["signals"]] == ["wazuh/usb"]
+    assert guard(c, CARD).json()["action"] == "block"  # watch_controls, not restricted
+    reload_with(c, policy_dir, lambda p: p["identity"].update(integrations={}))
+    assert level(c, "alice") == "normal"
+    assert guard(c, "hello").json()["action"] == "allow"
+
+
+def test_lowering_max_level_or_ttl_caps_stored_signals(c, policy_dir):
+    signal(c, who=EDR, level="restricted", ttl_seconds=48 * 3600)
+    assert level(c, "alice") == "restricted"
+    reload_with(c, policy_dir, lambda p: p["identity"]["integrations"]["edr"].update(max_level="watch"))
+    assert level(c, "alice") == "watch"
+    assert row(c, "alice")["signals"][0]["level"] == "watch"
+    stored = c.app.state.layer.state.signals["alice"]["edr"]
+    assert stored["level"] == "restricted"  # the record is untouched; only its effect is capped
+    reload_with(c, policy_dir, lambda p: p["identity"]["integrations"]["edr"].update(max_ttl_hours=1))
+    assert row(c, "alice")["signals"][0]["expires_at"] == pytest.approx(stored["at"] + 3600)
+    stored["at"] -= 3601  # sent more than the new max_ttl_hours ago
+    assert level(c, "alice") == "normal"
+
+
+def test_sources_per_integration_and_principal_are_capped(c, policy_dir):
+    reload_with(c, policy_dir, lambda p: p["identity"]["integrations"]["edr"].update(max_sources=3))
+    edr = lambda pid="alice", **kw: signal(c, pid, who=EDR, **kw)  # noqa: E731
+    assert edr(level="watch", source="a", ttl_seconds=900).json()["evicted"] is None
+    assert edr(level="restricted", source="b").status_code == 200
+    assert edr(level="watch", source="c", ttl_seconds=600).status_code == 200
+    assert edr(level="watch", source="a", reason="renewed", ttl_seconds=900).json()["evicted"] is None  # replacing
+    # Full: a new source displaces the weakest, soonest-expiring one, never a stronger one.
+    r = edr(level="watch", source="d")
+    assert (r.status_code, r.json()["evicted"]) == (200, "edr/c")
+    assert sorted(c.app.state.layer.state.signals["alice"]) == ["edr/a", "edr/b", "edr/d"]
+    assert c.app.state.layer.audit.notes[-1]["evicted"] == "edr/c"
+    assert edr(level="restricted", source="e").json()["evicted"] == "edr/d"
+    assert edr(level="restricted", source="f").json()["evicted"] == "edr/a"
+    r = edr(level="watch", source="g")  # every live source is stronger
+    assert r.status_code == 429 and "max_sources" in r.text
+    assert sorted(c.app.state.layer.state.signals["alice"]) == ["edr/b", "edr/e", "edr/f"]
+    assert level(c, "alice") == "restricted"
+    # Per integration and per principal; expired ones do not count.
+    assert signal(c, level="watch", source="x").json()["evicted"] is None
+    assert edr("bob", level="watch", source="g").json()["evicted"] is None
+    c.app.state.layer.state.signals["alice"]["edr/b"]["expires_at"] = time.time() - 1
+    assert edr(level="watch", source="g").json()["evicted"] is None
+
+
+@pytest.mark.parametrize("value, status", [(1, 200), (64, 200), (0, 422), (65, 422), ("many", 422)])
+def test_max_sources_is_validated(c, policy_dir, value, status):
+    edit_policy(policy_dir, lambda p: p["identity"]["integrations"]["wazuh"].update(max_sources=value))
+    assert c.post("/admin/policy/reload").status_code == status

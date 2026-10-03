@@ -44,6 +44,7 @@ class Integration(_Strict):
     token_env: str  # environment variable holding this integration's own bearer token
     max_level: Literal["watch", "restricted"] = "watch"  # stronger signals are capped to this
     max_ttl_hours: float = Field(168, gt=0)
+    max_sources: int = Field(8, ge=1, le=64)  # live signal sources per principal; bounds what one token can store
 
 
 class Identity(_Strict):

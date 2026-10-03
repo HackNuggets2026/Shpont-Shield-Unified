@@ -28,7 +28,7 @@ from ..controls.access import authenticate
 from ..controls.pii_model import PII_CONTROLS
 from ..decision import DecisionBackend
 from ..engine import ControlLayer, flatten
-from ..risk import LEVELS
+from ..risk import LEVELS, integration_of
 from ..types import Action, Context, Direction, Principal, Verdict
 from . import broker, mcp_demo
 from .upstream import UpstreamClient
@@ -970,6 +970,19 @@ def create_app(
         ):
             raise BadRequest(f"ttl_seconds must be a number in (0, {cfg.max_ttl_hours * 3600:g}]")
         reason = str(body.get("reason") or "")[:500]
+        evicted = None
+        own = {src: sig for src, sig in layer.risk.stored(pid).items() if integration_of(src) == name}
+        if applied != "normal" and key not in own and len(own) >= cfg.max_sources:
+            # Full: the new signal displaces the weakest, soonest-expiring one, never a stronger one.
+            def rank(src: str) -> int:
+                return LEVELS.index(min(own[src]["level"], cfg.max_level, key=LEVELS.index))
+
+            evicted = min(own, key=lambda src: (rank(src), own[src]["expires_at"]))
+            if rank(evicted) > LEVELS.index(applied):
+                return JSONResponse(
+                    {"error": f"{name} already holds {cfg.max_sources} stronger sources for {pid!r} (max_sources)"},
+                    status_code=429,
+                )
         before = layer.risk.level(policy, principal)
         auto_before = layer.risk.own_level(policy, pid, manual=False)
         now = time.time()
@@ -977,6 +990,8 @@ def create_app(
         if applied != "normal":
             signal = {"level": applied, "requested": level, "score": score, "reason": reason, "at": now}
             signal["expires_at"] = now + ttl
+        if evicted:
+            layer.risk.put_signal(pid, evicted, None)
         withdrawn = layer.risk.put_signal(pid, key, signal) and signal is None
         layer.audit.note(
             "risk_signal",
@@ -989,6 +1004,7 @@ def create_app(
             score=score,
             ttl_seconds=ttl if signal else None,
             reason=reason,
+            evicted=evicted,
         )
         after = layer.risk.level(policy, principal)
         reasons = [f"level {before} -> {after}"] if LEVELS.index(after) > LEVELS.index(before) else []
@@ -1003,6 +1019,7 @@ def create_app(
             "level": applied,
             "expires_at": signal and signal["expires_at"],
             "withdrawn": withdrawn,
+            "evicted": evicted,
         }
 
     @app.delete("/admin/risk/{pid}/signal/{source:path}")
