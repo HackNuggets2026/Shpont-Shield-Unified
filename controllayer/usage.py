@@ -499,19 +499,47 @@ class UsageStore:
         )
         return rid
 
-    def requests(self, principal: str | None = None, status: str | None = None) -> list[dict]:
-        where, args = [], []
-        if principal:
-            where.append("principal=?")
-            args.append(principal)
-        if status:
-            where.append("status=?")
-            args.append(status)
+    def requests(
+        self,
+        principal: str | None = None,
+        status: str | None = None,
+        kind: str | None = None,
+        principals: list[str] | None = None,
+        limit: int = 200,
+        offset: int = 0,
+    ) -> list[dict]:
+        """Newest first. `principals` narrows to a set of people (a department)."""
+        where, args = self._request_filter(principal, status, kind, principals)
         sql = "SELECT * FROM requests" + (" WHERE " + " AND ".join(where) if where else "")
-        rows = self._q(sql + " ORDER BY ts DESC LIMIT 200", tuple(args))
+        rows = self._q(sql + " ORDER BY ts DESC LIMIT ? OFFSET ?", (*args, limit, offset))
         for r in rows:
             r["detail"] = json.loads(r["detail"]) if r.get("detail") else None
         return rows
+
+    @staticmethod
+    def _request_filter(
+        principal: str | None, status: str | None, kind: str | None, principals: list[str] | None
+    ) -> tuple[list[str], list[Any]]:
+        where, args = [], []
+        for col, v in (("principal", principal), ("status", status), ("kind", kind)):
+            if v:
+                where.append(f"{col}=?")
+                args.append(v)
+        if principals is not None:
+            where.append(f"principal IN ({', '.join('?' * len(principals))})" if principals else "0")
+            args.extend(principals)
+        return where, args
+
+    def count_requests(
+        self, status: str | None = None, kind: str | None = None, principals: list[str] | None = None
+    ) -> int:
+        where, args = self._request_filter(None, status, kind, principals)
+        sql = "SELECT COUNT(*) n FROM requests" + (" WHERE " + " AND ".join(where) if where else "")
+        return int(self._q(sql, tuple(args))[0]["n"])
+
+    def in_department(self, department: str) -> list[str]:
+        """Everyone the directory places in a department."""
+        return [pid for pid in self.people if self.department_of(pid) == department]
 
     def decide_request(self, rid: str, status: str, actor: str, note: str, ts: float | None = None) -> dict | None:
         self._x(

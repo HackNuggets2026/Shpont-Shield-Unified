@@ -135,7 +135,7 @@ Small choices the contract left open, or where it could not be followed exactly.
   one row per person and working day, ~8% lower spend), so `usd_prev` and `growth` have something to compare.
 - **`headcount`** counts people in the directory; **`active`** counts anyone with metered usage in the window
   (a principal outside the directory, e.g. `unattributed`, can be active without adding to headcount).
-- **`people_at_risk`** is people with an open incident, or a risk score at or above `detections.response.alert`.
+- **`people_at_risk`** is people with an open or acknowledged incident, or a risk score at or above `detections.response.alert`.
   The score alone halves every 2 h, so it would empty out during a demo.
 - **`interventions`** are checks that ended in warn, redact or block; adherence is `1 - interventions/checks`.
 - **Team rows** carry `owner` (the team's manager in the directory, else the department owner) and `teams: 1`.
@@ -146,3 +146,15 @@ Small choices the contract left open, or where it could not be followed exactly.
   previous window below $5 per 30 days.
 - **Seeded `interns` team** holds only carol and ivan: its tiny budget is part of the live demo.
 - **Cache.** The TTL is `ACL_ADMIN_CACHE_SECONDS` (default 15; 0 disables it, which the tests do).
+- **Grants envelope.** `GET /admin/grants?envelope=1` returns `{total, grants, summary}`; `live=1` still
+  filters. Grant rows (both shapes) gain `department`, `team` and `name`.
+- **Leases.** `summary` covers every open lease, whatever the filters; `open` is newest first. Open and recent
+  rows gain `department`, `team` and `name`.
+- **Activity.** Grants now appear in the feed as `kind: "grant"` events (`source: "admin"`, severity low),
+  written when an admin grants access or approves a grant request. `department=` and `team=` filter the feed.
+- **Cache.** Whole response bodies of the aggregate GETs (`org`, `org/teams`, `org/unit`, `people`,
+  `outliers`, `incidents/summary`, `timeseries`, `adherence`, `usage`, `value`, `overview`, `catalog`, `menu`,
+  `principals`) are cached per query string, with an `x-cache: hit|miss` header. Besides admin POSTs, a policy
+  reload (an automatic tighten or quarantine) and a newly opened incident also clear it. The activity feed,
+  incident list and leases are never cached.
+- **`/admin/principals`** keeps its array shape, capped at 200. `demo/live.py` now reads `/admin/people?q=`.

@@ -29,6 +29,7 @@ from ..controls.budget import Usage
 from ..detections import LEVELS
 from ..engine import ControlLayer
 from ..types import Context, Direction, Principal
+from . import catalog as catalog_api
 from . import org as org_api
 
 ME_PAGE = Path(__file__).resolve().parent.parent / "dashboard" / "me.html"
@@ -89,6 +90,14 @@ def register(
 ) -> None:
     usage = layer.usage
     cache: org_api.AdminCache = app.state.admin_cache
+    view = org_api.OrgView(store, layer)
+
+    def who_fields(pid: str) -> dict[str, Any]:
+        """Directory fields the console shows next to a person: department, team and name."""
+        person = usage.person(pid) or {}
+        ident = store.policy.identity_of(pid)
+        team = person.get("team") or (ident.team if ident else None)
+        return {"department": usage.department_of(pid, team), "team": team, "name": person.get("name") or pid}
 
     def actor(request: Request) -> str:
         return (request.headers.get("x-admin-user") or "admin")[:80]
@@ -208,8 +217,11 @@ def register(
             "leases_running_usd": round(sum(x["running_usd"] for x in leases), 4),
             "zombies": sum(1 for x in leases if x["flags"]),
             "incidents_open": sum(1 for i in layer.risk.incidents if i["status"] == "open"),
-            "requests_pending": len(usage.requests(status="pending")),
+            "requests_pending": usage.count_requests(status="pending"),
             "at_risk": sum(1 for s in layer.risk.scores(p).values() if s >= p.detections.response.alert),
+            "org_name": p.org.name or p.name,
+            "headcount": len(usage.people),
+            "active": sum(1 for m in view.cached_snapshot(cache, 30)["people"] if m["usd"] > 0 or m["tokens"] > 0),
         }
 
     @app.get("/admin/usage")
@@ -252,12 +264,18 @@ def register(
 
     @app.get("/admin/principals")
     async def admin_principals():
+        """At most 200 people: everyone restricted or at risk first (riskiest first), then the highest spend.
+        Search the whole directory with /admin/people."""
         p = store.policy
-        known = principals_known(p)
-        for row in usage.breakdown(["principal", "team"], time.time() - 30 * DAY):
-            known.setdefault(row["principal"], Principal(row["principal"], row["team"], "?"))
-        rows = [principal_row(p, x) for x in known.values()]
-        return sorted(rows, key=lambda r: (-r["risk"], r["principal"]))
+        people = view.cached_snapshot(cache, 30)["people"]
+
+        def flagged(m: dict) -> bool:
+            pp = p.principal(m["principal"])
+            return m["at_risk"] or pp.status != "active" or p.budget_scale(m["principal"]) < 1
+
+        first = sorted((m for m in people if flagged(m)), key=lambda m: (-m["risk"], m["principal"]))
+        rest = sorted((m for m in people if not flagged(m)), key=lambda m: (-m["usd"], m["principal"]))
+        return [row_of(p, m["principal"], m["team"], m["role"]) for m in [*first, *rest][:200]]
 
     @app.post("/admin/principals/{pid}")
     async def admin_principal_edit(pid: str, request: Request):
@@ -307,10 +325,31 @@ def register(
     # ---- admin: leases ---------------------------------------------------------------
 
     @app.get("/admin/leases")
-    async def admin_leases():
+    async def admin_leases(limit: int = 100, department: str | None = None, resource: str | None = None):
+        """Open leases (filtered, newest `limit`), the 50 latest closed ones, and a summary of everything open
+        by resource and department."""
         p = store.policy
-        closed = [x for x in usage.leases(limit=50) if x["ended"]]
-        return {"open": layer.leases.snapshot(p), "recent": closed}
+        closed = [{**x, **who_fields(x["principal"])} for x in usage.leases(limit=50) if x["ended"]]
+        leases = [{**x, **who_fields(x["principal"])} for x in layer.leases.snapshot(p)]
+
+        def summary(key: str) -> list[dict[str, Any]]:
+            out: dict[str, dict[str, Any]] = {}
+            for x in leases:
+                o = out.setdefault(x[key], {key: x[key], "open": 0, "zombies": 0, "running_usd": 0.0})
+                o["open"] += 1
+                o["zombies"] += 1 if x["flags"] else 0
+                o["running_usd"] = round(o["running_usd"] + x["running_usd"], 4)
+            return sorted(out.values(), key=lambda o: (-o["open"], o[key]))
+
+        shown = [x for x in leases if (not department or x["department"] == department)
+                 and (not resource or x["resource"] == resource)]  # fmt: skip
+        shown.sort(key=lambda x: -x["started"])
+        return {
+            "open": shown[: max(1, min(limit, 1000))],
+            "open_total": len(shown),
+            "recent": closed,
+            "summary": {"by_resource": summary("resource"), "by_department": summary("department")},
+        }
 
     @app.post("/admin/leases/{lease_id}/release")
     async def admin_release(lease_id: str, request: Request):
@@ -328,24 +367,90 @@ def register(
 
     # ---- admin: incidents and approvals ---------------------------------------------
 
+    def all_incidents(since: float = 0.0) -> list[dict[str, Any]]:
+        """Newest first, the in-memory copy where there is one (it carries the same status, kept in step by
+        set_status), with the person's department, team and name."""
+        live = {i["id"]: i for i in layer.risk.incidents}
+        rows = []
+        for i in usage.incidents(since=since, limit=1_000_000):
+            i = live.get(i["id"], i)
+            rows.append({**i, "scored": i["id"] in live, **who_fields(i["principal"])})
+        return rows
+
     @app.get("/admin/incidents")
     async def admin_incidents(
-        status: str | None = None, limit: int = 200, days: float | None = None, since: float | None = None
+        status: str | None = None,
+        limit: int = 200,
+        offset: int = 0,
+        days: float | None = None,
+        since: float | None = None,
+        department: str | None = None,
+        rule: str | None = None,
+        principal: str | None = None,
     ):
         """Newest first, from the store: older incidents than the risk engine's 7-day window come back with
         `scored: false` (they no longer count toward a risk score)."""
         p = store.policy
         start = since if since is not None else (time.time() - days * DAY if days else 0.0)
-        live = {i["id"]: i for i in layer.risk.incidents}
-        limit = max(1, min(limit, 5000))
-        rows = []
-        for i in usage.incidents(since=start, limit=limit if not status else 5000):
-            i = live.get(i["id"], i)  # the in-memory copy carries the same status, kept in step by set_status
-            if status and i["status"] != status:
-                continue
-            rows.append({**i, "scored": i["id"] in live})
-        rows = rows[:limit]
-        return {"incidents": rows, "scores": layer.risk.scores(p), "levels": LEVELS}
+        rows = [
+            i
+            for i in all_incidents(start)
+            if (not status or i["status"] == status)
+            and (not department or i["department"] == department)
+            and (not rule or i["rule"] == rule)
+            and (not principal or i["principal"] == principal)
+        ]
+        limit, offset = max(1, min(limit, 5000)), max(0, offset)
+        return {"incidents": rows[offset : offset + limit], "total": len(rows), "scores": layer.risk.scores(p),
+                "levels": LEVELS}  # fmt: skip
+
+    @app.get("/admin/incidents/summary")
+    async def admin_incidents_summary(days: int = 30):
+        """Incidents per rule and department, opened and closed per day, and automatic responses in 24 h."""
+        p, now = store.policy, time.time()
+        days = max(1, min(days, 120))
+        start = _day_start(now) - (days - 1) * DAY
+        rows = all_incidents(0.0)
+        recent = [i for i in rows if i["ts"] >= start]
+        states = ("open", "acknowledged", "resolved", "dismissed")
+        by_rule: dict[str, dict[str, Any]] = {}
+        for i in recent:
+            o = by_rule.setdefault(i["rule"], {"rule": i["rule"], **dict.fromkeys(states, 0), "total": 0})
+            o[i["status"]] = o.get(i["status"], 0) + 1
+            o["total"] += 1
+        _, _, at_risk = view.risk(p)
+        by_dept: dict[str, dict[str, Any]] = {}
+        for d in p.org.departments:
+            by_dept[d] = {"department": d, "open": 0, "total": 0, "people_at_risk": 0}
+        for i in rows:
+            o = by_dept.setdefault(i["department"], {"department": i["department"], "open": 0, "total": 0,
+                                                     "people_at_risk": 0})  # fmt: skip
+            o["open"] += 1 if i["status"] == "open" else 0
+            o["total"] += 1 if i["ts"] >= start else 0
+        for pid in at_risk:
+            d = usage.department_of(pid)
+            by_dept.setdefault(d, {"department": d, "open": 0, "total": 0, "people_at_risk": 0})
+            by_dept[d]["people_at_risk"] += 1
+        labels = [time.strftime("%Y-%m-%d", time.gmtime(start + k * DAY)) for k in range(days)]
+        idx = {d: k for k, d in enumerate(labels)}
+        opened, closed = [0] * days, [0] * days
+        for i in rows:
+            k = idx.get(time.strftime("%Y-%m-%d", time.gmtime(i["ts"])))
+            if k is not None:
+                opened[k] += 1
+            if i["status"] in ("resolved", "dismissed") and i.get("updated"):
+                k = idx.get(time.strftime("%Y-%m-%d", time.gmtime(i["updated"])))
+                if k is not None:
+                    closed[k] += 1
+        auto = usage._q("SELECT COUNT(*) n FROM admin_actions WHERE actor='auto:detections' AND ts>=?", (now - DAY,))[
+            0
+        ]["n"]
+        return {
+            "by_rule": sorted(by_rule.values(), key=lambda o: (-o["total"], o["rule"])),
+            "by_department": sorted(by_dept.values(), key=lambda o: (-o["open"], -o["total"], o["department"])),
+            "trend": {"days": labels, "opened": opened, "closed": closed},
+            "auto_actions_24h": auto,
+        }
 
     @app.post("/admin/incidents/{iid}")
     async def admin_incident_edit(iid: str, request: Request):
@@ -380,8 +485,22 @@ def register(
         }
 
     @app.get("/admin/requests")
-    async def admin_requests(status: str | None = None):
-        return usage.requests(status=status)
+    async def admin_requests(
+        status: str | None = None,
+        department: str | None = None,
+        kind: str | None = None,
+        limit: int = 200,
+        offset: int = 0,
+    ):
+        """Newest first; each row with the person's department, team and name."""
+        rows = usage.requests(
+            status=status or None,
+            kind=kind or None,
+            principals=usage.in_department(department) if department else None,
+            limit=max(1, min(limit, 1000)),
+            offset=max(0, offset),
+        )
+        return [{**r, **who_fields(r["principal"])} for r in rows]
 
     @app.post("/admin/requests/{rid}")
     async def admin_request_decide(rid: str, request: Request):
@@ -389,7 +508,7 @@ def register(
         decision = body.get("decision")
         if decision not in ("approve", "deny"):
             return err("decision must be approve or deny")
-        pending = [r for r in usage.requests(status="pending") if r["id"] == rid]
+        pending = [r for r in usage.requests(status="pending", limit=1_000_000) if r["id"] == rid]
         if not pending:
             return err("no such pending request", 404)
         req, note = pending[0], str(body.get("note", ""))
@@ -418,6 +537,8 @@ def register(
             resp = _write(request, {"principals": {req["principal"]: patch}}, "approve_request", req["principal"], note)
             if resp.status_code != 200:
                 return resp
+            if req["kind"] == "grant":
+                catalog_api.grant_event(usage, req["principal"], patch["grants"][-1], actor(request))
         else:
             usage.log_admin(
                 actor(request), "deny_request", req["principal"], note, {"request": rid, "kind": req["kind"]}
@@ -598,10 +719,16 @@ def register(
         principal: str | None = None,
         severity: str | None = None,
         decision: str | None = None,
+        department: str | None = None,
+        team: str | None = None,
+        interesting: bool = False,
     ):
-        """The live feed: newest events first (no content; masked text stays in the audit log)."""
+        """The live feed: newest events first (no content; masked text stays in the audit log). `interesting`
+        hides allowed checks and info-level events: blocks, redactions, incidents, grants, zombie flags and
+        Claude Code rejections stay."""
         return usage.events(limit=max(1, min(limit, 500)), before=before, source=source, kind=kind,
-                            principal=principal, severity=severity, decision=decision)  # fmt: skip
+                            principal=principal, severity=severity, decision=decision, department=department,
+                            team=team, interesting=interesting)  # fmt: skip
 
     def row_of(policy: Policy, pid: str, team: str | None = None, role: str | None = None) -> dict[str, Any]:
         ident = policy.identity_of(pid)
@@ -610,7 +737,7 @@ def register(
         role = ident.role if ident else role or person.get("role") or "?"
         return principal_row(policy, Principal(pid, team, role))
 
-    org_api.register(app, store, layer, cache, row_of)
+    org_api.register(app, store, layer, cache, row_of, view)
 
     # ---- employees ---------------------------------------------------------------------
 

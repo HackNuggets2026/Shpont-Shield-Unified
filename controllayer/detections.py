@@ -54,6 +54,7 @@ class RiskEngine:
         self._tools: dict[str, set[str]] = defaultdict(set)
         self._events: dict[str, int] = defaultdict(int)
         self._tool_calls: dict[str, int] = defaultdict(int)
+        self.listeners: list[Any] = []  # callables(incident), e.g. to drop cached admin aggregates
 
     # ---- scoring -----------------------------------------------------------------
 
@@ -248,6 +249,8 @@ class RiskEngine:
         }
         self.store.add_incident(inc)
         self.incidents.append(inc)
+        for fn in self.listeners:
+            fn(inc)
         self.store.add_event(
             {
                 "ts": now,
