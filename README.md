@@ -90,6 +90,7 @@ Both are audited, and neither can lift a `block`. The default `stub` backend is 
 | Agent → MCP tools | Point the MCP client at `http://gateway:8787/mcp/<server>` (servers are configured in `upstream.mcp_servers`) |
 | Agent → company resources | Point the agent's MCP client at `http://gateway:8787/mcp/company` with the agent's own key |
 | Anything else | `controllayer.sdk.Guard`: `guard.enforce(text, direction)` or the `@guard.tool` decorator |
+| Wazuh | [`integrations/wazuh`](integrations/wazuh): rules for the alert file sink, and an active response that posts risk signals back |
 
 ## Policy
 
