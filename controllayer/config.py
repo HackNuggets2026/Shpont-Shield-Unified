@@ -52,9 +52,21 @@ class Identity(_Strict):
     api_keys: dict[str, ApiKey] = Field(default_factory=dict)
     # Guards /admin/* and /metrics (header x-admin-token or ?token=). Unset = open, for local demos only.
     admin_token: str | None = None
-    # Demo only: the employee panel picks whom to show (x-acl-as) instead of asking for a key.
-    panel_demo: bool = False
+    # Never in production: no credential is required anywhere. Admin pages skip admin_token, callers without
+    # a known API key act as demo_principal, the employee panel shows anyone (x-acl-as), and risk signals
+    # name their integration in the body instead of bearing its token.
+    demo_mode: bool = False
+    demo_principal: str | None = None  # a human principal from api_keys
     integrations: dict[Annotated[str, Field(pattern=r"^[A-Za-z0-9_.-]+$")], Integration] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def _demo(self) -> Identity:
+        if self.demo_mode and self.demo_principal is None:
+            raise ValueError("identity.demo_mode needs identity.demo_principal")
+        humans = {k.principal for k in self.api_keys.values() if k.kind == "human"}
+        if self.demo_principal is not None and self.demo_principal not in humans:
+            raise ValueError(f"identity.demo_principal {self.demo_principal!r} is not a human principal in api_keys")
+        return self
 
 
 class ControlBase(_Strict):
@@ -436,6 +448,14 @@ def parse_policy(text: str) -> Policy:
     return policy
 
 
+def _warn_demo(policy: Policy) -> None:
+    if policy.identity.demo_mode:
+        log.warning(
+            "DEMO MODE: no authentication anywhere; keyless callers act as %r. Never run this in production.",
+            policy.identity.demo_principal,
+        )
+
+
 class PolicyStore:
     """Holds the live policy; `poll()` swaps it when the file changes.
 
@@ -446,6 +466,7 @@ class PolicyStore:
     def __init__(self, path: str | Path):
         self.path = Path(path)
         self.policy = parse_policy(self.path.read_text())
+        _warn_demo(self.policy)
         self.base_dir = self.path.parent
         self.last_error: str | None = None
         self.reloads = 0
@@ -466,6 +487,7 @@ class PolicyStore:
             self.policy = new
             self.reloads += 1
             log.info("policy reloaded %s -> %s", old, new.version)
+            _warn_demo(new)
             for cb in self.listeners:
                 try:
                     cb(old, new)

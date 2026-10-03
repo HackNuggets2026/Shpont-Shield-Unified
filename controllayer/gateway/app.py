@@ -24,13 +24,13 @@ from fastapi.staticfiles import StaticFiles
 
 from .. import audit, export, resources
 from ..config import PolicyStore
-from ..controls.access import authenticate
+from ..controls.access import authenticate, by_principal, identify
 from ..controls.patterns import remask, unmask
 from ..controls.pii_model import PII_CONTROLS
 from ..decision import DecisionBackend
 from ..engine import ControlLayer, flatten
 from ..risk import LEVELS, integration_of
-from ..types import Action, Context, Direction, Principal, Verdict
+from ..types import Action, Context, Direction, Verdict
 from . import anthropic, broker, mcp_demo
 from .upstream import UpstreamClient
 
@@ -39,11 +39,6 @@ PANEL = PANELS / "panel.html"
 # Integrations post risk signals with their own token, not the admin token.
 SIGNAL_PATH = re.compile(r"/admin/risk/[^/]+/signal")
 SOURCE = re.compile(r"[A-Za-z0-9_.:-]{1,64}")
-
-
-def authenticate_principal(policy: Any, pid: str) -> Principal:
-    key = next((k for k, v in policy.identity.api_keys.items() if v.principal == pid), None)
-    return authenticate(policy, key)
 
 
 def _api_key(request: Request) -> str | None:
@@ -144,7 +139,8 @@ def create_app(
     @app.middleware("http")
     async def admin_guard(request: Request, call_next):
         audit.client_ip.set(request.client.host if request.client else None)
-        token = store.policy.identity.admin_token
+        identity = store.policy.identity
+        token = None if identity.demo_mode else identity.admin_token
         path = request.url.path
         signal = request.method == "POST" and SIGNAL_PATH.fullmatch(path)
         if token and not signal and (path.startswith("/admin") or path == "/metrics"):
@@ -161,7 +157,7 @@ def create_app(
     @app.post("/v1/chat/completions")
     async def chat(request: Request):
         body = await _json_object(request)
-        principal = authenticate(store.policy, _api_key(request))
+        principal = identify(store.policy, _api_key(request))
         model = body.get("model")
         messages = body.get("messages")
         if not isinstance(messages, list) or not messages or not all(isinstance(m, dict) for m in messages):
@@ -426,7 +422,7 @@ def create_app(
         params = {} if params is None else params
         if not isinstance(method, str) or not isinstance(params, dict):
             return rpc(rid, -32600, "invalid request")
-        principal = authenticate(store.policy, _api_key(request))
+        principal = identify(store.policy, _api_key(request))
         target = store.policy.upstream.mcp_servers.get(server)
         if target is None:
             return rpc(rid, -32004, f"unknown MCP server {server!r}")
@@ -574,7 +570,7 @@ def create_app(
     @app.post("/v1/guard")
     async def guard(request: Request):
         body = await _json_object(request)
-        principal = authenticate(store.policy, _api_key(request))
+        principal = identify(store.policy, _api_key(request))
         try:
             direction = Direction(body.get("direction", "input"))
         except ValueError:
@@ -594,10 +590,13 @@ def create_app(
     # ---- employee panel -------------------------------------------------------
 
     def employee(request: Request):
-        p = authenticate(store.policy, _api_key(request))
+        policy = store.policy
+        p = authenticate(policy, _api_key(request))
         as_who = request.headers.get("x-acl-as")
-        if not p.authenticated and as_who and store.policy.identity.panel_demo:
-            p = authenticate_principal(store.policy, as_who)
+        if not p.authenticated and policy.identity.demo_mode:
+            p = by_principal(policy, as_who or policy.identity.demo_principal)
+            if not p.authenticated:
+                raise HTTPException(404, f"unknown person {as_who!r}")
         if not p.authenticated:
             raise HTTPException(401, "sign in with your personal API key")
         if p.kind != "human":
@@ -645,7 +644,7 @@ def create_app(
             view = resource_view(rid, r) | {"scopes": allowed[rid]}
             view["grants"] = {
                 a: layer.state.grants.get(a, {}).get(rid)
-                | {"active": bool(resources.active_grant(policy, layer.state, authenticate_principal(policy, a), rid))}
+                | {"active": bool(resources.active_grant(policy, layer.state, by_principal(policy, a), rid))}
                 for a in agents
                 if rid in layer.state.grants.get(a, {})
             }
@@ -723,7 +722,7 @@ def create_app(
             for k in store.policy.identity.api_keys.values()
             if k.kind == "human"
         ]
-        if store.policy.identity.panel_demo:
+        if store.policy.identity.demo_mode:
             return {"people": humans}
         p = employee(request)
         return {"people": [h for h in humans if h["principal"] == p.id]}
@@ -766,6 +765,7 @@ def create_app(
         ]
         return {
             "policy": {"name": p.name, "version": p.version, "reloads": store.reloads, "last_error": store.last_error},
+            "demo_mode": p.identity.demo_mode,
             "feed": {
                 "version": layer.feed.feed_version,
                 "signatures": len(layer.feed.signatures),
@@ -943,13 +943,19 @@ def create_app(
     async def risk_signal(pid: str, request: Request):
         """An external tool raises a principal's level until the signal expires. It never lowers the
         level and never overrides security's manual choice; `normal` withdraws the source's signal."""
+        identity = store.policy.identity
         found = integration(request)
-        if not found:
+        if not found and not identity.demo_mode:
             return JSONResponse({"error": "integration token required"}, status_code=401)
-        name, cfg = found
         body = await _json_object(request)
+        if not found:  # demo mode: the body names the integration, whose caps still apply
+            named = body.get("integration")
+            if not isinstance(named, str) or named not in identity.integrations:
+                raise BadRequest(f"integration must be one of {sorted(identity.integrations)}")
+            found = named, identity.integrations[named]
+        name, cfg = found
         policy = store.policy
-        principal = authenticate_principal(policy, pid)
+        principal = by_principal(policy, pid)
         if not principal.authenticated:
             return JSONResponse({"error": f"unknown principal {pid!r}"}, status_code=404)
         source = body.get("source") or name
@@ -1053,7 +1059,7 @@ def create_app(
         policy = store.policy
         rows = []
         for agent, gs in layer.state.grants.items():
-            ap = authenticate_principal(policy, agent)
+            ap = by_principal(policy, agent)
             for rid, g in gs.items():
                 rows.append(
                     {

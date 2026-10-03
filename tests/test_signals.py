@@ -133,7 +133,9 @@ def test_each_source_replaces_only_its_own_signal(c):
 )
 def test_signal_needs_an_integration_token(c, headers):
     r = c.post(
-        "/admin/risk/alice/signal", json={"level": "watch", "ttl_seconds": 60}, headers={"x-admin-token": "", **headers}
+        "/admin/risk/alice/signal",
+        json={"level": "watch", "ttl_seconds": 60, "integration": "wazuh"},  # naming it counts only in demo mode
+        headers={"x-admin-token": "", **headers},
     )
     assert r.status_code == 401
     assert level(c, "alice") == "normal"

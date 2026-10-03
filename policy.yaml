@@ -12,8 +12,12 @@ name: acme-corp-default
 
 identity:
   require_auth: true
-  panel_demo: true          # /me shows a "viewing as" switch instead of a sign-in; turn off for real use
-  admin_token: ${ACL_ADMIN_TOKEN:-demo-admin-token}   # dashboard: http://127.0.0.1:8787/?token=demo-admin-token
+  # DEMO ONLY - must be false in production. No credential anywhere: the console and /admin skip admin_token,
+  # callers without a known API key act as demo_principal (a key still names its owner), /me shows a
+  # "viewing as" switch, and risk signals name their integration in the body instead of bearing its token.
+  demo_mode: ${ACL_DEMO_MODE:-true}
+  demo_principal: alice
+  admin_token: ${ACL_ADMIN_TOKEN:-demo-admin-token}   # with demo_mode off: http://127.0.0.1:8787/?token=...
   api_keys:
     dev-alice-key: { principal: alice, team: engineering, role: developer }
     fin-bob-key: { principal: bob, team: finance, role: analyst }

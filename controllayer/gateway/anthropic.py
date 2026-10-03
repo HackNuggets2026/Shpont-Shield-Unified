@@ -22,7 +22,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 from ..config import PolicyStore
-from ..controls.access import authenticate
+from ..controls.access import identify
 from ..controls.patterns import remask, unmask
 from ..controls.pii_model import PII_CONTROLS
 from ..engine import ControlLayer, flatten
@@ -282,14 +282,15 @@ def mount(app: FastAPI, layer: ControlLayer, store: PolicyStore, http: httpx.Asy
 
         With `x-acl-key`, that gateway key names the caller and its Authorization / x-api-key are its
         own login (a claude.ai seat), forwarded when the policy allows and never stored or logged.
-        Without it, Authorization or x-api-key must be a gateway key."""
+        Without it, Authorization or x-api-key carries a gateway key; in demo mode any other caller is the
+        demo principal."""
         policy = store.policy
         auth = request.headers.get("authorization", "")
         bearer = auth[7:].strip() if auth.lower().startswith("bearer ") else None
         api_key = request.headers.get("x-api-key")
         named = request.headers.get(IDENTITY_HEADER)
         if named is None:
-            return authenticate(policy, bearer or api_key), {}
+            return identify(policy, bearer or api_key), {}
         own: dict[str, str] = {}
         if policy.upstream.anthropic.passthrough_auth:
             ours = policy.identity.api_keys
@@ -297,7 +298,7 @@ def mount(app: FastAPI, layer: ControlLayer, store: PolicyStore, http: httpx.Asy
                 own["authorization"] = auth
             if api_key and api_key not in ours:
                 own["x-api-key"] = api_key
-        return authenticate(policy, named), own
+        return identify(policy, named), own
 
     async def inspect(
         principal: Principal, body: dict[str, Any], override: str | None, counting: bool

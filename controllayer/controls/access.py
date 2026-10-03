@@ -22,6 +22,19 @@ def authenticate(policy: Policy, api_key: str | None) -> Principal:
     return Principal(id=entry.principal, team=entry.team, role=entry.role, kind=entry.kind, owner=entry.owner)
 
 
+def by_principal(policy: Policy, pid: str | None) -> Principal:
+    key = next((k for k, v in policy.identity.api_keys.items() if v.principal == pid), None)
+    return authenticate(policy, key)
+
+
+def identify(policy: Policy, api_key: str | None) -> Principal:
+    """A gateway caller: its API key's principal, else (demo mode only) the demo principal."""
+    p = authenticate(policy, api_key)
+    if not p.authenticated and policy.identity.demo_mode:
+        return by_principal(policy, policy.identity.demo_principal)
+    return p
+
+
 def check_auth(ctx: Context, policy: Policy) -> list[Finding]:
     if policy.identity.require_auth and not ctx.principal.authenticated:
         return [_hard("auth", "unauthenticated", "missing or unknown API key")]
