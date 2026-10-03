@@ -55,7 +55,7 @@ Layout: `<div class="acl-cols">` with children `acl-c3`..`acl-c12` (12-column gr
 
 ### Logos
 
-`ACL.logo(key, size = 14)`: the brand logo (Simple Icons 16.33.0 from jsDelivr, masked in the brand colour; a neutral lettered badge where Simple Icons has none: Heroku, Slack, SendGrid, Salesforce, AWS S3, OpenAI). `key` is an item key (`service:stripe`, `model:claude-sonnet-5`), a service key, a resource id (`github-acme`), a model name (matched by prefix: claude, gpt/o1, llama, qwen, mistral, gemini, deepseek) or a tool name (`snowflake_query`). Returns one inline element with the brand name as its title, safe to concatenate.
+`ACL.logo(key, size = 14)`: the brand logo from pinned icon sets on jsDelivr: Simple Icons 16.33.0 (CC0; SendGrid from 13.21.0) masked in the brand colour, devicon 2.17.0 (MIT) for Heroku, Slack, Salesforce and AWS S3, LobeHub icons 1.95.1 (MIT) for model providers. An unknown key gets a neutral lettered badge. `key` is an item key (`service:stripe`, `model:claude-sonnet-5`), a service key, a resource id (`github-acme`), a model name (matched by prefix: claude, gpt/o1, llama, qwen, mistral, gemini, deepseek) or a tool name (`snowflake_query`). Returns one inline element with the brand name as its title, safe to concatenate.
 
 ### Page height
 

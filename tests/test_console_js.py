@@ -130,15 +130,14 @@ def test_logos_cover_every_service_and_model_family(big_org):
 
     for key in SERVICES:
         html = logo("service:" + key)
-        assert 'role="img"' in html and 'aria-label="?"' not in html, key
+        assert "acl-logo-text" not in html and "cdn.jsdelivr.net/npm/" in html, key  # a real logo, no letter
     assert "simple-icons@16.33.0/icons/stripe.svg" in logo("stripe")
     assert "postgresql.svg" in logo("postgres-prod") and "snowflake.svg" in logo("snowflake_query")
-    assert 'aria-label="Salesforce"' in logo("salesforce-crm") and "acl-logo-text" in logo("salesforce-crm")
-    assert "claude.svg" in logo("model:claude-sonnet-5") and 'aria-label="OpenAI"' in logo("gpt-4o-mini")
-    assert (
-        "meta.svg" in logo("llama3.2:3b")
-        and "qwen.svg" in logo("qwen3:8b")
-        and "mistralai.svg" in logo("mistral-large")
-    )
+    assert "devicon@2.17.0/icons/salesforce/" in logo("salesforce-crm") and 'alt="Salesforce"' in logo("salesforce-crm")
+    assert "devicon@2.17.0/icons/heroku/" in logo("heroku_get_logs")
+    lobe = "icons-static-svg@1.95.1/icons/"
+    assert lobe + "claude-color.svg" in logo("model:claude-sonnet-5") and lobe + "openai.svg" in logo("gpt-4o-mini")
+    assert lobe + "meta-color.svg" in logo("llama3.2:3b") and lobe + "qwen-color.svg" in logo("qwen3:8b")
+    assert lobe + "mistral-color.svg" in logo("mistral-large")
     assert 'aria-label="mock-model"' in logo("model:mock-model")  # unknown: a lettered badge with its own name
     assert "&lt;x&gt;" in logo("<x>")

@@ -129,23 +129,28 @@
   };
 
   // ---- brand logos ----------------------------------------------------------------------
-  // Simple Icons (CC0), pinned; drawn as a mask in the brand colour. Brands Simple Icons does not carry
-  // (Heroku, Slack, SendGrid, Salesforce, AWS, OpenAI) get a neutral lettered badge.
+  // Pinned, permissively licensed icon sets on jsDelivr: Simple Icons (CC0, one-colour, drawn as a mask in
+  // the brand colour), devicon (MIT, full colour) where Simple Icons dropped the brand, and LobeHub icons
+  // (MIT) for every model provider.
 
-  const ICONS = "https://cdn.jsdelivr.net/npm/simple-icons@16.33.0/icons/";
+  const SI = (slug, hex, v = "16.33.0") => ({ mask: `https://cdn.jsdelivr.net/npm/simple-icons@${v}/icons/${slug}.svg`, hex });
+  const DEV = (path) => ({ img: `https://cdn.jsdelivr.net/npm/devicon@2.17.0/icons/${path}.svg` });
+  const LOBE = (name) => ({ img: `https://cdn.jsdelivr.net/npm/@lobehub/icons-static-svg@1.95.1/icons/${name}.svg` });
   const BRANDS = {
-    vercel: ["Vercel", "vercel", "000000"], heroku: ["Heroku", null, "H"], stripe: ["Stripe", "stripe", "635BFF"],
-    postgres: ["PostgreSQL", "postgresql", "4169E1"], supabase: ["Supabase", "supabase", "3FCF8E"],
-    snowflake: ["Snowflake", "snowflake", "29B5E8"], slack: ["Slack", null, "S"], github: ["GitHub", "github", "181717"],
-    linear: ["Linear", "linear", "5E6AD2"], zendesk: ["Zendesk", "zendesk", "03363D"], notion: ["Notion", "notion", "000000"],
-    gdrive: ["Google Drive", "googledrive", "4285F4"], datadog: ["Datadog", "datadog", "632CA6"],
-    pagerduty: ["PagerDuty", "pagerduty", "06AC38"], zapier: ["Zapier", "zapier", "FF4F00"], sendgrid: ["SendGrid", null, "SG"],
-    salesforce: ["Salesforce", null, "SF"], hubspot: ["HubSpot", "hubspot", "FF7A59"], s3: ["AWS S3", null, "S3"],
-    upstash: ["Upstash", "upstash", "00E9A3"],
-    claude: ["Claude (Anthropic)", "claude", "D97757"], anthropic: ["Anthropic", "anthropic", "191919"],
-    openai: ["OpenAI", null, "AI"], meta: ["Llama (Meta)", "meta", "0467DF"], qwen: ["Qwen", "qwen", "6950EF"],
-    mistral: ["Mistral AI", "mistralai", "FA520F"], gemini: ["Gemini (Google)", "googlegemini", "8E75B2"],
-    deepseek: ["DeepSeek", "deepseek", "5786FE"], ollama: ["Ollama", "ollama", "000000"],
+    vercel: ["Vercel", SI("vercel", "000000")], heroku: ["Heroku", DEV("heroku/heroku-original")],
+    stripe: ["Stripe", SI("stripe", "635BFF")], postgres: ["PostgreSQL", SI("postgresql", "4169E1")],
+    supabase: ["Supabase", SI("supabase", "3FCF8E")], snowflake: ["Snowflake", SI("snowflake", "29B5E8")],
+    slack: ["Slack", DEV("slack/slack-original")], github: ["GitHub", SI("github", "181717")],
+    linear: ["Linear", SI("linear", "5E6AD2")], zendesk: ["Zendesk", SI("zendesk", "03363D")],
+    notion: ["Notion", SI("notion", "000000")], gdrive: ["Google Drive", SI("googledrive", "4285F4")],
+    datadog: ["Datadog", SI("datadog", "632CA6")], pagerduty: ["PagerDuty", SI("pagerduty", "06AC38")],
+    zapier: ["Zapier", SI("zapier", "FF4F00")], sendgrid: ["SendGrid", SI("sendgrid", "1A82E2", "13.21.0")],
+    salesforce: ["Salesforce", DEV("salesforce/salesforce-original")], hubspot: ["HubSpot", SI("hubspot", "FF7A59")],
+    s3: ["AWS S3", DEV("amazonwebservices/amazonwebservices-original-wordmark")], upstash: ["Upstash", SI("upstash", "00E9A3")],
+    claude: ["Claude (Anthropic)", LOBE("claude-color")], anthropic: ["Anthropic", LOBE("anthropic")],
+    openai: ["OpenAI", LOBE("openai")], meta: ["Llama (Meta)", LOBE("meta-color")], qwen: ["Qwen", LOBE("qwen-color")],
+    mistral: ["Mistral AI", LOBE("mistral-color")], gemini: ["Gemini (Google)", LOBE("gemini-color")],
+    deepseek: ["DeepSeek", LOBE("deepseek-color")], ollama: ["Ollama", LOBE("ollama")],
   };
   const ALIASES = { "github-acme": "github", "postgres-prod": "postgres", "aws-s3": "s3", "salesforce-crm": "salesforce",
     "google-drive": "gdrive", "upstash-redis": "upstash", redis: "upstash" };
@@ -156,11 +161,14 @@
     const raw = String(key || "").replace(/^(service|model):/, "");
     let id = ALIASES[raw] || (BRANDS[raw] ? raw : null) || (BRANDS[raw.split("_")[0]] ? raw.split("_")[0] : null);
     if (!id) { const m = MODELS.find(([re]) => re.test(raw.toLowerCase())); id = m ? m[1] : null; }
-    const b = id ? BRANDS[id] : [raw || "?", null, (raw[0] || "?").toUpperCase()];
     const style = `width:${size}px;height:${size}px`;
-    if (!b[1]) return `<span class="acl-logo acl-logo-text" role="img" aria-label="${h.esc(b[0])}" title="${h.esc(b[0])}" style="${style};font-size:${Math.round(size * (b[2].length > 1 ? 0.45 : 0.62))}px">${h.esc(b[2])}</span>`;
-    const url = ICONS + b[1] + ".svg";
-    return `<span class="acl-logo" role="img" aria-label="${h.esc(b[0])}" title="${h.esc(b[0])}" style="${style};background:#${b[2]};-webkit-mask-image:url(${url});mask-image:url(${url})"></span>`;
+    if (!id) {
+      const letter = (raw[0] || "?").toUpperCase();
+      return `<span class="acl-logo acl-logo-text" role="img" aria-label="${h.esc(raw || "?")}" title="${h.esc(raw || "?")}" style="${style};font-size:${Math.round(size * 0.62)}px">${h.esc(letter)}</span>`;
+    }
+    const [name, src] = BRANDS[id];
+    if (src.img) return `<img class="acl-logo" src="${src.img}" alt="${h.esc(name)}" title="${h.esc(name)}" style="${style}" loading="lazy">`;
+    return `<span class="acl-logo" role="img" aria-label="${h.esc(name)}" title="${h.esc(name)}" style="${style};background:#${src.hex};-webkit-mask-image:url(${src.mask});mask-image:url(${src.mask})"></span>`;
   };
 
   // ---- charts (inline SVG; palette in core.css: --viz-1.., status colours) ----------------
