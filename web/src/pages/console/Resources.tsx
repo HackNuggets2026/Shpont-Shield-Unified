@@ -87,16 +87,16 @@ function TabButton({ t, active, onPick, figure, sub }: { t: (typeof TABS)[number
       aria-selected={active}
       onClick={onPick}
       className={cx(
-        "min-w-0 rounded-xl border bg-panel p-4 text-left shadow-sm transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/50",
+        "min-w-0 rounded-xl border bg-panel p-3 text-left shadow-sm sm:p-4 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/50",
         active ? "border-accent ring-1 ring-accent/40" : "border-line hover:border-accent/40",
       )}
     >
-      <div className={cx("flex items-center gap-2 text-sm font-semibold", active ? "text-accent" : "text-ink")}>
-        {t.icon}
-        {t.title}
+      <div className={cx("flex items-center gap-2 text-xs font-semibold sm:text-sm", active ? "text-accent" : "text-ink")}>
+        <span className="hidden sm:inline">{t.icon}</span>
+        <span className="truncate">{t.title}</span>
       </div>
-      <div className="tnum mt-2 text-2xl font-semibold tracking-tight text-ink">{figure}</div>
-      <div className="mt-0.5 truncate text-xs text-muted">{sub}</div>
+      <div className="tnum mt-1 text-lg font-semibold tracking-tight text-ink sm:mt-2 sm:text-2xl">{figure}</div>
+      <div className="mt-0.5 hidden truncate text-xs text-muted sm:block">{sub}</div>
     </button>
   );
 }
@@ -183,7 +183,7 @@ export function Resources() {
         </div>
       )}
 
-      <div className="grid gap-3 sm:grid-cols-3" role="tablist">
+      <div className="grid grid-cols-3 gap-2 sm:gap-3" role="tablist">
         <TabButton
           t={TABS[0]}
           active={tab === "spend"}
