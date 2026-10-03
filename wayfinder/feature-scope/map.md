@@ -16,11 +16,13 @@ Every feature in shpont-shield-mikolaj is either kept (its category, area and th
 
 ## Decisions so far
 
+- [Which features does the demo need?](01-which-features-does-the-demo-need.md): keep Enforce, Measure, Detect and respond, the admin console and Demo and tooling; ditch the employee portal UI, the old HTML dashboards and the two layout draft branches (done in e67d80b).
+
 ## Not yet specified
 
-- What to do with each ditched feature: delete the code, hide it in the UI, or leave it dormant. Depends on the review.
-- Whether the employee portal shrinks to Home and Menu only.
-- Which usage detections the story needs; the rest may be trimmed once the kept set is known.
+- Which usage detections the story needs; the rest may be trimmed now that Detect and respond is kept.
+- Whether the employee API (`/api/me/*`) should go too, now that no screen uses it.
+- Features inside kept areas that might still go (Backstage export, `lib/productivity.ts`, CloudEvents ingest): decide at feature level only if they get in the way.
 
 ## Out of scope
 
