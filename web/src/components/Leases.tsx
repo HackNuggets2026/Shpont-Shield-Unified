@@ -22,8 +22,6 @@ export function LeasesTable({
   const [busy, setBusy] = useState<string | null>(null);
   const [msg, setMsg] = useState<{ id: string; text: string } | null>(null);
   const [error, setError] = useState<unknown>(null);
-  if (!leases.length) return <Empty title={empty} />;
-
   const stop = async (id: string) => {
     if (!onStop) return;
     setBusy(id);
@@ -46,6 +44,9 @@ export function LeasesTable({
         </div>
       )}
       {msg && <div className="border-b border-line bg-good/10 px-3 py-2 text-xs text-good">{msg.text}</div>}
+      {!leases.length ? (
+        <Empty title={empty} />
+      ) : (
       <TableWrap>
         <table className="tbl min-w-[720px]">
           <thead>
@@ -119,6 +120,7 @@ export function LeasesTable({
           </tbody>
         </table>
       </TableWrap>
+      )}
     </div>
   );
 }

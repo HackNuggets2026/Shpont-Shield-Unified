@@ -255,7 +255,7 @@ export function Kpi({
   const body = (
     <div className={cx("h-full rounded-xl border border-line bg-panel p-4 shadow-sm", to && "transition-colors hover:border-accent/40")}>
       <div className="flex items-center justify-between gap-2 text-xs font-medium text-muted">
-        <span className="truncate">{label}</span>
+        <span className="min-w-0 leading-tight">{label}</span>
         {icon && <span className={cx("shrink-0", tone && tone !== "neutral" ? TONE[tone].split(" ")[1] : "text-muted")}>{icon}</span>}
       </div>
       <div className="mt-2 text-2xl font-semibold tracking-tight text-ink">{value}</div>

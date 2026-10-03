@@ -58,3 +58,48 @@ export function useCcProductivity(days = 30) {
     },
   });
 }
+
+export interface WorkOutput {
+  commits: number;
+  prs: number;
+  linesAdded: number;
+}
+
+async function eventsSince(kind: string, since: number): Promise<ActivityEvent[]> {
+  const out: ActivityEvent[] = [];
+  let before: number | undefined;
+  for (let page = 0; page < 20; page++) {
+    const rows = await admin.activity({ kind, limit: 500, before });
+    for (const e of rows) {
+      if (e.ts < since) return out;
+      out.push(e);
+    }
+    if (rows.length < 500) break;
+    before = rows[rows.length - 1].ts;
+  }
+  return out;
+}
+
+/** Commits, PRs and lines Claude Code reported per workflow label, over `days`. */
+export function useOutputByWorkflow(days = 30) {
+  return useQuery({
+    queryKey: ["admin", "output-by-workflow", days],
+    staleTime: 60_000,
+    refetchInterval: 60_000,
+    queryFn: async (): Promise<Record<string, WorkOutput>> => {
+      const since = Date.now() / 1000 - days * DAY;
+      const [commits, prs, lines] = await Promise.all([
+        eventsSince("metric.commit", since),
+        eventsSince("metric.pull_request", since),
+        eventsSince("metric.lines_of_code", since),
+      ]);
+      const out: Record<string, WorkOutput> = {};
+      const row = (wf: string | null) => (out[wf ?? "(none)"] ??= { commits: 0, prs: 0, linesAdded: 0 });
+      const val = (e: ActivityEvent) => Number((e.detail as { value?: number } | null)?.value ?? 0);
+      for (const e of commits) row(e.workflow).commits += val(e);
+      for (const e of prs) row(e.workflow).prs += val(e);
+      for (const e of lines) if (e.decision === "added") row(e.workflow).linesAdded += val(e);
+      return out;
+    },
+  });
+}

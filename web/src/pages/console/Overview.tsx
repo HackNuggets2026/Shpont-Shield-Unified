@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { admin } from "../../api";
 import { ActivityFeed } from "../../components/ActivityFeed";
-import { AdherenceBars, BarList, StackedChart } from "../../components/charts";
+import { AdherenceBars, BarList, Sparkline, StackedChart } from "../../components/charts";
 import { IconAlert, IconBox, IconGauge, IconShield, IconTerminal, IconUsers } from "../../components/icons";
 import { Card, ErrorBox, Kpi, Meter, PageHeader, Q, Segmented, Skeleton } from "../../components/ui";
 import { num, pct, tokens, usd } from "../../lib/format";
@@ -18,6 +18,7 @@ function daysInMonth(d = new Date()) {
 function Kpis() {
   const ov = useQuery({ queryKey: ["admin", "overview"], queryFn: admin.overview, refetchInterval: 10_000 });
   const adh = useQuery({ queryKey: ["admin", "adherence", "team", 30], queryFn: () => admin.adherence("team", 30), refetchInterval: 30_000 });
+  const adhDaily = useQuery({ queryKey: ["admin", "adherence", "day", 30], queryFn: () => admin.adherence("day", 30), refetchInterval: 60_000 });
   if (ov.isError) return <ErrorBox error={ov.error} retry={() => ov.refetch()} />;
   if (!ov.data)
     return (
@@ -55,10 +56,13 @@ function Kpis() {
         label="Month to date"
         value={usd(o.spend.month_to_date)}
         sub={
-          <span>
-            forecast <span className={forecastRatio > 1 ? "font-semibold text-bad" : "text-ink2"}>{usd(o.spend.month_forecast)}</span>
-            {monthly ? ` vs ${usd(monthly, { compact: true })} cap` : ""}
-          </span>
+          <div className="space-y-1.5">
+            {monthly ? <Meter value={o.spend.month_forecast} max={monthly} /> : null}
+            <span>
+              forecast <span className={forecastRatio > 1 ? "font-semibold text-bad" : "text-ink2"}>{usd(o.spend.month_forecast)}</span>
+              {monthly ? ` of ${usd(monthly, { compact: true })} cap` : ""}
+            </span>
+          </div>
         }
         tone={forecastRatio > 1 ? "bad" : undefined}
       />
@@ -67,7 +71,20 @@ function Kpis() {
         icon={<IconShield />}
         tone={overall && (overall.adherence ?? 1) < 0.95 ? "warn" : "good"}
         value={overall ? pct(overall.adherence) : adh.isPending ? "…" : "—"}
-        sub={overall ? `${num(overall.total)} checks · ${num(overall.block)} blocked (30d)` : "no policy checks yet"}
+        sub={
+          overall ? (
+            <div>
+              {adhDaily.data && adhDaily.data.rows.length > 1 && (
+                <div className="-mx-1 mb-1" title="Daily adherence, last 30 days">
+                  <Sparkline values={adhDaily.data.rows.map((r) => (r.total ? (r.adherence ?? 1) : 1))} color="var(--s3)" height={20} min={0.9} />
+                </div>
+              )}
+              {num(overall.total)} checks · {num(overall.block)} blocked (30d)
+            </div>
+          ) : (
+            "no policy checks yet"
+          )
+        }
       />
       <Kpi
         label="People at risk"

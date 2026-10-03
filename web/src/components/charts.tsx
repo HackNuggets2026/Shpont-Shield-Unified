@@ -264,13 +264,14 @@ export function AdherenceBars({ rows }: { rows: { key: string; adherence: number
 }
 
 /** Tiny inline trend line for tables and tiles. */
-export function Sparkline({ values, color = "var(--s1)", height = 28 }: { values: number[]; color?: string; height?: number }) {
+export function Sparkline({ values, color = "var(--s1)", height = 28, min }: { values: number[]; color?: string; height?: number; min?: number }) {
   if (!values.length || values.every((v) => !v)) return <div style={{ height }} />;
   const data = values.map((v, i) => ({ i, v }));
   return (
     <div style={{ height }}>
       <ResponsiveContainer width="100%" height="100%">
         <AreaChart data={data} margin={{ top: 2, right: 0, bottom: 0, left: 0 }}>
+          <YAxis hide domain={[min ?? "auto", "auto"]} />
           <Area type="monotone" dataKey="v" stroke={color} strokeWidth={1.5} fill={color} fillOpacity={0.15} isAnimationActive={false} />
         </AreaChart>
       </ResponsiveContainer>

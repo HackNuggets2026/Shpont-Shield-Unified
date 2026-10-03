@@ -3,8 +3,9 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { admin, type Workflow } from "../../api";
 import { ReasonDialog } from "../../components/Dialog";
 import { TierPill } from "../../components/pills";
-import { Card, Chips, Empty, PageHeader, Pill, Q, Stat, TableWrap, Toggle } from "../../components/ui";
+import { Card, Empty, PageHeader, Pill, Q, Stat, TableWrap, Toggle } from "../../components/ui";
 import { num, tokens, usd } from "../../lib/format";
+import { useOutputByWorkflow } from "../../lib/productivity";
 
 interface Pending {
   wf: Workflow;
@@ -34,10 +35,34 @@ export function limits(w: Workflow) {
   return parts;
 }
 
+/** One labelled line of chips that never wraps; the full list is in the tooltip. */
+function ScopeLine({ label, items, empty }: { label: string; items: string[]; empty: string }) {
+  return (
+    <div className="flex items-center gap-2 py-px text-[11px]" title={items.join(", ") || empty}>
+      <span className="w-11 shrink-0 text-muted">{label}</span>
+      <span className="flex min-w-0 items-center gap-1 overflow-hidden">
+        {items.length === 0 ? (
+          <span className="text-muted">{empty}</span>
+        ) : (
+          <>
+            {items.slice(0, 2).map((t) => (
+              <span key={t} className="truncate whitespace-nowrap rounded bg-ink/[0.06] px-1.5 font-mono text-ink2">
+                {t}
+              </span>
+            ))}
+            {items.length > 2 && <span className="shrink-0 text-muted">+{items.length - 2}</span>}
+          </>
+        )}
+      </span>
+    </div>
+  );
+}
+
 export function Workflows() {
   const qc = useQueryClient();
   const menu = useQuery({ queryKey: ["admin", "menu"], queryFn: admin.menu, refetchInterval: 30_000 });
   const spend = useQuery({ queryKey: ["admin", "timeseries", "workflow", 30], queryFn: () => admin.timeseries("workflow", 30) });
+  const output = useOutputByWorkflow(30);
   const [pending, setPending] = useState<Pending | null>(null);
   const edit = useMutation({
     mutationFn: ({ wf, patch, reason }: Pending & { reason: string }) => admin.editWorkflow(wf.name, patch, reason),
@@ -70,7 +95,7 @@ export function Workflows() {
                 <Empty title="No workflows on the menu" hint="Add workflows under menu.workflows in policy.yaml." />
               ) : (
                 <TableWrap>
-                  <table className="tbl min-w-[1000px]">
+                  <table className="tbl min-w-[1040px]">
                     <thead>
                       <tr>
                         <th>Workflow</th>
@@ -78,9 +103,10 @@ export function Workflows() {
                         <th className="text-right">Cost / run</th>
                         <th className="text-right">Runs</th>
                         <th className="text-right">Spend 30d</th>
-                        <th>Limits</th>
-                        <th>Who</th>
-                        <th>Models &amp; tools</th>
+                        <th className="text-right" title="All AI spend in the workflow over 30 days, divided by the commits Claude Code reported in it">
+                          AI $ / commit
+                        </th>
+                        <th>Scope</th>
                         <th className="text-center">Approval</th>
                         <th className="text-center">Enabled</th>
                       </tr>
@@ -100,21 +126,23 @@ export function Workflows() {
                           <td className="text-right">{costRange(w.measured)}</td>
                           <td className="tnum text-right">{num(w.measured.runs)}</td>
                           <td className="tnum text-right">{usd(spend30[w.name] ?? 0)}</td>
-                          <td>
-                            <Chips items={limits(w)} max={2} empty="none" />
+                          <td className="tnum text-right">
+                            {(() => {
+                              const o = output.data?.[w.name];
+                              if (!o?.commits) return <span className="text-muted">—</span>;
+                              return (
+                                <span title={`${num(o.commits)} commits · ${num(o.prs)} PRs · ${num(o.linesAdded)} lines added`}>
+                                  {usd((spend30[w.name] ?? 0) / o.commits)}
+                                  <div className="text-[11px] text-muted">{num(o.commits)} commits</div>
+                                </span>
+                              );
+                            })()}
                           </td>
-                          <td>
-                            <Chips items={[...w.teams, ...w.roles.map((r) => `role:${r}`)]} max={2} empty="everyone" />
-                          </td>
-                          <td className="max-w-[220px] space-y-1">
-                            <div className="flex gap-1.5 text-[11px]">
-                              <span className="w-10 shrink-0 text-muted">models</span>
-                              <Chips items={w.models} max={1} />
-                            </div>
-                            <div className="flex gap-1.5 text-[11px]">
-                              <span className="w-10 shrink-0 text-muted">tools</span>
-                              <Chips items={w.tools} max={2} />
-                            </div>
+                          <td className="min-w-[260px] max-w-[320px]">
+                            <ScopeLine label="limits" items={limits(w)} empty="none" />
+                            <ScopeLine label="who" items={[...w.teams, ...w.roles.map((r) => `role:${r}`)]} empty="everyone" />
+                            <ScopeLine label="models" items={w.models} empty="any" />
+                            <ScopeLine label="tools" items={w.tools} empty="any" />
                           </td>
                           <td>
                             <div className="flex items-center justify-center gap-2">
