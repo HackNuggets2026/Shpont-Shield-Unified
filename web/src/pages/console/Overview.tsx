@@ -42,9 +42,9 @@ export function useCcValue(days: number, f: { department?: string; team?: string
 /** A big number with one line of context. Four of these are the whole story. */
 function Tile({ label, value, children, to, tone }: { label: string; value: ReactNode; children?: ReactNode; to?: string; tone?: "bad" | "warn" }) {
   const body = (
-    <div className={cx("h-full rounded-xl border border-line bg-panel p-5 shadow-sm", to && "transition-colors hover:border-accent/40")}>
+    <div className={cx("h-full rounded-xl border border-line bg-panel p-3.5 shadow-sm sm:p-5", to && "transition-colors hover:border-accent/40")}>
       <div className="text-xs font-medium text-muted">{label}</div>
-      <div className={cx("tnum mt-2 text-3xl font-semibold tracking-tight", tone === "bad" ? "text-bad" : tone === "warn" ? "text-warn" : "text-ink")}>{value}</div>
+      <div className={cx("tnum mt-2 text-2xl font-semibold tracking-tight sm:text-3xl", tone === "bad" ? "text-bad" : tone === "warn" ? "text-warn" : "text-ink")}>{value}</div>
       {children && <div className="mt-2 space-y-1.5 text-xs text-muted">{children}</div>}
     </div>
   );
@@ -63,7 +63,7 @@ function Tiles() {
   if (o.isError) return <ErrorBox error={o.error} retry={() => o.refetch()} />;
   if (!o.data || !ov.data)
     return (
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-4">
         {Array.from({ length: 4 }, (_, i) => (
           <Skeleton key={i} className="h-[136px] rounded-xl" />
         ))}
@@ -74,7 +74,7 @@ function Tiles() {
   const budget = v.global_usd_per_day ? v.global_usd_per_day * daysInMonth() : null;
   const over = budget ? v.spend.month_forecast > budget : false;
   return (
-    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+    <div className="grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-4">
       <Tile label="AI spend, month to date" value={money(v.spend.month_to_date)}>
         {budget ? <Meter value={v.spend.month_forecast} max={budget} /> : null}
         <div>

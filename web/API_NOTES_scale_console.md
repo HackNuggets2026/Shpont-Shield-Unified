@@ -37,3 +37,29 @@ each one; none blocks the demo.
     `GET /admin/value?by=department` rows (`claude_code_usd / commits`). The old client-side approach
     (paging `/activity?kind=metric.commit`, capped at 10k events) does not survive the rollup seed; the
     Workflows page now uses `value?by=workflow` as well.
+
+## Seen on the real 5k seed (after merging M1, `seed --days 30 --seed 42`)
+
+12. **`activity?interesting=1` still returns noise.** Claude Code `metric.session` / `metric.lines_of_code`
+    rows (severity `null`, not `info`) and allowed `check.*` rows come back. The filter should drop
+    `metric.*` and anything with `decision in (allow, log)`, and treat a null severity like `info`.
+13. **Claude Code commits carry no workflow.** `value?by=workflow` puts 84.6k of 84.8k commits under
+    `(none)`, so a per-workflow $/commit divides a whole workflow's spend by ~100 commits ($1,478/commit).
+    The Workflows page shows per-workflow $/commit only when at least half the commits are labelled, and the
+    org-wide figure ($3.89/commit) otherwise. Suggest the seeder label rollup metric events with the
+    person's dominant workflow (the gateway already does for live sessions with a label).
+14. **The seeded previous window has a different workflow mix.** `usage?by=workflow&days=60` minus
+    `days=30` says bugfix was $311k in the previous 30 days and chat_assist $46k, versus $188k and $5.8k now.
+    The org-level `usd_prev` looks right, but per-workflow deltas would mislead, so the Workflows page shows
+    share of spend instead of Δ. A per-workflow `usd_prev` from the server (see 7) plus a consistent seed
+    would bring the Δ back.
+15. **`people_at_risk` disagrees across endpoints.** `org.totals.people_at_risk` is 10 while
+    `overview.at_risk` is 6 (the nav badge). They probably use different thresholds (`tighten` vs
+    `alert`, or open incidents vs score). One definition would avoid two numbers on one screen.
+16. **`incidents` has no `total`, `name`, `department` or `team` yet** (contract, M2). The "Needs
+    attention" list falls back to the principal id and counts the page it got.
+17. **`org/unit?kind=team` has no top-level `department`.** It is inside `metrics.department`; the SPA reads
+    either.
+18. **Performance budget.** Cold, uncached: `org?days=90` 0.96 s, `outliers?days=30&department=Finance`
+    0.81 s, `org?days=7` 0.34 s, `adherence?by=day` 0.31 s. Everything else is under 300 ms. The TTL cache
+    hides it on the second call.
