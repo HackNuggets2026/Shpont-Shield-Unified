@@ -244,6 +244,15 @@ def test_with_the_pii_scope_content_checks_still_redact(make_client):
     assert [row["national_id"] for row in rows] == ["[REDACTED:pesel]", "[REDACTED:us_ssn]", "[REDACTED:pesel]"]
 
 
+def test_an_email_without_a_domain_is_masked_whole():
+    table = {
+        "columns": "a TEXT, b TEXT",
+        "rows": [["jan@acme.io", "jan.kowalski"]],
+        "masked": {"a": "email", "b": "email"},
+    }
+    assert services._masked({"t": table})["t"]["rows"] == [["****@acme.io", "****"]]
+
+
 def test_masking_rules_name_real_columns_and_known_classes():
     table = {"columns": "id INTEGER, ssn TEXT", "rows": [[1, "078-05-1120"]]}
     with pytest.raises(ValueError, match=r"t.masked: unknown column or class \{'ssn': 'us_ssn'\}"):
@@ -477,6 +486,8 @@ def test_a_public_ticket_reply_is_email_to_the_customer(client):
     reply = {"ticket_id": 4521, "body": "Refund issued."}
     assert "external_recipient" in call(client, "zendesk_reply", reply)["error"]["message"]
     assert json.loads(text(call(client, "zendesk_reply", reply | {"public": False})))["public"] is False
+    r = call(client, "zendesk_reply", {"ticket_id": 999, "body": "Hi"})
+    assert r["result"]["isError"] and text(r) == "Zendesk: 404 no ticket 999"
 
 
 def test_a_zap_payload_is_checked_before_the_zap_runs(client):

@@ -253,7 +253,7 @@ def _cell(v: Any) -> Any:
 # Dynamic data masking, as Snowflake masking policies or PostgreSQL anonymizer rules do it: the query
 # runs on masked values, so no SQL function (hex, substr, ||) can rebuild the original from them.
 _MASKS: dict[str, Callable[[Any], Any]] = {
-    "email": lambda v: "****@" + v.rpartition("@")[2],  # the domain stays, for grouping by company
+    "email": lambda v: "****@" + v.rpartition("@")[2] if "@" in v else "****",  # the domain stays
     "phone": lambda v: "****",
     "national_id": lambda v: "****",
     "card_number": lambda v: "****",
