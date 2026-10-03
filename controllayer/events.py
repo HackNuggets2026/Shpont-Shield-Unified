@@ -166,6 +166,11 @@ class Ingestor:
         if ident:
             e["principal"] = ident.principal
             e["team"] = e.get("team") or ident.team
+        elif (person := self.store.person(e.get("principal") or "")) or (
+            (pid := self.store.principal_by_email(e.get("email"))) and (person := self.store.person(pid))
+        ):
+            e["principal"] = person["principal"]  # the directory knows people without an API key
+            e["team"] = e.get("team") or person["team"]
         e["principal"] = e.get("principal") or "unattributed"
         e["team"] = e.get("team") or "unattributed"
         if dedupe and e.get("id") and self.store.has_event(e["id"], e["source"], e["principal"], e.get("client")):

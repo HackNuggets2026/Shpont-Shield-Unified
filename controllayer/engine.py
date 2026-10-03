@@ -36,6 +36,7 @@ class ControlLayer:
         p = store.policy
         usage_path = p.usage.path if p.usage.path == ":memory:" else store.data_path(p.usage.path)
         self.usage = UsageStore(usage_path)
+        sync_directory(self.usage, p)
         self.ledger = BudgetLedger(self.usage)
         self.leases = LeaseTracker(self.usage, self.ledger)
         self.risk = RiskEngine(self.usage, store)
@@ -58,6 +59,7 @@ class ControlLayer:
         return self.store.policy
 
     def _on_reload(self, old: str, new: Policy) -> None:
+        sync_directory(self.usage, new)
         self.leases.urns = {n: r.urn for n, r in new.catalog.items()}
         self._team_cache.clear()
         self._seen.clear()
@@ -240,6 +242,28 @@ class ControlLayer:
                 log.exception("event write failed")
         self.risk.observe(ctx, verdict, policy)
         return verdict
+
+
+def sync_directory(store: UsageStore, policy: Policy) -> None:
+    """The policy's org units into the store, and the people with API keys merged into the directory. A key's
+    `department` wins, then the team's department in `org:`; name, title and location stay as the directory has
+    them."""
+    store.set_org(policy.org.name, policy.org.team_departments())
+    rows = []
+    for k in policy.identity.api_keys.values():
+        cur = store.person(k.principal) or {}
+        rows.append(
+            {
+                **cur,
+                "principal": k.principal,
+                "name": cur.get("name") or k.principal,
+                "email": k.email or cur.get("email"),
+                "team": k.team,
+                "department": k.department or policy.department_of(k.team),
+                "role": k.role,
+            }
+        )
+    store.upsert_people(rows)
 
 
 _INVISIBLE = dict.fromkeys(c for c in range(0x110000) if unicodedata.category(chr(c)) == "Cf")

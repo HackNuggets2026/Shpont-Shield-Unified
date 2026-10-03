@@ -164,6 +164,7 @@ def create_app(
 
     app.state.layer = layer
     app.state.store = store
+    app.state.admin_cache = governance.org_api.AdminCache()
 
     @app.middleware("http")
     async def admin_guard(request: Request, call_next):
@@ -172,7 +173,10 @@ def create_app(
             given = request.headers.get("x-admin-token") or request.query_params.get("token") or ""
             if not hmac.compare_digest(given, token):
                 return JSONResponse({"error": "admin token required"}, status_code=401)
-        return await call_next(request)
+        response = await call_next(request)
+        if request.method == "POST" and request.url.path.startswith("/admin"):
+            app.state.admin_cache.clear()  # an admin change shows on the next read, not 15 s later
+        return response
 
     def upstream() -> UpstreamClient:
         return UpstreamClient(store.policy.upstream, http)
