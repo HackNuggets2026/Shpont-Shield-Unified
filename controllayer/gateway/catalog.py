@@ -171,13 +171,22 @@ def register(
         reason = str(body.get("reason") or "").strip()
         if not reason:
             return err("a reason is required; it is shown to the employee")
-        grants = new_grant(store.policy, pid, body, actor(request), reason)
+        p = store.policy
+        if pid not in known(p) and pid not in p.principals and not usage.breakdown(["principal"], 0, pid):
+            return err(f"no such person {pid!r}", 404)
+        grants = new_grant(p, pid, body, actor(request), reason)
         if isinstance(grants, str):
             return err(grants)
         resp = write(request, {"principals": {pid: {"grants": grants}}}, "grant", pid, reason)
-        if resp.status_code == 200:
-            return JSONResponse({"ok": True, "grant": grants[-1]})
-        return resp
+        if resp.status_code != 200:
+            return resp
+        g = grants[-1]
+        out: dict[str, Any] = {"ok": True, "grant": g}
+        asked = body.get("minutes")
+        granted = (g["expires"] - g["granted_at"]) / 60
+        if asked and float(asked) > granted + 1e-6:  # new_grant validated it as a number
+            out["clamped_from"] = float(asked)
+        return JSONResponse(out)
 
     @app.post("/admin/principals/{pid}/grants/{gid}/revoke")
     async def admin_revoke(pid: str, gid: str, request: Request):

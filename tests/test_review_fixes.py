@@ -362,3 +362,14 @@ def test_detections_settings_endpoint(client):
     assert {"alert", "tighten", "quarantine", "tighten_budget_scale", "auto"} == set(d["response"])
     assert d["rules"] and all(set(r) == {"enabled", "weight", "window_minutes"} for r in d["rules"].values())
     assert client.get("/api/admin/detections", headers={"x-admin-token": "wrong"}).status_code == 401
+
+
+def test_granting_to_an_unknown_person_is_a_404_and_clamping_is_reported(client):
+    r = client.post("/admin/principals/nobody/grants", json={"resource": "prod_db", "reason": "x"})
+    assert r.status_code == 404
+    r = client.post("/admin/principals/carol/grants", json={"resource": "prod_db", "minutes": 9999, "reason": "x"})
+    assert (
+        r.json()["clamped_from"] == 9999 and r.json()["grant"]["expires"] - r.json()["grant"]["granted_at"] <= 240 * 60
+    )
+    r = client.post("/admin/principals/carol/grants", json={"resource": "prod_db", "minutes": 30, "reason": "x"})
+    assert "clamped_from" not in r.json()
