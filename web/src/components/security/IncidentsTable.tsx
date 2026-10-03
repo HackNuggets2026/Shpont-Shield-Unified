@@ -1,12 +1,16 @@
 import { Link, useNavigate } from "react-router-dom";
 import { ago, dateTime } from "../../lib/format";
 import { ruleLabel, ruleWhat, RULES, type SecIncident } from "../../lib/security";
+import type { OrgFields } from "../../opsApi";
 import { IncidentStatusPill, SeverityPill } from "../pills";
 import { Empty, cx } from "../ui";
 import { IconTerminal } from "../icons";
 
 const shortStamp = (ts: number) =>
   new Date(ts * 1000).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+
+type Row = SecIncident & OrgFields;
+const who = (i: Row) => i.name || i.principal;
 
 const href = (i: SecIncident) => `/console/incidents/${encodeURIComponent(i.id)}`;
 
@@ -25,10 +29,11 @@ function RuleCell({ rule }: { rule: string }) {
 }
 
 /** Incidents for triage: a table from tablet width up, stacked cards on a phone. */
-export function IncidentsTable({ incidents, empty, hint }: { incidents: SecIncident[]; empty: string; hint?: string }) {
+export function IncidentsTable({ incidents, empty, hint }: { incidents: Row[]; empty: string; hint?: string }) {
   const nav = useNavigate();
   if (!incidents.length) return <Empty title={empty} hint={hint} />;
-  const hot = (i: SecIncident) => i.status === "open" && i.severity === "high";
+  const org = incidents.some((i) => i.department || i.team);
+  const hot = (i: Row) => i.status === "open" && i.severity === "high";
   return (
     <>
       <ul className="divide-y divide-line/70 md:hidden">
@@ -44,7 +49,8 @@ export function IncidentsTable({ incidents, empty, hint }: { incidents: SecIncid
               </div>
               <p className="mt-1 line-clamp-2 text-xs text-ink2">{i.detail}</p>
               <div className="mt-1.5 flex flex-wrap items-center gap-x-2 text-[11px] text-muted">
-                <span className="font-medium text-ink2">{i.principal}</span>
+                <span className="font-medium text-ink2">{who(i)}</span>
+                {(i.team || i.department) && <span>{[i.team, i.department].filter(Boolean).join(" · ")}</span>}
                 <span>weight {Math.round(i.weight)}</span>
                 <span title={dateTime(i.ts)}>{ago(i.ts)}</span>
                 {i.archived && <span>older than 7 days</span>}
@@ -59,6 +65,7 @@ export function IncidentsTable({ incidents, empty, hint }: { incidents: SecIncid
             <tr>
               <th className="w-[84px]">Severity</th>
               <th>Incident</th>
+              {org && <th>Team · department</th>}
               <th>What happened</th>
               <th className="text-right">Weight</th>
               <th>Status</th>
@@ -80,9 +87,15 @@ export function IncidentsTable({ incidents, empty, hint }: { incidents: SecIncid
                     onClick={(e) => e.stopPropagation()}
                     className="text-xs font-medium text-ink2 hover:text-accent"
                   >
-                    {i.principal}
+                    {who(i)}
                   </Link>
                 </td>
+                {org && (
+                  <td className="max-w-[170px] text-xs">
+                    <div className="truncate text-ink2">{i.team ?? "—"}</div>
+                    <div className="truncate text-[11px] text-muted">{i.department ?? ""}</div>
+                  </td>
+                )}
                 <td className="min-w-[180px] max-w-[320px]">
                   <span className="line-clamp-2 text-xs text-ink2" title={i.detail}>
                     {i.detail}
