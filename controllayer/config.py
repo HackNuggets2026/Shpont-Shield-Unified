@@ -312,14 +312,23 @@ class Policy(_Strict):
         override = self.teams.get(team)
         if not override or not override.controls:
             return self
+        try:
+            return self.with_overrides(override.controls)
+        except ValueError as e:
+            raise ValueError(f"team {team!r}: {e}") from e
+
+    def with_overrides(self, controls: dict[str, dict[str, Any]]) -> Policy:
+        """Policy with per-control field overrides deep-merged in."""
+        if not controls:
+            return self
         data = self.model_dump(by_alias=True)
-        for name, fields in override.controls.items():
+        for name, fields in controls.items():
             if name in data and isinstance(data[name], dict):
                 _merge(data[name], fields)
             elif name in data["semantic_controls"]:
                 _merge(data["semantic_controls"][name], fields)
             else:
-                raise ValueError(f"team {team!r} overrides unknown control {name!r}")
+                raise ValueError(f"override of unknown control {name!r}")
         return Policy.model_validate(data)
 
 
@@ -348,6 +357,10 @@ def parse_policy(text: str) -> Policy:
     policy.version = hashlib.sha256(expanded.encode()).hexdigest()[:12]
     for team in policy.teams:  # surface bad overrides at load time, not on first request
         policy.for_team(team)
+    try:
+        policy.with_overrides(policy.insider_risk.watch_controls)
+    except ValueError as e:
+        raise ValueError(f"insider_risk.watch_controls: {e}") from e
     return policy
 
 

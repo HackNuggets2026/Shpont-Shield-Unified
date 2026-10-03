@@ -30,7 +30,9 @@ class AuditLog:
         self.notes: deque[dict[str, Any]] = deque(maxlen=ring_size)
         self.total = 0
 
-    def record(self, ctx: Context, v: Verdict, extra: dict[str, Any] | None = None) -> dict[str, Any]:
+    def record(
+        self, ctx: Context, v: Verdict, extra: dict[str, Any] | None = None, raw: bool = False
+    ) -> dict[str, Any]:
         event = {
             "ts": v.ts,
             "request_id": v.request_id,
@@ -64,7 +66,7 @@ class AuditLog:
             ],
             **(extra or {}),
         }
-        if self.store_raw_text:
+        if self.store_raw_text or raw:
             event["raw_text"] = ctx.text
         self.total += 1
         self.events.append(event)

@@ -220,12 +220,12 @@ resources:
 insider_risk:
   enabled: true
   half_life_hours: 24
-  levels: { watch: 20, restricted: 60 }
+  levels: { watch: 30, restricted: 120 }   # 10 points per block: ~3 blocks to watch, ~12 to restricted
   weights: { log: 0.5, warn: 2, redact: 3, block: 10 }
   category_weights: { data_exfiltration: 10, malware: 15, not_granted: 5, scope_denied: 5 }
   owner_share: 0.5         # an agent's misbehaviour also counts half against its owner
   watch_controls:          # stricter policy while watched
-    pii: { mode: block }
+    pii: { mode: block, entities: { credit_card: block, iban: block, pesel: block, us_ssn: block, email: redact } }
     prompt_injection: { thresholds: { block: 0.6, warn: 0.4, log: 0.2 } }
   watch_capture_raw: true  # full text of watched sessions goes to the audit log
   alert_on_block_while_watched: true

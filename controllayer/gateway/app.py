@@ -98,8 +98,8 @@ def create_app(
     watch: bool = True,
 ) -> FastAPI:
     store = PolicyStore(policy_path or os.environ.get("ACL_POLICY", "policy.yaml"))
-    layer = ControlLayer(store, backend=backend)
     http = upstream_client or httpx.AsyncClient(timeout=120)
+    layer = ControlLayer(store, backend=backend, http=http)
 
     async def background() -> None:
         last_feed = time.monotonic()
@@ -735,6 +735,91 @@ def create_app(
         return JSONResponse(
             {"ok": ok, "version": store.policy.version, "error": store.last_error}, status_code=200 if ok else 422
         )
+
+    @app.get("/admin/risk")
+    async def risk_overview():
+        return {
+            "principals": layer.risk.overview(store.policy),
+            "levels": store.policy.insider_risk.levels.model_dump(),
+        }
+
+    @app.post("/admin/risk/{pid}")
+    async def risk_set(pid: str, request: Request):
+        """Set a manual floor level (`normal` clears it), and optionally reset the score after review."""
+        body = await _json_object(request)
+        level = body.get("level")
+        if level not in ("normal", "watch", "restricted"):
+            raise BadRequest("level must be normal, watch or restricted")
+        if not any(k.principal == pid for k in store.policy.identity.api_keys.values()):
+            return JSONResponse({"error": f"unknown principal {pid!r}"}, status_code=404)
+        reason = str(body.get("reason") or "")
+        if level == "normal":
+            layer.state.watch.pop(pid, None)
+        else:
+            layer.state.watch[pid] = {"level": level, "reason": reason, "at": time.time()}
+        if body.get("reset_score"):
+            layer.risk.reset(pid)
+        layer.state.save()
+        layer.audit.note(
+            "risk_level",
+            "security",
+            principal=pid,
+            level=level,
+            reason=reason,
+            reset_score=bool(body.get("reset_score")),
+        )
+        return {"principal": pid, "level": level}
+
+    @app.get("/admin/alerts")
+    async def alerts(limit: int = 100):
+        return {"alerts": list(reversed(layer.risk.alerts))[:limit], "sink_errors": list(layer.risk.sink_errors)}
+
+    @app.get("/admin/grants")
+    async def all_grants():
+        policy = store.policy
+        rows = []
+        for agent, gs in layer.state.grants.items():
+            ap = authenticate_principal(policy, agent)
+            for rid, g in gs.items():
+                rows.append(
+                    {
+                        "agent": agent,
+                        "owner": ap.owner,
+                        "resource": rid,
+                        **g,
+                        "active": resources.active_grant(policy, layer.state, ap, rid) is not None,
+                    }
+                )
+        return {
+            "grants": rows,
+            "resources": [
+                resource_view(rid, r) | {"entitled": r.entitled.model_dump()} for rid, r in policy.resources.items()
+            ],
+        }
+
+    @app.delete("/admin/grants/{agent}/{rid}")
+    async def admin_revoke(agent: str, rid: str):
+        removed = resources.revoke(layer.state, agent, rid)
+        if removed:
+            layer.audit.note("revoke", "security", agent=agent, resource=rid)
+        return {"revoked": removed}
+
+    @app.post("/admin/resources/{rid}/suspend")
+    async def suspend(rid: str, request: Request):
+        body = await _json_object(request)
+        if rid not in store.policy.resources:
+            return JSONResponse({"error": f"unknown resource {rid!r}"}, status_code=404)
+        if body.get("suspended", True):
+            layer.state.suspended[rid] = {"reason": str(body.get("reason") or ""), "at": time.time()}
+        else:
+            layer.state.suspended.pop(rid, None)
+        layer.state.save()
+        layer.audit.note("suspend", "security", resource=rid, suspended=bool(body.get("suspended", True)))
+        return {"resource": rid, "suspended": rid in layer.state.suspended}
+
+    @app.get("/security", response_class=HTMLResponse)
+    async def security_page():
+        return DASHBOARD.read_text()
 
     @app.get("/metrics")
     async def metrics():

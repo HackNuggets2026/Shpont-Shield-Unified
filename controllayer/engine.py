@@ -8,6 +8,8 @@ import unicodedata
 from collections import OrderedDict
 from typing import Any
 
+import httpx
+
 from .audit import AuditLog
 from .config import Policy, PolicyStore
 from .controls import access, signatures
@@ -15,6 +17,7 @@ from .controls.budget import BudgetLedger
 from .controls.patterns import pii, redact, secrets
 from .controls.semantic import SemanticGuard
 from .decision import DecisionBackend, HeuristicBackend, OllamaSystemOne
+from .risk import RiskEngine
 from .state import StateStore
 from .types import Action, Context, Direction, Finding, Principal, Verdict
 
@@ -28,9 +31,11 @@ class ControlLayer:
         backend: DecisionBackend | None = None,
         audit: AuditLog | None = None,
         state: StateStore | None = None,
+        http: httpx.AsyncClient | None = None,
     ):
         self.store = store
         self.state = state or StateStore(store.base_dir / "data" / "state.json")
+        self.risk = RiskEngine(self.state, store.base_dir, http)
         self._fixed_backend = backend
         self._backend_key: tuple | None = None
         self._backend: DecisionBackend | None = backend
@@ -61,11 +66,12 @@ class ControlLayer:
                 return
             self.feed = feed
 
-    def policy_for(self, team: str) -> Policy:
+    def policy_for(self, team: str, watched: bool = False) -> Policy:
         p = self.store.policy
-        key = (p.version, team)
+        key = (p.version, team, watched)
         if key not in self._team_cache:
-            self._team_cache[key] = p.for_team(team)
+            tp = p.for_team(team)
+            self._team_cache[key] = tp.with_overrides(p.insider_risk.watch_controls) if watched else tp
         return self._team_cache[key]
 
     def backend(self, policy: Policy) -> DecisionBackend:
@@ -127,6 +133,7 @@ class ControlLayer:
             self.feed.loaded_at,
             self.state.version,
             ctx.pii_override,
+            self.risk.level(self.policy, ctx.principal),
             semantic,
             ctx.principal.id,
             ctx.direction,
@@ -148,7 +155,8 @@ class ControlLayer:
         return verdict
 
     async def _evaluate(self, ctx: Context, extra: dict | None, inspect: bool = True, semantic: bool = True) -> Verdict:
-        policy = self.policy_for(ctx.principal.team)
+        level = self.risk.level(self.policy, ctx.principal)
+        policy = self.policy_for(ctx.principal.team, watched=level != "normal")
         t_start = time.perf_counter()
         latency: dict[str, float] = {}
 
@@ -158,6 +166,8 @@ class ControlLayer:
             return now
 
         findings: list[Finding] = access.check_auth(ctx, policy)
+        if level == "restricted":
+            findings.append(_restricted())
         if not findings:
             findings += access.check_model(ctx, policy) + access.check_resource(ctx, policy, self.state)
             findings += access.check_tool(ctx, policy)
@@ -192,7 +202,9 @@ class ControlLayer:
 
         latency["total"] = (time.perf_counter() - t_start) * 1000
         verdict = _decide(ctx, findings, policy.version, latency)
-        self.audit.record(ctx, verdict, extra)
+        raw = level != "normal" and policy.insider_risk.watch_capture_raw
+        self.audit.record(ctx, verdict, extra, raw=raw)
+        self.risk.observe(policy, ctx, verdict, level)
         return verdict
 
 
@@ -231,6 +243,16 @@ def flatten(obj: Any) -> str:
 
     walk(obj)
     return "\n".join(out)
+
+
+def _restricted() -> Finding:
+    return Finding(
+        control="insider_risk",
+        category="restricted",
+        action=Action.BLOCK,
+        proposed=Action.BLOCK,
+        detail="access restricted pending security review; contact the security team",
+    )
 
 
 def _blocked(findings: list[Finding]) -> bool:
