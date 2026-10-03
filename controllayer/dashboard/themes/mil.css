@@ -1,0 +1,209 @@
+/* "mil" skin (?theme=mil): graphite instrument panel over the Primer markup.
+   Interactive state uses the single orange accent; status keeps avionics colors
+   (green normal, amber caution, red warning, cyan advisory). */
+
+:root[data-acl-theme="mil"][data-color-mode] {
+  --mil-canvas: #111312;
+  --mil-panel: #171a18;
+  --mil-raise: #1e221f;
+  --mil-inset: #0c0e0d;
+  --mil-line: #343a36;
+  --mil-line-soft: #252a26;
+  --mil-fg: #d5d9cf;
+  --mil-fg-muted: #8f978c;
+  --mil-accent: #ff7a1a;
+  --mil-accent-hover: #ff9142;
+  --mil-on-accent: #111312;
+  --mil-ok: #7cc45a;
+  --mil-caution: #e8b53a;
+  --mil-warning: #ff5252;
+  --mil-advisory: #5cb8d6;
+  --mil-sans: "Chakra Petch", "Segoe UI", sans-serif;
+  --mil-mono: "Share Tech Mono", ui-monospace, Menlo, Consolas, monospace;
+
+  color-scheme: dark;
+  --fontStack-sansSerif: var(--mil-sans);
+  --fontStack-sansSerifDisplay: var(--mil-sans);
+  --fontStack-system: var(--mil-sans);
+  --fontStack-monospace: var(--mil-mono);
+
+  --borderRadius-small: 0;
+  --borderRadius-medium: 0;
+  --borderRadius-large: 0;
+  --borderRadius-default: 0;
+  --borderRadius-full: 0;
+
+  --shadow-inset: 0 0 #0000;
+  --shadow-highlight: 0 0 #0000;
+  --shadow-resting-xsmall: 0 0 #0000;
+  --shadow-resting-small: 0 0 #0000;
+  --shadow-resting-medium: 0 0 #0000;
+  --button-default-shadow-resting: 0 0 #0000;
+  --button-default-shadow-inset: 0 0 #0000;
+  --button-primary-shadow-selected: 0 0 #0000;
+
+  --bgColor-default: var(--mil-panel);
+  --bgColor-muted: var(--mil-raise);
+  --bgColor-inset: var(--mil-inset);
+  --bgColor-neutral-muted: #272c28;
+  --fgColor-default: var(--mil-fg);
+  --fgColor-muted: var(--mil-fg-muted);
+  --fgColor-onEmphasis: var(--mil-on-accent);
+  --borderColor-default: var(--mil-line);
+  --borderColor-muted: var(--mil-line-soft);
+
+  --fgColor-success: var(--mil-ok);
+  --fgColor-attention: var(--mil-caution);
+  --fgColor-danger: var(--mil-warning);
+  --fgColor-accent: var(--mil-advisory);
+  --borderColor-success-emphasis: var(--mil-ok);
+  --borderColor-attention-emphasis: var(--mil-caution);
+  --borderColor-danger-emphasis: var(--mil-warning);
+  --borderColor-accent-emphasis: var(--mil-advisory);
+  --bgColor-success-emphasis: var(--mil-ok);
+  --bgColor-attention-emphasis: var(--mil-caution);
+  --bgColor-danger-emphasis: var(--mil-warning);
+  --bgColor-accent-emphasis: var(--mil-advisory);
+
+  --header-bgColor: var(--mil-inset);
+  --header-fgColor-default: var(--mil-fg);
+  --header-fgColor-logo: var(--mil-fg);
+
+  --button-default-fgColor-rest: var(--mil-fg);
+  --button-default-bgColor-rest: var(--mil-raise);
+  --button-default-bgColor-hover: #262b27;
+  --button-default-bgColor-active: #2c322d;
+  --button-default-bgColor-selected: #2c322d;
+  --button-default-borderColor-rest: var(--mil-line);
+  --button-default-borderColor-hover: #4c544e;
+  --button-default-borderColor-active: #4c544e;
+  --button-primary-fgColor-rest: var(--mil-on-accent);
+  --button-primary-bgColor-rest: var(--mil-accent);
+  --button-primary-bgColor-hover: var(--mil-accent-hover);
+  --button-primary-bgColor-active: var(--mil-accent);
+  --button-primary-borderColor-rest: var(--mil-accent);
+  --button-primary-borderColor-hover: var(--mil-accent-hover);
+  --button-primary-borderColor-active: var(--mil-accent);
+  --focus-outlineColor: var(--mil-accent);
+
+  --control-borderColor-rest: var(--mil-line);
+  --controlTrack-bgColor-rest: #272c28;
+  --controlTrack-bgColor-hover: #2e342f;
+  --controlTrack-bgColor-active: #2e342f;
+  --controlTrack-borderColor-rest: var(--mil-line);
+  --controlKnob-bgColor-rest: #9aa197;
+  --controlKnob-borderColor-rest: #9aa197;
+  --control-checked-bgColor-rest: var(--mil-accent);
+  --control-checked-bgColor-hover: var(--mil-accent-hover);
+  --control-checked-bgColor-active: var(--mil-accent);
+  --controlKnob-bgColor-checked: var(--mil-on-accent);
+  --controlKnob-borderColor-checked: var(--mil-on-accent);
+
+  scrollbar-color: var(--mil-line) transparent;
+}
+
+body.color-bg-default { background-color: var(--mil-canvas) !important; }
+body, .markdown-body { font-family: var(--mil-sans); letter-spacing: .01em; }
+::selection { color: var(--mil-on-accent); background: var(--mil-accent); }
+b, strong { font-weight: 600; }
+
+/* ---- header strip --------------------------------------------------------------- */
+
+.Header { padding: 10px 16px; border-bottom: 1px solid var(--mil-line); }
+.Header-link { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .14em; }
+.Header-item:first-child .Header-link { font-size: 14px !important; font-weight: 700 !important; letter-spacing: .2em; }
+.Header-item:first-child .Header-link::after {
+  content: "ACL-01"; margin-left: 10px; padding: 0 4px; border: 1px solid var(--mil-line);
+  font: 10px/16px var(--mil-mono); letter-spacing: .12em; color: var(--mil-fg-muted); vertical-align: 2px;
+}
+.Header-link.text-underline { text-decoration: none !important; border-bottom: 2px solid var(--mil-accent); padding-bottom: 2px; }
+.Header-link:hover { color: var(--mil-accent); }
+.Header .form-select, .Header .BtnGroup-item:not(.btn-primary) { color: var(--mil-fg); background-color: var(--mil-panel); border-color: var(--mil-line); }
+
+/* ---- page heading: name over a mono data line ----------------------------------- */
+
+.Subhead { border-bottom-color: var(--mil-line); padding-bottom: 8px; }
+.Subhead-heading { font-size: 20px; font-weight: 600; text-transform: uppercase; letter-spacing: .12em; }
+.Subhead-heading::before {
+  content: ""; display: inline-block; width: 8px; height: 8px; margin-right: 10px;
+  vertical-align: 3px; background: var(--mil-accent);
+}
+.Subhead-description { font-size: 11px !important; letter-spacing: .06em; text-transform: uppercase; }
+
+/* ---- panels: numbered data-plate headers ---------------------------------------- */
+
+.acl-grid { gap: 12px; counter-reset: plate; }
+.Box { border-color: var(--mil-line); }
+.acl-grid > div > .Box { counter-increment: plate; }
+.Box-header { padding: 6px 12px; background: var(--mil-raise); border-color: var(--mil-line); }
+.Box-title { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .16em; }
+.acl-grid .Box-title::before {
+  content: counter(plate, decimal-leading-zero); margin-right: 10px; padding-right: 10px;
+  border-right: 1px solid var(--mil-line); font: 11px var(--mil-mono); color: var(--mil-accent); letter-spacing: .08em;
+}
+.Box-body { padding: 12px; }
+.Box-row { border-top-color: var(--mil-line-soft); }
+
+/* ---- readouts ------------------------------------------------------------------- */
+
+.acl-stats { gap: 12px 16px; }
+.acl-stats > div { border-left: 1px solid var(--mil-line); padding-left: 10px; }
+.acl-stats > div > .f6:first-child, .acl-cap {
+  font-size: 10px !important; text-transform: uppercase; letter-spacing: .14em; color: var(--mil-fg-muted);
+}
+.acl-big, .acl-big-sm, td.acl-num, .acl-sub { font-family: var(--mil-mono); font-weight: 400; }
+.acl-big { font-size: 28px; line-height: 1.2; }
+.acl-big-sm { font-size: 18px; }
+.text-mono, .input-monospace, pre { letter-spacing: 0; }
+
+.Progress { height: 4px; background: #272c28; }
+.acl-meter { margin: 6px 0 3px; }
+
+/* ---- tables: hairline rows, no zebra -------------------------------------------- */
+
+.markdown-body table { font-size: 12px; border-collapse: collapse; }
+.markdown-body table tr, .markdown-body table tr:nth-child(2n) { background: transparent; border-top: 0; }
+.markdown-body table th, .markdown-body table td {
+  padding: 5px 10px; border: 0; border-bottom: 1px solid var(--mil-line-soft);
+}
+.markdown-body table th {
+  font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: .14em;
+  color: var(--mil-fg-muted); text-align: left; border-bottom-color: var(--mil-line);
+}
+.markdown-body table th.acl-num { text-align: right; }
+.markdown-body table tbody tr:hover { background: var(--mil-raise); }
+
+/* ---- status tags ---------------------------------------------------------------- */
+
+.Label { font-size: 10px; font-weight: 600; line-height: 16px; padding: 0 5px; text-transform: uppercase; letter-spacing: .1em; }
+
+/* ---- controls ------------------------------------------------------------------- */
+
+.btn { border-radius: 0; box-shadow: none; font-weight: 600; text-transform: uppercase; letter-spacing: .1em; }
+.btn-sm { font-size: 11px; padding: 2px 10px; }
+.BtnGroup-item, .BtnGroup-item:first-child, .BtnGroup-item:last-child { border-radius: 0; }
+.BtnGroup-item.btn-primary { border-color: var(--mil-accent); }
+.btn-invisible, .btn-invisible:hover, .btn-invisible:active { color: var(--mil-accent); border-radius: 0; }
+.acl-sub { text-transform: none; letter-spacing: .02em; }
+.acl-auto .btn { font-size: 13px; }
+
+.ToggleSwitch-status { text-transform: uppercase; letter-spacing: .1em; font-size: 10px !important; }
+.ToggleSwitch-knob { box-shadow: none; }
+
+.form-control, .form-select { border-radius: 0; box-shadow: none; background-color: var(--mil-inset); font-size: 13px; }
+textarea.form-control { font-family: var(--mil-mono); }
+
+/* ---- notices: flat plate with a status edge ------------------------------------- */
+
+.flash:not(.Banner) {
+  background-image: none; background-color: var(--mil-panel); border-color: var(--mil-line);
+  border-left: 3px solid var(--mil-advisory); border-radius: 0; padding: 10px 14px; font-size: 13px;
+}
+.flash-success:not(.Banner) { border-left-color: var(--mil-ok); }
+.flash-warn:not(.Banner) { border-left-color: var(--mil-caution); }
+.flash-error:not(.Banner) { border-left-color: var(--mil-warning); }
+
+/* ---- raw response --------------------------------------------------------------- */
+
+details summary.f6 { text-transform: uppercase; letter-spacing: .12em; font-size: 10px !important; }
+.acl-pre { border-radius: 0; border: 1px solid var(--mil-line); background-color: var(--mil-inset) !important; }
