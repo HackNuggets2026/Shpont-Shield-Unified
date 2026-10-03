@@ -2,8 +2,9 @@ import { useState, type ReactNode } from "react";
 import { Link, useParams } from "react-router-dom";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { org, orgPath, type OrgUnit, type UnitRow } from "../../orgApi";
-import { BarList, Sparkline, StackedChart, seriesLabel } from "../../components/charts";
-import { Breadcrumbs, Delta, OutliersList, Pager, UnitTable, useDeptColors } from "../../components/org";
+import { BarList, Sparkline, StackedChart } from "../../components/charts";
+import { useWorkflowColors, WfName, wfLabel } from "../../lib/workflows";
+import { Breadcrumbs, DeptDot, Delta, OutliersList, Pager, UnitTable, useDeptColors } from "../../components/org";
 import { Card, ErrorBox, Loading, Meter, PageHeader, Pill, Q, Segmented, TableWrap, cx } from "../../components/ui";
 import { count, money, pctAuto, unitMoney, usd } from "../../lib/format";
 import { PEOPLE_PAGE, PeopleTable, usePeoplePage } from "./People";
@@ -55,6 +56,7 @@ function Tiles({ m, trend, orgUsd }: { m: UnitRow; trend: (number | null)[]; org
 /** One chart card; the table view of the same window (workflows with cost per run, resources) is one toggle away. */
 function SpendCard({ u, days }: { u: OrgUnit; days: number }) {
   const [view, setView] = useState<"chart" | "workflows">("chart");
+  const colors = useWorkflowColors();
   return (
     <Card
       title={`Spend by workflow, last ${days} days`}
@@ -71,7 +73,7 @@ function SpendCard({ u, days }: { u: OrgUnit; days: number }) {
       }
     >
       {view === "chart" ? (
-        <StackedChart ts={u.spend} kind="bar" compact height={260} />
+        <StackedChart ts={u.spend} kind="bar" compact height={260} colors={colors} labelOf={wfLabel} />
       ) : (
         <div className="grid gap-5 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
           <TableWrap>
@@ -89,7 +91,12 @@ function SpendCard({ u, days }: { u: OrgUnit; days: number }) {
               <tbody>
                 {u.by_workflow.map((w) => (
                   <tr key={w.workflow}>
-                    <td className="font-medium text-ink">{seriesLabel(w.workflow)}</td>
+                    <td>
+                      <span className="flex items-center gap-2">
+                        <DeptDot color={colors[w.workflow]} />
+                        <WfName id={w.workflow} />
+                      </span>
+                    </td>
                     <td className="tnum text-right">{count(w.runs)}</td>
                     <td className="tnum text-right font-medium">{money(w.usd)}</td>
                     <td className="tnum whitespace-nowrap text-right">

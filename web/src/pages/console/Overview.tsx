@@ -7,6 +7,7 @@ import { StackedChart } from "../../components/charts";
 import { Delta, UnitTable, useDeptColors, useOrg } from "../../components/org";
 import { SeverityPill } from "../../components/pills";
 import { Card, Empty, ErrorBox, Meter, PageHeader, Q, Segmented, Skeleton, cx } from "../../components/ui";
+import { useWorkflowColors, wfLabel } from "../../lib/workflows";
 import { ago, count, money, pctAuto, times, unitMoney } from "../../lib/format";
 
 export const WINDOWS: { value: string; label: string }[] = [
@@ -109,8 +110,9 @@ function Tiles() {
 }
 
 function SpendCard() {
-  const [by, setBy] = useState<"department" | "workflow">("department");
-  const colors = useDeptColors();
+  const [by, setBy] = useState<"department" | "workflow">("workflow");
+  const deptColors = useDeptColors();
+  const wfColors = useWorkflowColors();
   const ts = useQuery({ queryKey: ["admin", "timeseries", by, DAYS], queryFn: () => org.timeseries(by, DAYS), refetchInterval: 60_000 });
   const total = ts.data?.totals.reduce((a, b) => a + b, 0);
   return (
@@ -122,14 +124,23 @@ function SpendCard() {
           value={by}
           onChange={setBy}
           options={[
-            { value: "department", label: "Department" },
-            { value: "workflow", label: "Workflow" },
+            { value: "workflow", label: "By workflow" },
+            { value: "department", label: "By department" },
           ]}
         />
       }
     >
       <Q q={ts} rows={8}>
-        {(d) => <StackedChart ts={d} kind="bar" compact height={280} colors={by === "department" ? colors : undefined} />}
+        {(d) => (
+          <StackedChart
+            ts={d}
+            kind="bar"
+            compact
+            height={280}
+            colors={by === "department" ? deptColors : wfColors}
+            labelOf={by === "workflow" ? wfLabel : undefined}
+          />
+        )}
       </Q>
     </Card>
   );

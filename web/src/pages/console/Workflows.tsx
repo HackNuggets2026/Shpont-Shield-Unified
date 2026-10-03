@@ -4,8 +4,10 @@ import { admin, type Workflow } from "../../api";
 import { ReasonDialog } from "../../components/Dialog";
 import { TierPill } from "../../components/pills";
 import { Card, Empty, PageHeader, Pill, Q, Stat, TableWrap, Toggle } from "../../components/ui";
-import { num, tokens, usd } from "../../lib/format";
-import { useOutputByWorkflow } from "../../lib/productivity";
+import { count, money, pctAuto, tokens, unitMoney, usd } from "../../lib/format";
+import { org } from "../../orgApi";
+import { DeptDot, Delta, useDeptColors } from "../../components/org";
+import { useWorkflowColors, WfName } from "../../lib/workflows";
 
 interface Pending {
   wf: Workflow;
@@ -58,22 +60,62 @@ function ScopeLine({ label, items, empty }: { label: string; items: string[]; em
   );
 }
 
+/** A 100% bar of a workflow's spend: its top three departments, the rest folded into gray; top three named underneath. */
+function DeptSplit({ rows: all, colors }: { rows: { department: string; usd: number }[]; colors: Record<string, string> }) {
+  const total = all.reduce((a, r) => a + r.usd, 0);
+  if (!total) return <span className="text-xs text-muted">—</span>;
+  const rest = all.slice(3).reduce((a, r) => a + r.usd, 0);
+  const rows = rest > 0 ? [...all.slice(0, 3), { department: "Other", usd: rest }] : all.slice(0, 3);
+  return (
+    <div title={all.map((r) => `${r.department}: ${money(r.usd)} (${pctAuto(r.usd / total)})`).join("\n")}>
+      <div className="flex h-2 w-full overflow-hidden rounded-full bg-ink/[0.07]">
+        {rows.map((r) => (
+          <span key={r.department} className="h-full border-r border-panel last:border-r-0" style={{ width: `${(r.usd / total) * 100}%`, background: colors[r.department] ?? "var(--s-other)" }}
+            title={`${r.department}: ${money(r.usd)}`} />
+        ))}
+      </div>
+      <div className="mt-1 truncate text-[11px] text-muted">
+        {rows
+          .filter((r) => r.department !== "Other")
+          .map((r) => `${r.department} ${pctAuto(r.usd / total)}`)
+          .join(" · ")}
+      </div>
+    </div>
+  );
+}
+
 export function Workflows() {
   const qc = useQueryClient();
   const menu = useQuery({ queryKey: ["admin", "menu"], queryFn: admin.menu, refetchInterval: 30_000 });
-  const spend = useQuery({ queryKey: ["admin", "timeseries", "workflow", 30], queryFn: () => admin.timeseries("workflow", 30) });
-  const output = useOutputByWorkflow(30);
+  const spend = useQuery({ queryKey: ["admin", "usage", "workflow", 30], queryFn: () => org.usage("workflow", 30) });
+  const spendPrev = useQuery({ queryKey: ["admin", "usage", "workflow", 60], queryFn: () => org.usage("workflow", 60) });
+  const byDept = useQuery({ queryKey: ["admin", "usage", "workflow,department", 30], queryFn: () => org.usage("workflow,department", 30), retry: 1 });
+  const value = useQuery({ queryKey: ["admin", "value", "workflow", 30], queryFn: () => org.value("workflow", 30) });
+  const colors = useDeptColors();
+  const wfColors = useWorkflowColors();
   const [pending, setPending] = useState<Pending | null>(null);
   const edit = useMutation({
     mutationFn: ({ wf, patch, reason }: Pending & { reason: string }) => admin.editWorkflow(wf.name, patch, reason),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["admin", "menu"] }),
   });
 
-  const spend30 = useMemo(() => {
-    const out: Record<string, number> = {};
-    for (const [k, v] of Object.entries(spend.data?.series ?? {})) out[k] = v.reduce((a, b) => a + b, 0);
+  const spend30 = useMemo(() => Object.fromEntries((spend.data ?? []).map((r) => [String(r.workflow ?? "(none)"), r.usd])), [spend.data]);
+  // The previous 30 days = the last 60 minus the last 30.
+  const prev30 = useMemo(
+    () => Object.fromEntries((spendPrev.data ?? []).map((r) => [String(r.workflow ?? "(none)"), r.usd - (spend30[String(r.workflow ?? "(none)")] ?? 0)])),
+    [spendPrev.data, spend30],
+  );
+  const output = useMemo(() => Object.fromEntries((value.data?.rows ?? []).map((r) => [r.key, r])), [value.data]);
+  const depts = useMemo(() => {
+    const out: Record<string, { department: string; usd: number }[]> = {};
+    for (const r of byDept.data ?? []) (out[String(r.workflow ?? "(none)")] ??= []).push({ department: String(r.department ?? "(none)"), usd: r.usd });
+    for (const k of Object.keys(out)) out[k].sort((a, b) => b.usd - a.usd);
     return out;
-  }, [spend.data]);
+  }, [byDept.data]);
+  const totalSpend = Object.values(spend30).reduce((a, b) => a + b, 0);
+  const totalRuns = (menu.data?.workflows ?? []).reduce((a, w) => a + w.measured.runs, 0);
+  const totalCommits = (value.data?.rows ?? []).reduce((a, r) => a + r.commits, 0);
+  const totalCc = (value.data?.rows ?? []).reduce((a, r) => a + r.claude_code_usd, 0);
 
   return (
     <div>
@@ -84,18 +126,39 @@ export function Workflows() {
       <Q q={menu} rows={8}>
         {(m) => (
           <div className="space-y-4">
-            <div className="grid grid-cols-2 gap-3 rounded-xl border border-line bg-panel p-4 sm:grid-cols-4">
+            <div className="grid grid-cols-2 gap-3 rounded-xl border border-line bg-panel p-4 sm:grid-cols-3 xl:grid-cols-6">
               <Stat label="Workflows" value={`${m.workflows.filter((w) => w.enabled).length} enabled / ${m.workflows.length}`} />
               <Stat label="Need approval" value={m.workflows.filter((w) => w.approval !== "none").length} />
-              <Stat label="Labels required" value={m.require_label ? "Yes, unlabeled calls blocked" : "No"} />
-              <Stat label="Unlabeled traffic" value={m.classify_unlabeled ? "Auto-classified" : "Left unlabeled"} />
+              <Stat label="Runs, 30 days" value={count(totalRuns)} />
+              <Stat label="Spend, 30 days" value={money(totalSpend)} />
+              <Stat label="Claude Code $ / commit" value={totalCommits ? `${unitMoney(totalCc / totalCommits)} · ${count(totalCommits)} commits` : "—"} />
+              <Stat
+                label="Labels"
+                value={`${m.require_label ? "required" : "optional"} · ${m.classify_unlabeled ? "unlabeled auto-classified" : "unlabeled kept"}`}
+              />
             </div>
-            <Card flush title="Menu" subtitle="Cost per run is measured over the last 30 days (p50 – p90)">
+            <Card
+              flush
+              title="Menu"
+              subtitle="Last 30 days · cost per run p50 – p90 · spend split by department"
+              actions={
+                <div className="flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-muted">
+                  {Object.entries(colors)
+                    .filter(([k]) => k !== "(none)" && k !== "Unassigned")
+                    .map(([k, c]) => (
+                      <span key={k} className="flex items-center gap-1">
+                        <DeptDot color={c} />
+                        {k}
+                      </span>
+                    ))}
+                </div>
+              }
+            >
               {m.workflows.length === 0 ? (
                 <Empty title="No workflows on the menu" hint="Add workflows under menu.workflows in policy.yaml." />
               ) : (
                 <TableWrap>
-                  <table className="tbl min-w-[1040px]">
+                  <table className="tbl min-w-[1180px]">
                     <thead>
                       <tr>
                         <th>Workflow</th>
@@ -103,8 +166,9 @@ export function Workflows() {
                         <th className="text-right">Cost / run</th>
                         <th className="text-right">Runs</th>
                         <th className="text-right">Spend 30d</th>
-                        <th className="text-right" title="All AI spend in the workflow over 30 days, divided by the commits Claude Code reported in it">
-                          AI $ / commit
+                        <th title="Share of the workflow's spend by its top three departments">Top departments</th>
+                        <th className="text-right" title="Claude Code spend in the workflow over 30 days, divided by the commits Claude Code reported in it">
+                          CC $ / commit
                         </th>
                         <th>Scope</th>
                         <th className="text-center">Approval</th>
@@ -114,8 +178,11 @@ export function Workflows() {
                     <tbody>
                       {m.workflows.map((w) => (
                         <tr key={w.name} className={w.enabled ? "" : "opacity-60"}>
-                          <td className="max-w-[220px]">
-                            <div className="font-medium text-ink">{w.name}</div>
+                          <td className="max-w-[240px]">
+                            <div className="flex items-center gap-2">
+                              <DeptDot color={wfColors[w.name]} />
+                              <WfName id={w.name} />
+                            </div>
                             <div className="truncate text-xs text-muted" title={w.description}>
                               {w.description || "—"}
                             </div>
@@ -124,16 +191,22 @@ export function Workflows() {
                             <TierPill tier={w.tier} />
                           </td>
                           <td className="text-right">{costRange(w.measured)}</td>
-                          <td className="tnum text-right">{num(w.measured.runs)}</td>
-                          <td className="tnum text-right">{usd(spend30[w.name] ?? 0)}</td>
+                          <td className="tnum text-right">{count(w.measured.runs)}</td>
+                          <td className="tnum whitespace-nowrap text-right">
+                            <div className="font-medium text-ink">{money(spend30[w.name] ?? 0)}</div>
+                            {spendPrev.data && <Delta cur={spend30[w.name] ?? 0} prev={prev30[w.name] ?? 0} className="text-[11px]" />}
+                          </td>
+                          <td className="min-w-[150px]">
+                            <DeptSplit rows={depts[w.name] ?? []} colors={colors} />
+                          </td>
                           <td className="tnum text-right">
                             {(() => {
-                              const o = output.data?.[w.name];
+                              const o = output[w.name];
                               if (!o?.commits) return <span className="text-muted">—</span>;
                               return (
-                                <span title={`${num(o.commits)} commits · ${num(o.prs)} PRs · ${num(o.linesAdded)} lines added`}>
-                                  {usd((spend30[w.name] ?? 0) / o.commits)}
-                                  <div className="text-[11px] text-muted">{num(o.commits)} commits</div>
+                                <span title={`${count(o.commits)} commits · ${count(o.pull_requests)} PRs · ${count(o.lines_added)} lines added`}>
+                                  {unitMoney(o.claude_code_usd / o.commits)}
+                                  <div className="text-[11px] text-muted">{count(o.commits)} commits</div>
                                 </span>
                               );
                             })()}
