@@ -11,7 +11,7 @@ from fastapi.testclient import TestClient
 
 from controllayer.gateway.app import create_app
 
-from .conftest import ADMIN, KEYS, chat
+from .conftest import ADMIN, KEYS, chat, mcp
 
 TODAY = lambda: time.strftime("%Y-%m-%d", time.gmtime())  # noqa: E731
 
@@ -204,3 +204,11 @@ def test_clearing_restrictions_keeps_live_grants_and_approvals(client):
     pp = client.app.state.store.policy.principal("carol")
     assert (pp.status, pp.budget_scale, pp.reason) == ("active", 1.0, "")
     assert [g.resource for g in pp.grants] == ["prod_db"] and pp.approved_workflows == ["load_test"]
+
+
+def test_a_grant_for_the_second_action_of_a_resource_covers_its_tools(make_client):
+    c = make_client(mutate=lambda d: d["catalog"]["prod_db"].update(actions=["read", "export"]))
+    r = c.post("/admin/principals/alice/grants", json={"resource": "prod_db", "actions": ["export"], "reason": "x"})
+    assert r.status_code == 200
+    out = mcp(c, "tools/call", {"name": "query_prod_db", "arguments": {"sql": "select 1"}})
+    assert "result" in out, out  # used to be refused: only the first action ("read") was ever checked

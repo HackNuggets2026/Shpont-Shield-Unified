@@ -62,7 +62,7 @@ def resolve(policy: Policy, ref: str) -> str | None:
 def authorize(
     policy: Policy,
     principal: Principal,
-    action: str,
+    action: str | None,
     resource: str,
     workflow: str | None = None,
     ledger: BudgetLedger | None = None,
@@ -70,7 +70,7 @@ def authorize(
 ) -> Decision:
     """May `principal` perform `action` on `resource` (a catalog name) within `workflow`?"""
     r = policy.catalog[resource]
-    d = Decision(True, resource, r.urn, r.class_, action, "allowed")
+    d = Decision(True, resource, r.urn, r.class_, action or "use", "allowed")
 
     def deny(category: str, reason: str) -> Decision:
         d.allow, d.category, d.reason = False, category, reason
@@ -79,7 +79,7 @@ def authorize(
     pp = policy.principal(principal.id)
     if pp.status == "revoked":
         return deny("revoked", f"access revoked: {pp.reason or 'by an administrator'}")
-    if r.actions and action not in r.actions and action != "use":
+    if r.actions and action is not None and action not in r.actions and action != "use":
         return deny("unknown_action", f"{resource} supports {r.actions}, not {action!r}")
     wf = policy.menu.workflows.get(workflow or "")
     if wf is not None:
@@ -138,8 +138,9 @@ def check_grants(ctx: Context, policy: Policy) -> list[Finding]:
     declared = ctx.workflow if ctx.workflow_source == "declared" else None
     out = []
     for name in policy.grant_resources(ctx.tool):
-        r = policy.catalog[name]
-        d = authorize(policy, ctx.principal, r.actions[0] if r.actions else "use", name, declared)
+        # Tools are not mapped to actions, so any live grant on the resource covers its tools (as in
+        # `covering_grant`, which lifts the role and irreversible limits for the same call).
+        d = authorize(policy, ctx.principal, None, name, declared)
         if not d.allow:
             out.append(_block("access_grant", d.category, d.reason))
     return out
