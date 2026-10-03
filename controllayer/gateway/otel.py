@@ -14,6 +14,7 @@ from __future__ import annotations
 import hmac
 import json
 import logging
+import time
 import zlib
 from collections.abc import Callable
 from typing import Any
@@ -25,6 +26,7 @@ from .. import claude_code
 from ..config import PolicyStore
 from ..controls.access import authenticate
 from ..engine import ControlLayer
+from ..usage import UsageStore
 
 log = logging.getLogger(__name__)
 
@@ -51,8 +53,27 @@ async def _body(request: Request) -> bytes:
     return bytes(raw)
 
 
+class Baselines:
+    """Last values of cumulative series, per sender, kept in the usage store.
+
+    Per sender: an employee key cannot shift the baselines of anyone else's series by naming their session
+    or email. In the store: a restart must not count every cumulative series again from zero."""
+
+    def __init__(self, usage: UsageStore, sender: str):
+        self.usage, self.sender = usage, sender
+
+    def _key(self, key: tuple) -> str:
+        return json.dumps([self.sender, *key], default=str)
+
+    def get(self, key: tuple) -> float | None:
+        return self.usage.baseline(self._key(key))
+
+    def __setitem__(self, key: tuple, value: float) -> None:
+        self.usage.set_baseline(self._key(key), value)
+
+
 def register(app: FastAPI, store: PolicyStore, layer: ControlLayer, api_key: Callable[[Request], str | None]) -> None:
-    cumulative: dict[tuple, float] = {}
+    layer.usage.prune_baselines(time.time() - 30 * 86400)  # series idle for a month have ended
 
     async def receive(request: Request) -> tuple[dict[str, Any] | None, JSONResponse | None, Any]:
         p = store.policy
@@ -109,7 +130,8 @@ def register(app: FastAPI, store: PolicyStore, layer: ControlLayer, api_key: Cal
         if error:
             return error
         try:
-            events = claude_code.metric_events(body, cumulative)
+            sender = f"key:{who.id}" if who is not None else "collector"
+            events = claude_code.metric_events(body, Baselines(layer.usage, sender))
         except (AttributeError, TypeError, ValueError, KeyError) as e:
             return JSONResponse({"error": f"not OTLP metrics JSON: {type(e).__name__}"}, status_code=400)
         ingest(events, who)

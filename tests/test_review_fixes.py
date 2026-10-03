@@ -98,3 +98,33 @@ def test_otlp_gzip_bomb_and_broken_gzip_are_refused(client):
     assert client.post("/v1/logs", content=b"\x1f\x8bnot gzip", headers=KEYS["carol"]).status_code == 400
     ok = gzip.compress(json.dumps({"resourceLogs": []}).encode())
     assert client.post("/v1/logs", content=ok, headers={**KEYS["carol"], "content-encoding": "gzip"}).status_code == 200
+
+
+def _active_time(value: float, session: str = "s-1") -> dict:
+    dp = {
+        "attributes": [{"key": "session.id", "value": {"stringValue": session}}],
+        "timeUnixNano": str(int(time.time() * 1e9)),
+        "asDouble": value,
+    }
+    m = {"name": "claude_code.active_time.total", "sum": {"aggregationTemporality": 2, "dataPoints": [dp]}}
+    return {"resourceMetrics": [{"scopeMetrics": [{"metrics": [m]}]}]}
+
+
+def _active(c, who: str) -> list[float]:
+    rows = c.app.state.layer.usage.events(kind="metric.active_time", principal=who)
+    return sorted(e["detail"]["value"] for e in rows)
+
+
+def test_cumulative_metrics_are_not_counted_again_after_a_restart(make_client):
+    c = make_client()
+    c.post("/v1/metrics", json=_active_time(50), headers=KEYS["alice"])
+    c2 = make_client()  # the gateway restarts on the same data
+    c2.post("/v1/metrics", json=_active_time(80), headers=KEYS["alice"])
+    assert _active(c2, "alice") == [30, 50]
+
+
+def test_one_employee_cannot_shift_another_employees_cumulative_baseline(client):
+    client.post("/v1/metrics", json=_active_time(50), headers=KEYS["alice"])
+    client.post("/v1/metrics", json=_active_time(10_000), headers=KEYS["carol"])  # same session id, her key
+    client.post("/v1/metrics", json=_active_time(80), headers=KEYS["alice"])
+    assert _active(client, "alice") == [30, 50]

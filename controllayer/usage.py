@@ -46,6 +46,9 @@ CREATE TABLE IF NOT EXISTS events (
 CREATE INDEX IF NOT EXISTS events_ts ON events(ts);
 CREATE INDEX IF NOT EXISTS events_who ON events(principal, ts);
 CREATE INDEX IF NOT EXISTS events_req ON events(request_id);
+CREATE TABLE IF NOT EXISTS metric_baselines (
+    key TEXT PRIMARY KEY, value REAL, ts REAL
+);
 CREATE TABLE IF NOT EXISTS admin_actions (
     ts REAL, actor TEXT, action TEXT, target TEXT, reason TEXT, detail TEXT
 );
@@ -474,6 +477,18 @@ class UsageStore:
         for o in out.values():
             o["adherence"] = round((o["allow"] + o["log"]) / o["total"], 4) if o["total"] else None
         return sorted(out.values(), key=lambda o: o["key"])
+
+    # ---- cumulative telemetry baselines (OTLP cumulative sums are differenced against these) ----
+
+    def baseline(self, key: str) -> float | None:
+        rows = self._q("SELECT value FROM metric_baselines WHERE key=?", (key,))
+        return rows[0]["value"] if rows else None
+
+    def set_baseline(self, key: str, value: float, ts: float | None = None) -> None:
+        self._x("INSERT OR REPLACE INTO metric_baselines VALUES (?,?,?)", (key, value, ts or time.time()))
+
+    def prune_baselines(self, before: float) -> None:
+        self._x("DELETE FROM metric_baselines WHERE ts<?", (before,))
 
     # ---- admin actions (who changed what, and who looked at whose content) -------
 
