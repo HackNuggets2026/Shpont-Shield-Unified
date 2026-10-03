@@ -1,0 +1,426 @@
+// Security console shell: router, data access, Primer building blocks and SVG charts.
+// Views live in views/*.js and register themselves with ACL.register (see docs/console-contract.md).
+(function () {
+  "use strict";
+  const ACL = (window.ACL = { views: {}, order: [] });
+  const TOKEN = new URLSearchParams(location.search).get("token") || "";
+
+  // ---- data -----------------------------------------------------------------------------
+
+  async function call(path, opts = {}) {
+    const headers = { "content-type": "application/json" };
+    if (TOKEN) headers["x-admin-token"] = TOKEN;
+    const r = await fetch(path, { method: opts.method || "GET", body: opts.body, headers });
+    const body = await r.json().catch(() => ({}));
+    if (!r.ok && !opts.allowError) throw new Error(body.error?.message || body.error || body.detail?.[0]?.msg || "HTTP " + r.status);
+    return { status: r.status, body };
+  }
+  ACL.get = async (path) => (await call(path)).body;
+  ACL.send = (path, method, data, allowError) => call(path, { method, body: JSON.stringify(data || {}), allowError });
+  // A link to an admin download or JSON: carries the token only when the console was opened with one.
+  ACL.withToken = (url) => (TOKEN ? url + (url.includes("?") ? "&" : "?") + "token=" + encodeURIComponent(TOKEN) : url);
+
+  // ---- URL state ------------------------------------------------------------------------
+  // The URL is the state: ?view=people&team=sales, ?person=alice. `period` and `token` survive navigation.
+
+  const KEEP = ["token", "period", "ui"];
+  ACL.params = () => Object.fromEntries(new URLSearchParams(location.search));
+  ACL.href = (patch, reset = true) => {
+    const cur = ACL.params();
+    const base = reset ? Object.fromEntries(KEEP.filter((k) => cur[k]).map((k) => [k, cur[k]])) : cur;
+    const next = { ...base, ...patch };
+    const q = Object.entries(next).filter(([, v]) => v !== null && v !== undefined && v !== "").map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`);
+    return location.pathname + (q.length ? "?" + q.join("&") : "");
+  };
+  ACL.go = (patch, { reset = false, replace = false } = {}) => {
+    history[replace ? "replaceState" : "pushState"](null, "", ACL.href(patch, reset));
+    return render(true);
+  };
+  ACL.period = () => Math.min(31, Math.max(1, Number(ACL.params().period) || 30));
+
+  // ---- formatting -----------------------------------------------------------------------
+
+  const h = (ACL.h = {});
+  h.esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+  h.usd = (x) => {
+    const v = Number(x || 0), a = Math.abs(v);
+    if (a >= 1e6) return "$" + (v / 1e6).toFixed(2) + "M";
+    if (a >= 1e4) return "$" + (v / 1e3).toFixed(1) + "k";
+    if (a >= 100) return "$" + Math.round(v).toLocaleString("en-US");
+    return "$" + v.toFixed(a >= 1 || a === 0 ? 2 : a >= 0.01 ? 3 : 4);
+  };
+  h.num = (x) => {
+    const v = Number(x || 0);
+    return v >= 1e6 ? (v / 1e6).toFixed(1) + "M" : v >= 1e4 ? (v / 1e3).toFixed(1) + "k" : Math.round(v).toLocaleString("en-US");
+  };
+  h.pct = (f) => (f == null ? "-" : (100 * f).toFixed(f < 0.1 ? 1 : 0) + "%");
+  h.dur = (hours) => (hours % 24 ? hours + "h" : hours / 24 + "d");
+  h.ago = (ts) => {
+    if (!ts) return h.muted("never");
+    const s = ts - Date.now() / 1000, a = Math.abs(s);
+    const v = a < 60 ? Math.round(a) + "s" : a < 3600 ? Math.round(a / 60) + "m" : a < 86400 ? Math.round(a / 3600) + "h" : Math.round(a / 86400) + "d";
+    return `<span class="no-wrap" title="${h.esc(new Date(ts * 1000).toISOString().replace("T", " ").slice(0, 16))} UTC">${s > 0 ? "in " + v : v + " ago"}</span>`;
+  };
+  h.periodLabel = (days) => (days === 1 ? "today" : `last ${days} days`);
+
+  // ---- Primer building blocks -----------------------------------------------------------
+
+  const TONE = { allow: "ok", log: "neutral", warn: "warn", redact: "info", block: "bad",
+    normal: "ok", watch: "warn", restricted: "bad", low: "ok", medium: "warn", high: "bad" };
+  const LABEL = { ok: "Label--success", warn: "Label--attention", bad: "Label--danger", info: "Label--accent", neutral: "Label--secondary" };
+  const FLASH = { ok: "flash-success", warn: "flash-warn", bad: "flash-error" };
+  h.tone = (x) => TONE[x] || "neutral";
+  h.muted = (html) => `<span class="color-fg-muted f6">${html}</span>`;
+  h.empty = (text) => `<div class="color-fg-muted f6 py-2">${h.esc(text)}</div>`;
+  h.badge = (t, text, title) => `<span class="Label ${LABEL[t] || LABEL.neutral}"${title ? ` title="${h.esc(title)}"` : ""}>${h.esc(text)}</span>`;
+  h.note = (html, t) => `<div class="flash ${FLASH[t] || ""} mb-3">${html}</div>`;
+  h.button = (label, attrs, kind) => `<button type="button" class="btn btn-sm ${kind ? "btn-" + kind : ""}" ${attrs}>${h.esc(label)}</button>`;
+  h.link = (label, href, cls = "Link--primary") => `<a class="${cls}" href="${h.esc(href)}" data-nav>${h.esc(label)}</a>`;
+  // A person's name linking to their page.
+  h.person = (id, name) => `<a class="Link--primary text-bold" href="${h.esc(ACL.href({ person: id }))}" data-nav>${h.esc(name || id)}</a>`;
+  h.card = (title, body, tools, cls = "") => `<section class="Box acl-card ${cls}">
+      <div class="Box-header py-2 d-flex flex-items-center flex-wrap"><h3 class="Box-title flex-auto f5">${h.esc(title)}</h3><div class="acl-tools">${tools || ""}</div></div>
+      <div class="Box-body p-3">${body}</div></section>`;
+  // cols: [{label, num?, sort?: key}], rows: [[cell html...]], opts: {sort, rowAttrs: (i) => attrs}
+  h.table = (cols, rows, opts = {}) => `<div class="acl-scroll"><table class="acl-table">
+      <thead><tr>${cols.map((c) => {
+        const cls = c.num ? "acl-num" : "";
+        if (!c.sort) return `<th class="${cls}">${h.esc(c.label)}</th>`;
+        const cur = (opts.sort || "").replace(/^-/, ""), desc = (opts.sort || "").startsWith("-");
+        const next = cur === c.sort && desc ? c.sort : "-" + c.sort;
+        const arrow = cur === c.sort ? (desc ? " ↓" : " ↑") : "";
+        return `<th class="${cls}" aria-sort="${cur === c.sort ? (desc ? "descending" : "ascending") : "none"}"><a class="Link--secondary" href="${h.esc(ACL.href({ sort: next, page: null }, false))}" data-nav>${h.esc(c.label)}${arrow}</a></th>`;
+      }).join("")}</tr></thead>
+      <tbody>${rows.map((r, i) => `<tr ${opts.rowAttrs ? opts.rowAttrs(i) : ""}>${r.map((cell, j) => `<td class="${cols[j]?.num ? "acl-num" : ""}">${cell}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`;
+  // One click picks an option: [{label, active, attrs}].
+  h.segmented = (items) => `<div class="BtnGroup" role="group">${items.map((o) =>
+    `<button type="button" class="btn btn-sm BtnGroup-item${o.active ? " btn-primary" : ""}" aria-pressed="${!!o.active}" ${o.attrs}${o.title ? ` title="${h.esc(o.title)}"` : ""}>${h.esc(o.label)}</button>`).join("")}</div>`;
+  // Segmented links that change URL params: [{label, value}] for param `key`.
+  h.navSegmented = (key, options, current) => `<div class="BtnGroup" role="group">${options.map((o) =>
+    `<a class="btn btn-sm BtnGroup-item${String(o.value) === String(current) ? " btn-primary" : ""}" href="${h.esc(ACL.href({ [key]: o.value, page: null }, false))}" data-nav>${h.esc(o.label)}</a>`).join("")}</div>`;
+  // A select that sets URL param `key`.
+  h.navSelect = (key, options, current, label) => `<select class="form-select select-sm" data-param="${h.esc(key)}" aria-label="${h.esc(label || key)}">${options.map((o) =>
+    `<option value="${h.esc(o.value)}"${String(o.value) === String(current ?? "") ? " selected" : ""}>${h.esc(o.label)}</option>`).join("")}</select>`;
+  // A compact on/off pill: green "on", grey "off"; disabled entries are greyed and not clickable.
+  h.pill = (on, label, attrs, opts = {}) => `<button type="button" class="acl-pill ${on ? "acl-on" : "acl-off"}${opts.disabled ? " acl-disabled" : ""}" aria-pressed="${!!on}"${opts.disabled ? " disabled" : ""} ${attrs || ""}${opts.title ? ` title="${h.esc(opts.title)}"` : ""}>${h.esc(label)}</button>`;
+  // A meter of used / budget: blue under 80%, attention to 100%, danger over.
+  h.meter = (f, title) => {
+    if (f == null) return h.muted("no cap");
+    const cls = f >= 1 ? "acl-m-over" : f >= 0.8 ? "acl-m-near" : "acl-m-ok";
+    return `<span class="acl-meter ${cls}" title="${h.esc(title || h.pct(f) + " of budget")}"><span style="width:${Math.min(100, 100 * f).toFixed(1)}%"></span></span>`;
+  };
+  // Stat tiles: [{label, value, sub?, tone?, href?, meter?}].
+  h.tiles = (items) => `<div class="acl-tiles">${items.map((k) => {
+    const inner = `<div class="acl-tile-label">${h.esc(k.label)}</div>
+      <div class="acl-tile-value ${k.tone ? "acl-t-" + k.tone : ""}">${h.esc(k.value)}</div>
+      ${k.meter !== undefined ? h.meter(k.meter) : ""}${k.sub ? `<div class="acl-tile-sub">${k.sub}</div>` : ""}`;
+    return k.href ? `<a class="acl-tile acl-tile-link" href="${h.esc(k.href)}" data-nav>${inner}</a>` : `<div class="acl-tile">${inner}</div>`;
+  }).join("")}</div>`;
+  h.pager = (r) => {
+    const from = r.total ? (r.page - 1) * r.per_page + 1 : 0, to = Math.min(r.total, r.page * r.per_page);
+    const nav = (label, page, off) => off ? `<span class="btn btn-sm" aria-disabled="true">${label}</span>` : `<a class="btn btn-sm" href="${h.esc(ACL.href({ page }, false))}" data-nav>${label}</a>`;
+    return `<div class="d-flex flex-items-center flex-justify-between mt-2 f6">
+      <span class="color-fg-muted">${from.toLocaleString("en-US")}-${to.toLocaleString("en-US")} of ${r.total.toLocaleString("en-US")}</span>
+      <span class="acl-tools">${nav("Previous", r.page - 1, r.page <= 1)}<span class="color-fg-muted">page ${r.page} of ${r.pages}</span>${nav("Next", r.page + 1, r.page >= r.pages)}</span></div>`;
+  };
+
+  // ---- charts (inline SVG; palette in core.css: --viz-1.., status colours) ----------------
+  // Every mark carries data-tip (shown by the shared tooltip) and, when it drills down, sits in an
+  // <a data-nav href>. Bars are at most 24px thick with a 4px rounded data end and 2px gaps.
+
+  const c = (ACL.charts = {});
+  const W = 640;
+  const R = 4;
+  const ticks = (max, n = 4) => {
+    if (max <= 0) return [0];
+    const raw = max / n, mag = 10 ** Math.floor(Math.log10(raw));
+    const step = [1, 2, 2.5, 5, 10].map((m) => m * mag).find((s) => s >= raw);
+    const out = [];
+    for (let v = 0; v <= max + step * 0.001; v += step) out.push(v);
+    if (out[out.length - 1] < max) out.push(out[out.length - 1] + step);
+    return out;
+  };
+  // Bar path rounded at the data end only (top for columns, right for horizontal bars).
+  const colPath = (x, y, w, hgt, r = R) => {
+    if (hgt <= 0) return "";
+    r = Math.min(r, w / 2, hgt);
+    return `M${x},${y + hgt}V${y + r}Q${x},${y} ${x + r},${y}H${x + w - r}Q${x + w},${y} ${x + w},${y + r}V${y + hgt}Z`;
+  };
+  const barPath = (x, y, w, hgt, r = R) => {
+    if (w <= 0) return "";
+    r = Math.min(r, hgt / 2, w);
+    return `M${x},${y}H${x + w - r}Q${x + w},${y} ${x + w},${y + r}V${y + hgt - r}Q${x + w},${y + hgt} ${x + w - r},${y + hgt}H${x}Z`;
+  };
+  const wrap = (inner, href, tip) => {
+    const t = tip ? ` data-tip="${h.esc(tip)}"` : "";
+    return href ? `<a href="${h.esc(href)}" data-nav${t}>${inner}</a>` : `<g tabindex="0"${t}>${inner}</g>`;
+  };
+  c.legend = (series) => `<div class="acl-legend">${series.map((s) =>
+    `<span><i class="acl-swatch" style="background:${s.color}"></i>${h.esc(s.label)}${s.value != null ? ` <b>${h.esc(s.value)}</b>` : ""}</span>`).join("")}</div>`;
+
+  // Stacked columns over time. opts: {labels: [str], series: [{label, color, values}], fmt, ref: {value, label},
+  // href: (i) => url, height}
+  c.columns = (opts) => {
+    const H = opts.height || 180, L = 48, B = 22, T = 8, n = opts.labels.length;
+    const totals = opts.labels.map((_, i) => opts.series.reduce((a, s) => a + (s.values[i] || 0), 0));
+    const yt = ticks(Math.max(...totals, opts.ref?.value || 0));
+    const max = yt[yt.length - 1] || 1, ph = H - B - T, band = (W - L) / n;
+    const bw = Math.min(24, Math.max(2, band - 2)), y = (v) => T + ph - (v / max) * ph;
+    const fmt = opts.fmt || h.usd;
+    let out = yt.map((v) => `<line class="acl-grid" x1="${L}" x2="${W}" y1="${y(v)}" y2="${y(v)}"/><text class="acl-axis" x="${L - 6}" y="${y(v) + 4}" text-anchor="end">${h.esc(fmt(v))}</text>`).join("");
+    const every = Math.ceil(n / 8);
+    opts.labels.forEach((lab, i) => {
+      const x = L + i * band + (band - bw) / 2;
+      let acc = 0, marks = "";
+      opts.series.forEach((s, k) => {
+        const v = s.values[i] || 0;
+        if (v <= 0) return;
+        const top = y(acc + v), bottom = y(acc) - (acc > 0 ? 2 : 0);
+        const last = opts.series.slice(k + 1).every((s2) => !(s2.values[i] > 0));
+        marks += last ? `<path d="${colPath(x, top, bw, bottom - top)}" fill="${s.color}"/>` : `<rect x="${x}" y="${top}" width="${bw}" height="${Math.max(0, bottom - top)}" fill="${s.color}"/>`;
+        acc += v;
+      });
+      const tip = `${lab}: ${fmt(totals[i])}` + opts.series.map((s) => `\n${s.label}: ${fmt(s.values[i] || 0)}`).join("");
+      out += wrap(`<rect class="acl-hit" x="${L + i * band}" y="${T}" width="${band}" height="${ph}"/>${marks}`, opts.href?.(i), tip);
+      if (i % every === 0 || i === n - 1) out += `<text class="acl-axis" x="${x + bw / 2}" y="${H - 6}" text-anchor="middle">${h.esc(lab)}</text>`;
+    });
+    out += `<line class="acl-base" x1="${L}" x2="${W}" y1="${y(0)}" y2="${y(0)}"/>`;
+    if (opts.ref && opts.ref.value > 0) {
+      out += `<line class="acl-ref" x1="${L}" x2="${W}" y1="${y(opts.ref.value)}" y2="${y(opts.ref.value)}"/><text class="acl-axis acl-ref-label" x="${W - 2}" y="${y(opts.ref.value) - 4}" text-anchor="end">${h.esc(opts.ref.label)}</text>`;
+    }
+    return `<svg class="acl-chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="${h.esc(opts.title || "chart")}">${out}</svg>` + (opts.series.length > 1 ? c.legend(opts.series) : "");
+  };
+
+  // Ranked horizontal bars. rows: [{label, value, color?, href?, sub?}], opts: {fmt, max}
+  c.hbars = (rows, opts = {}) => {
+    const fmt = opts.fmt || h.usd, max = opts.max || Math.max(...rows.map((r) => r.value), 0) || 1;
+    return `<div class="acl-hbars">${rows.map((r) => {
+      const w = Math.max(0.5, (100 * r.value) / max);
+      const bar = `<span class="acl-hbar-label" title="${h.esc(r.label)}">${h.esc(r.label)}</span>
+        <span class="acl-hbar-track"><span class="acl-hbar" style="width:${w.toFixed(2)}%;background:${r.color || "var(--viz-1)"}"></span></span>
+        <span class="acl-hbar-value">${h.esc(fmt(r.value))}${r.sub ? ` <span class="color-fg-muted">${h.esc(r.sub)}</span>` : ""}</span>`;
+      const tip = `${r.label}: ${fmt(r.value)}${r.sub ? " (" + r.sub + ")" : ""}`;
+      return r.href ? `<a class="acl-hbar-row" href="${h.esc(r.href)}" data-nav data-tip="${h.esc(tip)}">${bar}</a>` : `<div class="acl-hbar-row" tabindex="0" data-tip="${h.esc(tip)}">${bar}</div>`;
+    }).join("")}</div>`;
+  };
+
+  // Histogram of counts with vertical markers. bins: [{label, count, href?, tip?}], markers: [{at: fractional bin index, label}]
+  c.histogram = (bins, markers = [], opts = {}) => {
+    const H = opts.height || 150, L = 34, B = 22, T = 16, n = bins.length || 1;
+    const yt = ticks(Math.max(...bins.map((b) => b.count), 1), 3), max = yt[yt.length - 1];
+    const ph = H - B - T, band = (W - L) / n, bw = Math.min(48, band - 2), y = (v) => T + ph - (v / max) * ph;
+    let out = yt.map((v) => `<line class="acl-grid" x1="${L}" x2="${W}" y1="${y(v)}" y2="${y(v)}"/><text class="acl-axis" x="${L - 6}" y="${y(v) + 4}" text-anchor="end">${h.num(v)}</text>`).join("");
+    bins.forEach((b, i) => {
+      const x = L + i * band + (band - bw) / 2;
+      out += wrap(`<rect class="acl-hit" x="${L + i * band}" y="${T}" width="${band}" height="${ph}"/><path d="${colPath(x, y(b.count), bw, y(0) - y(b.count))}" fill="var(--viz-1)"/>`, b.href, b.tip || `${b.label}: ${b.count}`);
+      out += `<text class="acl-axis" x="${L + i * band}" y="${H - 6}" text-anchor="middle">${h.esc(b.edge ?? "")}</text>`;
+    });
+    if (bins.length && bins[bins.length - 1].end != null) out += `<text class="acl-axis" x="${W - 2}" y="${H - 6}" text-anchor="end">${h.esc(bins[bins.length - 1].end)}</text>`;
+    out += `<line class="acl-base" x1="${L}" x2="${W}" y1="${y(0)}" y2="${y(0)}"/>`;
+    markers.forEach((m) => {
+      const x = L + m.at * band;
+      out += `<line class="acl-marker" x1="${x}" x2="${x}" y1="${T - 4}" y2="${y(0)}"/><text class="acl-axis acl-marker-label" x="${x + 3}" y="${T - 6}">${h.esc(m.label)}</text>`;
+    });
+    return `<svg class="acl-chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="${h.esc(opts.title || "histogram")}">${out}</svg>`;
+  };
+
+  // A 100% bar split into labelled parts: [{label, value, color, href?}]. Labels always show (count + name).
+  c.split = (parts) => {
+    const total = parts.reduce((a, p) => a + p.value, 0) || 1;
+    const segs = parts.filter((p) => p.value > 0).map((p) => {
+      const tip = `${p.label}: ${p.value.toLocaleString("en-US")} (${h.pct(p.value / total)})`;
+      const seg = `<span class="acl-split-seg" style="flex:${p.value} 1 0;background:${p.color}"></span>`;
+      return p.href ? `<a class="acl-split-a" style="flex:${p.value} 1 0" href="${h.esc(p.href)}" data-nav data-tip="${h.esc(tip)}">${seg}</a>` : `<span class="acl-split-a" style="flex:${p.value} 1 0" tabindex="0" data-tip="${h.esc(tip)}">${seg}</span>`;
+    }).join("");
+    const keys = parts.map((p) => {
+      const inner = `<i class="acl-swatch" style="background:${p.color}"></i>${h.esc(p.label)} <b>${p.value.toLocaleString("en-US")}</b>`;
+      return p.href ? `<a class="Link--secondary" href="${h.esc(p.href)}" data-nav>${inner}</a>` : `<span>${inner}</span>`;
+    }).join("");
+    return `<div class="acl-split">${segs}</div><div class="acl-legend">${keys}</div>`;
+  };
+
+  // A single-series line over time with optional horizontal thresholds. opts: {labels, values, color, thresholds: [{value, label}], fmt, height}
+  c.line = (opts) => {
+    const H = opts.height || 120, L = 34, B = 20, T = 10, n = opts.labels.length;
+    const yt = ticks(Math.max(...opts.values, ...(opts.thresholds || []).map((t) => t.value), 1), 3), max = yt[yt.length - 1];
+    const ph = H - B - T, step = n > 1 ? (W - L - 8) / (n - 1) : 0, x = (i) => L + 4 + i * step, y = (v) => T + ph - (v / max) * ph;
+    const fmt = opts.fmt || ((v) => h.num(v));
+    let out = yt.map((v) => `<line class="acl-grid" x1="${L}" x2="${W}" y1="${y(v)}" y2="${y(v)}"/><text class="acl-axis" x="${L - 6}" y="${y(v) + 4}" text-anchor="end">${h.esc(fmt(v))}</text>`).join("");
+    (opts.thresholds || []).forEach((t) => {
+      out += `<line class="acl-ref" x1="${L}" x2="${W}" y1="${y(t.value)}" y2="${y(t.value)}"/><text class="acl-axis acl-ref-label" x="${W - 2}" y="${y(t.value) - 3}" text-anchor="end">${h.esc(t.label)}</text>`;
+    });
+    const pts = opts.values.map((v, i) => `${x(i)},${y(v)}`).join(" ");
+    out += `<polyline points="${pts}" fill="none" stroke="${opts.color || "var(--viz-1)"}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`;
+    const last = n - 1;
+    if (n) out += `<circle cx="${x(last)}" cy="${y(opts.values[last])}" r="4" fill="${opts.color || "var(--viz-1)"}" stroke="var(--viz-surface)" stroke-width="2"/>`;
+    opts.values.forEach((v, i) => {
+      out += `<rect class="acl-hit" tabindex="0" x="${x(i) - step / 2}" y="${T}" width="${Math.max(step, 6)}" height="${ph}" data-tip="${h.esc(opts.labels[i] + ": " + fmt(v))}"/>`;
+    });
+    const every = Math.ceil(n / 6);
+    opts.labels.forEach((lab, i) => {
+      if (i % every === 0 || i === last) out += `<text class="acl-axis" x="${x(i)}" y="${H - 5}" text-anchor="${i === last ? "end" : "middle"}">${h.esc(lab)}</text>`;
+    });
+    return `<svg class="acl-chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="${h.esc(opts.title || "line chart")}">${out}</svg>`;
+  };
+
+  c.PALETTE = ["var(--viz-1)", "var(--viz-2)", "var(--viz-3)", "var(--viz-4)", "var(--viz-5)"];
+  c.OTHER = "var(--viz-other)";
+  c.KIND = { model: "var(--viz-1)", service: "var(--viz-2)" };
+  c.STATUS = { normal: "var(--status-good)", watch: "var(--status-warning)", restricted: "var(--status-critical)",
+    under: "var(--viz-seq-1)", half: "var(--viz-seq-2)", near: "var(--status-warning)", over: "var(--status-critical)", nocap: "var(--viz-other)" };
+  // Axis labels for a series: days as "Oct 3", hours as "14:00" (UTC).
+  c.bucketLabels = (series, n) => Array.from({ length: n }, (_, i) => {
+    const d = new Date((series.start + i * (series.unit === "hour" ? 3600 : 86400)) * 1000);
+    return series.unit === "hour" ? String(d.getUTCHours()).padStart(2, "0") + ":00" : d.toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" });
+  });
+
+  // ---- tooltip ----------------------------------------------------------------------------
+
+  let tip = null;
+  function showTip(el, ev) {
+    if (!tip) {
+      tip = document.createElement("div");
+      tip.className = "acl-tip";
+      document.body.appendChild(tip);
+    }
+    tip.textContent = "";
+    el.getAttribute("data-tip").split("\n").forEach((line, i) => {
+      const row = document.createElement("div");
+      if (i === 0) row.className = "acl-tip-head";
+      row.textContent = line;
+      tip.appendChild(row);
+    });
+    const r = el.getBoundingClientRect();
+    const x = ev && ev.clientX != null ? ev.clientX : r.left + r.width / 2, y = ev && ev.clientY != null ? ev.clientY : r.top;
+    tip.style.left = Math.min(window.innerWidth - 220, x + 12) + "px";
+    tip.style.top = y + 14 + "px";
+    tip.hidden = false;
+  }
+  const hideTip = () => { if (tip) tip.hidden = true; };
+
+  // ---- shell and router ---------------------------------------------------------------------
+
+  ACL.register = (view) => {
+    ACL.views[view.id] = view;
+    ACL.order = Object.values(ACL.views).sort((a, b) => (a.order || 0) - (b.order || 0));
+  };
+  ACL.currentView = () => {
+    const p = ACL.params();
+    if (p.person && ACL.views.person) return ACL.views.person;
+    return ACL.views[p.view] || ACL.views.overview || ACL.order[0];
+  };
+  ACL.state = { error: "", summary: null };
+
+  const PERIODS = [{ label: "Today", value: 1 }, { label: "7 days", value: 7 }, { label: "30 days", value: 30 }];
+  function shell(view, body) {
+    const s = ACL.state.summary || {};
+    const pol = s.policy || {};
+    const tabs = ACL.order.filter((v) => v.tab && !v.hidden).map((v) =>
+      `<a class="UnderlineNav-item" href="${h.esc(ACL.href({ view: v.id }))}" data-nav${v === view || (view.parent === v.id) ? ' aria-current="page"' : ""}>${h.esc(v.title)}</a>`).join("");
+    return `<header class="Header py-2 px-3">
+        <div class="Header-item"><a class="Header-link f4 text-bold" href="${h.esc(ACL.href({}))}" data-nav>AI Control Layer</a></div>
+        <div class="Header-item Header-item--full f6 color-fg-on-emphasis acl-meta">${pol.name ? `${h.esc(pol.name)} · policy ${h.esc(pol.version)}` : ""}</div>
+        ${s.demo_mode ? `<div class="Header-item mr-0"><span class="acl-demo" title="identity.demo_mode is on: no admin token or API keys are checked">Demo mode - no authentication</span></div>` : ""}
+      </header>
+      <nav class="UnderlineNav px-3 acl-nav" aria-label="Console">
+        <div class="UnderlineNav-body">${tabs}</div>
+        <div class="UnderlineNav-actions acl-tools">${view.periodic === false ? "" : h.muted("period") + " " + h.navSegmented("period", PERIODS, ACL.period())}</div>
+      </nav>
+      <main class="acl-main px-3 py-3">
+        ${pol.last_error ? h.note("Rejected policy edit: " + h.esc(String(pol.last_error).slice(0, 200)), "bad") : ""}
+        ${ACL.state.error ? h.note(h.esc(ACL.state.error), "bad") : ""}
+        ${body}
+      </main>`;
+  }
+
+  let seq = 0;
+  let data = null;
+  ACL.ctx = () => ({ params: ACL.params(), period: ACL.period(), data });
+  async function render(force) {
+    const a = document.activeElement;
+    if (!force && a && /^(INPUT|SELECT|TEXTAREA)$/.test(a.tagName)) return;
+    const mine = ++seq;
+    const view = ACL.currentView();
+    const root = document.getElementById("acl-root");
+    root.classList.add("acl-loading");
+    try {
+      const [summary, d] = await Promise.all([ACL.get("/admin/summary"), view.load ? view.load(ACL.ctx()) : null]);
+      if (mine !== seq) return; // a newer navigation won
+      ACL.state.summary = summary;
+      data = d;
+      const focus = a && a.dataset ? a.dataset.input : null, caret = focus ? a.selectionStart : null;
+      root.innerHTML = shell(view, view.render(d, ACL.ctx()));
+      if (focus) {
+        const el = root.querySelector(`[data-input="${focus}"]`);
+        if (el) { el.focus(); if (caret != null && el.setSelectionRange) el.setSelectionRange(caret, caret); }
+      }
+      document.title = (view.titleOf ? view.titleOf(d) : view.title) + " - AI Control Layer";
+    } catch (e) {
+      if (mine !== seq) return;
+      root.innerHTML = shell(view, h.note("Cannot load: " + h.esc(e.message) + (TOKEN ? "" : " (if this deployment needs a token, open with ?token=...)"), "bad"));
+    } finally {
+      if (mine === seq) root.classList.remove("acl-loading");
+    }
+  }
+  ACL.refresh = () => render(true);
+
+  async function act(el) {
+    const view = ACL.currentView();
+    const name = el.dataset.act;
+    const fn = (view.actions && view.actions[name]) || (ACL.actions && ACL.actions[name]);
+    if (!fn) return;
+    ACL.state.error = "";
+    try { await fn(el, ACL.ctx()); } catch (e) { ACL.state.error = e.message; }
+    render(true);
+  }
+  ACL.actions = {};
+
+  let typing = null;
+  ACL.start = () => {
+    document.addEventListener("click", (ev) => {
+      const t = ev.target;
+      const nav = t.closest && t.closest("a[data-nav]");
+      if (nav && !ev.ctrlKey && !ev.metaKey && !ev.shiftKey && ev.button === 0) {
+        ev.preventDefault();
+        history.pushState(null, "", nav.getAttribute("href"));
+        hideTip();
+        render(true);
+        return;
+      }
+      const btn = t.closest && t.closest("[data-act]");
+      if (btn && (btn.tagName === "BUTTON" || btn.tagName === "A") && !btn.disabled) { ev.preventDefault(); act(btn); }
+    });
+    document.addEventListener("change", (ev) => {
+      const el = ev.target;
+      if (el.dataset && el.dataset.param) ACL.go({ [el.dataset.param]: el.value || null, page: null });
+      else if (el.dataset && el.dataset.act && el.tagName === "SELECT") act(el);
+    });
+    document.addEventListener("input", (ev) => {
+      const el = ev.target;
+      if (!el.dataset || !el.dataset.input) return;
+      const view = ACL.currentView();
+      const handler = view.inputs && view.inputs[el.dataset.input];
+      if (!handler) return;
+      clearTimeout(typing);
+      typing = setTimeout(() => handler(el.value, ACL.ctx(), el), el.dataset.debounce ? Number(el.dataset.debounce) : 250);
+    });
+    document.addEventListener("keydown", (ev) => {
+      const view = ACL.currentView();
+      if (view.onKey) view.onKey(ev, ACL.ctx());
+    });
+    document.addEventListener("mouseover", (ev) => {
+      const el = ev.target.closest && ev.target.closest("[data-tip]");
+      if (el) showTip(el, ev); else hideTip();
+    });
+    document.addEventListener("focusin", (ev) => {
+      const el = ev.target.closest && ev.target.closest("[data-tip]");
+      if (el) showTip(el); else hideTip();
+    });
+    window.addEventListener("popstate", () => render(true));
+    render(true);
+    setInterval(() => { if (!document.hidden) render(false); }, 15000);
+  };
+  // The redesigned console is opt-in (?ui=next) until it covers everything the classic one (core.js) does.
+  ACL.enabled = !location.pathname.startsWith("/me") && ACL.params().ui === "next";
+  if (ACL.enabled) document.addEventListener("DOMContentLoaded", ACL.start);
+})();

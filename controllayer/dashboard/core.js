@@ -3,6 +3,7 @@
   "use strict";
   const PAGE = location.pathname.startsWith("/me") ? "employee" : "security";
   const params = new URLSearchParams(location.search);
+  if (window.ACL && window.ACL.enabled) return; // the redesigned console (app.js) owns this page
   const HOURS = [1, 8, 24, 168];
   const state = {
     token: params.get("token") || "",
@@ -84,7 +85,7 @@
 
   async function call(path, opts = {}) {
     const headers = { "content-type": "application/json" };
-    if (PAGE === "security") headers["x-admin-token"] = state.token;
+    if (PAGE === "security" && state.token) headers["x-admin-token"] = state.token;
     if (PAGE === "employee" && state.as) headers["x-acl-as"] = state.as;
     const r = await fetch(path, { ...opts, headers });
     const body = await r.json().catch(() => ({}));
@@ -184,9 +185,9 @@
       `${esc(e.channel)}/${esc(e.direction)}${e.tool ? " " + muted(esc(e.tool)) : ""}`,
       e.findings.map((f) => `<span class="text-mono f6 no-wrap" title="${esc(f.detail)}">${esc(f.control)}/${esc(f.category)}${f.action !== e.action || f.shadow ? muted(" " + f.action + (f.shadow ? " (shadow)" : "")) : ""}</span>`).join(", ") || muted("-"),
       String(e.latency_ms.total ?? "")]), [5]) : empty("No events" + (state.filter ? " with action " + state.filter : "") + ".");
-    const tok = encodeURIComponent(state.token);
+    const tok = state.token ? "&token=" + encodeURIComponent(state.token) : "";
     const auditTools = choice("filter", ["", "block", "redact", "warn", "log", "allow"], state.filter) +
-      link("JSONL", `/admin/audit/export?format=jsonl&token=${tok}`) + link("CSV", `/admin/audit/export?format=csv&token=${tok}`) + link("Prometheus", `/metrics?token=${tok}`);
+      link("JSONL", `/admin/audit/export?format=jsonl${tok}`) + link("CSV", `/admin/audit/export?format=csv${tok}`) + link("Prometheus", "/metrics" + tok.replace("&", "?"));
 
     const humans = d.people.filter((p) => p.kind === "human").map((p) => p.principal);
     if (!humans.includes(state.tryAs)) state.tryAs = humans[0] || "";
@@ -202,6 +203,7 @@
     const meta = `policy ${esc(s.policy.name)} · v${esc(s.policy.version)} · reloads ${s.policy.reloads} · feed ${esc(s.feed.version)} (${s.feed.signatures}) · ${esc(s.semantic.backend)}: ${esc(s.semantic.fast_model)} → ${esc(s.semantic.deep_model ?? "-")}`;
     return shell({
       title: "Security Console", meta,
+      tools: s.demo_mode ? `<span class="f6" title="identity.demo_mode is on: no admin token or API keys are checked">Demo mode - no authentication</span>` : "",
       notice: (s.policy.last_error ? note("Rejected policy edit: " + esc(s.policy.last_error.slice(0, 200)), "bad") : "") + (state.error ? note(esc(state.error), "bad") : ""),
       body: grid([
         [12, card("Posture today", posture)],
