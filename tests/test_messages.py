@@ -644,3 +644,78 @@ def test_gate_rows_store_no_text(policy_dir, monkeypatch):
     )
     dump = audit_dump(c, policy_dir)
     assert "600 700 800" not in dump and "Kowalski" not in dump
+
+
+# --- opaque thinking fields -------------------------------------------------------------------
+
+KEY = "key AKIAIOSFODNN7EXAMPLE"
+
+
+def with_history(*assistant, user=None):
+    return [
+        {"role": "user", "content": [text("start")]},
+        {"role": "assistant", "content": list(assistant)},
+        {"role": "user", "content": user or [text("go on")]},
+    ]
+
+
+def test_signed_thinking_in_assistant_history_is_forwarded_byte_for_byte(policy_dir, monkeypatch):
+    c, sent = upstream(policy_dir, lambda b: message(text("ok")), monkeypatch)
+    thinking = {"type": "thinking", "thinking": "plan", "signature": KEY}
+    redacted = {"type": "redacted_thinking", "data": KEY}
+    r = ask(c, with_history(thinking, redacted, text("done")))
+    assert r.status_code == 200, r.text
+    assert sent[0]["body"]["messages"][1]["content"][:2] == [thinking, redacted]
+
+
+@pytest.mark.parametrize(
+    "messages",
+    [
+        with_history(tool_use({"cmd": {"type": "thinking", "signature": KEY}})),
+        with_history(tool_use({"cmd": {"type": "redacted_thinking", "data": KEY}})),
+        with_history(text("ok"), user=[{"type": "redacted_thinking", "data": KEY}]),
+        with_history(text("ok"), user=[{"type": "thinking", "thinking": "x", "signature": KEY}]),
+        with_history(
+            text("ok"),
+            user=[{"type": "tool_result", "tool_use_id": "t", "content": [{"type": "thinking", "signature": KEY}]}],
+        ),
+        with_history({"type": "thinking", "thinking": KEY, "signature": "c2ln"}),
+        with_history({"type": "thinking", "thinking": "x", "signature": {"note": KEY}}),
+    ],
+    ids=[
+        "nested-signature",
+        "nested-data",
+        "user-redacted-thinking",
+        "user-thinking",
+        "tool-result",
+        "thinking-text",
+        "non-string-signature",
+    ],
+)
+def test_thinking_shaped_fields_outside_signed_blocks_are_inspected(policy_dir, monkeypatch, messages):
+    c, sent = upstream(policy_dir, lambda b: message(text("ok")), monkeypatch)
+    r = ask(c, messages)
+    assert r.status_code == 400 and "secrets/aws_access_key" in r.json()["error"]["message"]
+    assert sent == []
+    # Caught by the scored per-block checks, not only by the unscored final sweep.
+    assert "alice" in {x["principal"] for x in c.get("/admin/risk").json()["principals"]}
+
+
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize(
+    "block",
+    [
+        tool_use({"cmd": {"type": "thinking", "signature": KEY}}),
+        {"type": "redacted_thinking", "data": "x", "note": KEY},
+    ],
+    ids=["tool-use", "redacted-thinking-extra"],
+)
+def test_reply_fields_beside_the_signed_ones_are_inspected(policy_dir, monkeypatch, stream, block):
+    reply = message(block, stop="tool_use")
+    c, _ = upstream(policy_dir, lambda b: reply, monkeypatch)
+    r = ask(c, "deploy", stream=stream)
+    msg = reply_of(r, stream)
+    assert msg["content"][0]["type"] == "text" and "Withheld by policy" in msg["content"][0]["text"]
+    assert "AKIA" not in r.text
+    if not stream:
+        assert r.headers["x-control-action"] == "block"

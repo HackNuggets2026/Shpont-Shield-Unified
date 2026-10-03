@@ -32,8 +32,9 @@ from .upstream import anthropic_mock
 CHANNEL = "messages"
 # Names the caller when its Authorization / x-api-key carry its own Anthropic login (ANTHROPIC_CUSTOM_HEADERS).
 IDENTITY_HEADER = "x-acl-key"
-# Opaque fields the upstream verifies and no one reads: kept byte for byte and not inspected.
-_OPAQUE = {"thinking": ("signature",), "redacted_thinking": ("data",)}
+# The field of a signed thinking block the upstream verifies and no one reads. Exempt from inspection
+# only on an assistant message's own content blocks: anywhere else it is ordinary content.
+_OPAQUE = {"thinking": "signature", "redacted_thinking": "data"}
 # Upstream response headers Claude Code acts on (retries, plan usage).
 _RELAYED = ("retry-after", "x-should-retry", "request-id")
 _ERROR_TYPES = {
@@ -74,14 +75,24 @@ def _unsafe(v: Verdict) -> JSONResponse:
     return error(400, f"cannot redact safely: {v.reason}", v.request_id)
 
 
-def inspectable(o: Any) -> Any:
-    """A JSON tree without its opaque fields (thinking signatures, encrypted thinking)."""
-    if isinstance(o, list):
-        return [inspectable(x) for x in o]
-    if isinstance(o, dict):
-        drop = _OPAQUE.get(o.get("type"), ())  # type: ignore[arg-type]
-        return {k: inspectable(v) for k, v in o.items() if k not in drop}
-    return o
+def bare(block: Any) -> Any:
+    """An assistant content block as inspected: a thinking block without its signature string,
+    redacted thinking without its encrypted data."""
+    if isinstance(block, dict):
+        key = _OPAQUE.get(block.get("type"))  # type: ignore[arg-type]
+        if key and isinstance(block.get(key), str):
+            return {k: v for k, v in block.items() if k != key}
+    return block
+
+
+def inspectable(messages: list[Any]) -> list[Any]:
+    """Messages as inspected: each assistant message's own content blocks `bare`."""
+    return [
+        {**m, "content": [bare(b) for b in m["content"]]}
+        if isinstance(m, dict) and m.get("role") == "assistant" and isinstance(m.get("content"), list)
+        else m
+        for m in messages
+    ]
 
 
 def reply_signature(content: Any) -> str:
@@ -101,15 +112,15 @@ def _block_text(block: dict[str, Any]) -> str:
     """The text a reply block is judged on: a plain text block is just its text."""
     if block.get("type") == "text" and set(block) <= {"type", "text"} and isinstance(block.get("text"), str):
         return block["text"]
-    return flatten({k: v for k, v in inspectable(block).items() if k != "type"})
+    return flatten({k: v for k, v in bare(block).items() if k != "type"})
 
 
-def _rest(block: dict[str, Any]) -> dict[str, Any]:
+def _rest(block: dict[str, Any], assistant: bool) -> dict[str, Any]:
     """What the per-block checks of a request do not read: all of a block but its own text."""
     own = {"text": ("text",), "tool_result": ("content",), "thinking": ("thinking",)}.get(block.get("type"), ())  # type: ignore[arg-type]
     if any(not isinstance(block.get(k), str | list) for k in own):
         own = ()  # malformed: inspect the whole block here instead
-    return {k: v for k, v in inspectable(block).items() if k not in own and k != "type"}
+    return {k: v for k, v in (bare(block) if assistant else block).items() if k not in own and k != "type"}
 
 
 def _sse(event: str, data: dict[str, Any]) -> str:
@@ -227,7 +238,7 @@ class _Reply:
     async def check(self, block: dict[str, Any], extra: dict[str, Any] | None = None) -> dict[str, Any]:
         t = block.get("type")
         out: dict[str, Any] | None = block
-        if t != "redacted_thinking" and isinstance(t, str):
+        if isinstance(t, str):
             direction = Direction.TOOL_RESULT if t.endswith("_tool_result") else Direction.OUTPUT
             ctx = Context(
                 self.principal,
@@ -244,7 +255,7 @@ class _Reply:
                 self.action = v.action
             if v.action is Action.REDACT:
                 # A thinking block is signed: it is released unchanged or not at all.
-                ok = self.layer.spans_only(v) and t != "thinking" and "_deltas" not in block
+                ok = self.layer.spans_only(v) and t not in _OPAQUE and "_deltas" not in block
                 out = self.layer.redact_tree(block, self.principal, direction) if ok else None
             if v.blocked or out is None:
                 # The reason stays in the audit trail, not the text: clients re-send this as history.
@@ -361,7 +372,7 @@ def mount(app: FastAPI, layer: ControlLayer, store: PolicyStore, http: httpx.Asy
                 elif t == "tool_result" and isinstance(b.get("content"), str | list):
                     value = b["content"]
                     _, v = await check(
-                        value if isinstance(value, str) else flatten(inspectable(value)), Direction.TOOL_RESULT, resent
+                        value if isinstance(value, str) else flatten(value), Direction.TOOL_RESULT, resent
                     )
                     if v.action is Action.REDACT:
                         b = {
@@ -377,7 +388,7 @@ def mount(app: FastAPI, layer: ControlLayer, store: PolicyStore, http: httpx.Asy
             system = v.text if v.action is Action.REDACT else system
         elif isinstance(system, list):
             system = await blocks(system, Direction.INPUT, resent=True, fetched=False)
-            if any(rest := [_rest(b) for b in system]):
+            if any(rest := [_rest(b, assistant=False) for b in system]):
                 system = tree(system, (await check(flatten(rest), Direction.INPUT, resent=True))[1], Direction.INPUT)
         elif system is not None:
             raise _Refused(error(400, "system must be a string or a list of blocks"))
@@ -397,7 +408,7 @@ def mount(app: FastAPI, layer: ControlLayer, store: PolicyStore, http: httpx.Asy
                 parts: list[Any] = []
             elif isinstance(content, list):
                 content = await blocks(content, Direction.INPUT, resent, fetched=ours)
-                parts = [_rest(b) for b in content]
+                parts = [_rest(b, assistant=role == "assistant") for b in content]
             else:
                 raise _Refused(error(400, f"messages[{i}].content must be a string or a list of blocks"))
             # Everything else: tool_use, images, documents, unknown block types and keys.
@@ -426,7 +437,7 @@ def mount(app: FastAPI, layer: ControlLayer, store: PolicyStore, http: httpx.Asy
         metered_ctx = Context(
             principal,
             Direction.INPUT,
-            flatten(inspectable([m.get("content") for m in messages[new:]])),
+            flatten([m.get("content") for m in inspectable(messages[new:])]),
             model=model,
             channel=CHANNEL,
             metered=not counting,
@@ -442,7 +453,7 @@ def mount(app: FastAPI, layer: ControlLayer, store: PolicyStore, http: httpx.Asy
         sweep = Context(
             principal,
             Direction.INPUT,
-            flatten(inspectable(out)),
+            flatten({**out, "messages": inspectable(out["messages"])}),
             model=model,
             channel=CHANNEL,
             metered=False,
