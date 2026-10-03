@@ -30,6 +30,11 @@ from .upstream import UpstreamClient
 DASHBOARD = Path(__file__).resolve().parent.parent / "dashboard" / "index.html"
 # The built SPA (web/: npm run build). Absent: the HTML dashboards are served instead.
 WEB_DIST = Path(__file__).resolve().parents[2] / "web" / "dist"  # ACL_WEB_DIST overrides
+NOT_BUILT = (
+    "The console is not built, so this is the old dashboard. "
+    "Run <code>make web</code> (or <code>cd web &amp;&amp; npm install &amp;&amp; npm run build</code>) and reload."
+)
+NOTICE_STYLE = "padding:10px 16px;background:#fff4d6;color:#5a4300;font:14px system-ui;border-bottom:1px solid #e8d48a"
 # Paths the SPA's client-side routes must never shadow.
 API_PREFIXES = ("api/", "admin", "me", "v1/", "mcp/", "metrics", "assets/")
 
@@ -773,7 +778,10 @@ def create_app(
 
         @app.get("/", response_class=HTMLResponse)
         async def dashboard():
-            return DASHBOARD.read_text() if DASHBOARD.exists() else "<p>dashboard not built</p>"
+            if not DASHBOARD.exists():
+                return f"<p>{NOT_BUILT}</p>"
+            # The old dashboard still works, but say loudly that the real console is not built.
+            return DASHBOARD.read_text().replace("<body>", f'<body><div style="{NOTICE_STYLE}">{NOT_BUILT}</div>', 1)
 
     return app
 

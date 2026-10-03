@@ -31,13 +31,22 @@ The same pipeline runs in both directions. Prompts and tool calls are checked on
 ## Quick start (no models needed)
 
 ```bash
-python -m venv .venv && .venv/bin/pip install -e '.[dev]'
-.venv/bin/python -m pytest              # full self-test suite, ~5 s
-.venv/bin/python -m controllayer        # gateway on http://127.0.0.1:8787, state in ./data
-.venv/bin/python -m controllayer --data-dir data/fresh   # same policy, empty state (or ACL_DATA_DIR)
-.venv/bin/python demo/agent.py          # scripted agent: benign steps + attacks
-open 'http://127.0.0.1:8787/?token=demo-admin-token'   # dashboard
+python3.12 -m venv .venv && .venv/bin/pip install -e '.[dev]'
+make web                                # build the console (Node 20+); without it you get the old HTML dashboard
+.venv/bin/python -m seed --data-dir data/demo           # 30 days of a 5,000-person bank
+.venv/bin/python -m controllayer --data-dir data/demo   # gateway and console on http://127.0.0.1:8787
+open http://127.0.0.1:8787/             # sign in with demo-admin-token, or an employee key such as dev-frank-key
 ```
+
+Other useful commands:
+
+```bash
+.venv/bin/python -m pytest              # full self-test suite
+.venv/bin/python -m controllayer --data-dir data/fresh   # same policy, empty state (or ACL_DATA_DIR)
+.venv/bin/python demo/live.py           # the live demo, beat by beat, against a running gateway
+```
+
+`web/dist` is not committed: after pulling changes to `web/`, run `make web` again.
 
 By default the policy uses the `mock` upstream and the `heuristic` semantic backend. The heuristic backend is a keyword stand-in for the decision model, so everything runs on a laptop with no GPU.
 
