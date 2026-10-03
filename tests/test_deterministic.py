@@ -65,9 +65,17 @@ def test_email_is_logged_not_redacted(client):
     assert [f["category"] for f in body["findings"]] == ["email"]
 
 
-def test_card_number_is_not_double_reported_as_phone(client):
-    body = guard(client, "card 4111 1111 1111 1111").json()
-    assert [f["category"] for f in body["findings"]] == ["credit_card"]
+def test_overlapping_detectors_report_the_higher_priority_entity_once(client):
+    # The IBAN's digits also pass Luhn as a card number; the IBAN claims the span first.
+    body = guard(client, "Wire to PL61 1090 1014 0000 0712 1981 2874").json()
+    assert [f["category"] for f in body["findings"]] == ["iban"]
+
+
+def test_redact_merges_overlapping_spans():
+    from controllayer.controls.patterns import redact
+    from controllayer.types import Span
+
+    assert redact("abcdefgh", [Span(1, 4, "x"), Span(3, 6, "y")]) == "a[REDACTED:x]gh"
 
 
 def test_pii_in_model_output_is_redacted(client):

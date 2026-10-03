@@ -158,9 +158,9 @@ def create_app(
                     return _policy_error(av)
                 if av.text != actx.text:
                     fn["arguments"] = av.text
-        if metered_ctx is None:  # turn ends in a tool result: gates and budgets still apply
-            metered_ctx = Context(principal, Direction.INPUT, "", model=model, channel="chat")
-            v = await layer.evaluate(metered_ctx)
+        if metered_ctx is None:  # turn ends in a tool result, already inspected: gates and budgets still apply
+            metered_ctx = Context(principal, Direction.INPUT, _text(messages[-1].get("content")), model=model, channel="chat")
+            v = await layer.gate(metered_ctx)
             if v.blocked:
                 return _policy_error(v)
 

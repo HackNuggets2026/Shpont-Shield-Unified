@@ -37,7 +37,7 @@ class SemanticStats:
 def chunk(text: str, size: int) -> list[str]:
     if len(text) <= size:
         return [text]
-    overlap = min(200, size // 10)  # an injection straddling a boundary still lands whole in one chunk
+    overlap = min(200, size // 10)  # text up to this long that straddles a boundary lands whole in one chunk
     return [text[i : i + size] for i in range(0, len(text), size - overlap)]
 
 

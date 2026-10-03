@@ -47,7 +47,7 @@ docker compose up -d            # Ollama + pulls tev1:0.8b, nimble, llama3.2:1b 
 ACL_LIVE=1 pytest -m live       # contract test against the real /v1/systemone
 ```
 
-Without Docker, set `ACL_SEMANTIC=ollama ACL_UPSTREAM=ollama` before starting the gateway. You can also edit `semantic.backend` / `upstream.backend` in `policy.yaml` while it runs. nimble needs about 10 GB of memory. On smaller machines, set `deep_model: tev1` or `deep_model: null`.
+Without Docker, set `ACL_SEMANTIC=ollama ACL_UPSTREAM=ollama` before starting the gateway. You can also edit `semantic.backend` / `upstream.backend` in `policy.yaml` while it runs. nimble needs about 10 GB of memory. On smaller machines, set `deep_model: null` to use the fast tier alone, or `deep_model: tev1` after `ollama pull tev1`.
 
 ## Integrating
 
@@ -72,7 +72,7 @@ All controls, thresholds, allowed models, budgets and team overrides live in [`p
 | Endpoint | For |
 |---|---|
 | `/` | Dashboard: posture, threats, shadow findings, controls, budgets, latency, audit trail, prompt playground |
-| `/admin/audit/export?format=jsonl\|csv` | Audit log for security teams. Stores redacted text and the SHA-256 of the original, never raw secrets |
+| `/admin/audit/export?format=jsonl\|csv` | Audit log for security teams. Detected PII and secrets are masked in every event, whatever the action; the SHA-256 of the original is kept |
 | `/admin/summary`, `/admin/events` | JSON for other tools |
 | `/metrics` | Prometheus: decisions, findings, latency per stage, spend |
 

@@ -121,3 +121,16 @@ def test_env_expansion(monkeypatch):
     assert p.semantic.url == "http://localhost:11434"
     monkeypatch.setenv("OLLAMA_URL", "http://ollama:11434")
     assert parse_policy((ROOT / "policy.yaml").read_text()).upstream.url == "http://ollama:11434"
+
+
+def test_yaml_off_backend_is_accepted(policy_dir):
+    text = (policy_dir / "policy.yaml").read_text().replace("${ACL_SEMANTIC:-heuristic}", "off")
+    assert parse_policy(text).semantic.backend == "off"
+
+
+def test_version_reflects_env(monkeypatch):
+    text = (ROOT / "policy.yaml").read_text()
+    monkeypatch.setenv("ACL_SEMANTIC", "ollama")
+    a = parse_policy(text).version
+    monkeypatch.setenv("ACL_SEMANTIC", "heuristic")
+    assert parse_policy(text).version != a

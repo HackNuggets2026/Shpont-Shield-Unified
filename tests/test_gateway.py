@@ -125,3 +125,29 @@ def test_dashboard_playground_evaluates_as_principal(client):
     assert r.status_code == 403  # finance blocks cards
     r = client.post("/admin/try", json={"principal": "alice", "text": "card 4111 1111 1111 1111"})
     assert r.json()["action"] == "redact"
+
+
+def test_audit_masks_detected_spans_even_when_only_logged(client):
+    from .conftest import KEYS
+
+    client.post("/v1/guard", json={"text": "ops card 4111 1111 1111 1111"}, headers=KEYS["ops"])  # platform: pii log-only
+    export = client.get("/admin/audit/export").text
+    assert "4111 1111" not in export and "[REDACTED:credit_card]" in export
+
+
+def test_shadowed_secret_is_masked_in_audit(client, policy_dir):
+    from .conftest import edit_policy
+
+    edit_policy(policy_dir, lambda p: p["secrets"].update(shadow=True))
+    client.post("/admin/policy/reload")
+    chat(client, "key AKIAIOSFODNN7EXAMPLE")
+    assert "AKIAIOSFODNN7EXAMPLE" not in client.get("/admin/audit/export").text
+
+
+def test_store_raw_text_toggle_applies_on_reload(client, policy_dir):
+    from .conftest import edit_policy
+
+    edit_policy(policy_dir, lambda p: p["audit"].update(store_raw_text=True))
+    client.post("/admin/policy/reload")
+    chat(client, "raw please 4111 1111 1111 1111")
+    assert "raw please 4111 1111 1111 1111" in client.get("/admin/audit/export").text

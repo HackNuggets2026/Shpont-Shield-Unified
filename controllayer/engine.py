@@ -97,6 +97,10 @@ class ControlLayer:
 
         return walk(obj)
 
+    async def gate(self, ctx: Context) -> Verdict:
+        """Gates and budgets only, for a request whose content is inspected separately."""
+        return await self._evaluate(ctx, None, inspect=False)
+
     async def evaluate(self, ctx: Context, extra: dict | None = None) -> Verdict:
         ctx.text = sanitize(ctx.text)
         key = (self.policy.version, ctx.principal.id, ctx.direction, ctx.model, ctx.tool, ctx.text)
@@ -111,7 +115,7 @@ class ControlLayer:
                 self._seen.popitem(last=False)
         return verdict
 
-    async def _evaluate(self, ctx: Context, extra: dict | None) -> Verdict:
+    async def _evaluate(self, ctx: Context, extra: dict | None, inspect: bool = True) -> Verdict:
         policy = self.policy_for(ctx.principal.team)
         t_start = time.perf_counter()
         latency: dict[str, float] = {}
@@ -130,7 +134,7 @@ class ControlLayer:
             findings += self.ledger.pre_check(ctx, policy)
             t = lap("budget", t)
 
-        if not _blocked(findings):
+        if inspect and not _blocked(findings):
             findings += secrets.check(ctx, policy.secrets)
             findings += pii.check(ctx, policy.pii)
             findings += signatures.check(ctx, policy.signatures, self.feed)
@@ -138,7 +142,7 @@ class ControlLayer:
 
         extra = dict(extra or {})
         # Deterministic block already decided the outcome; skip the model call.
-        if not _blocked(findings):
+        if inspect and not _blocked(findings):
             sem, stats = await SemanticGuard(self.backend(policy)).check(ctx, policy)
             findings += sem
             latency["semantic"] = (time.perf_counter() - t) * 1000

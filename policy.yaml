@@ -30,7 +30,7 @@ upstream:
     demo: builtin          # in-process demo tools; or a URL of a JSON-RPC MCP endpoint
 
 semantic:
-  backend: ${ACL_SEMANTIC:-heuristic}   # ollama (real decision models) | heuristic (offline keyword stand-in) | off
+  backend: ${ACL_SEMANTIC:-heuristic}   # ollama (real decision models) | heuristic (offline keyword stand-in) | "off"
   url: ${OLLAMA_URL:-http://localhost:11434}
   fast_model: tev1:0.8b    # tier 1: every request
   deep_model: nimble       # tier 2: only answers the fast model was unsure about
@@ -168,5 +168,5 @@ teams:
 
 audit:
   path: data/audit.jsonl
-  store_raw_text: false    # GDPR: store redacted text + SHA-256 of the original only
+  store_raw_text: false    # GDPR: detected spans are masked in every event; SHA-256 of the original is kept
   ring_size: 2000

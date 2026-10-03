@@ -9,6 +9,7 @@ from collections import Counter, deque
 from pathlib import Path
 from typing import Any
 
+from .controls.patterns import redact
 from .types import Action, Context, Verdict
 
 
@@ -44,7 +45,8 @@ class AuditLog:
             "policy_version": v.policy_version,
             "latency_ms": {k: round(x, 2) for k, x in v.latency_ms.items()},
             "text_sha256": hashlib.sha256(ctx.text.encode()).hexdigest(),
-            "text": v.text if v.action is not Action.BLOCK else None,
+            # Every detected span is masked, even when the action was only log/warn/shadow.
+            "text": None if v.action is Action.BLOCK else redact(v.text, [s for f in v.findings for s in f.spans]),
             "findings": [
                 {
                     "control": f.control,

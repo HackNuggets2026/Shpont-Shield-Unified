@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Annotated, Any, Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from .types import Action, Direction
 
@@ -118,6 +118,11 @@ class SemanticEngine(_Strict):
     max_chunk_chars: int = Field(6000, ge=500)
     fail_mode: Literal["open", "closed"] = "closed"
     keep_alive: str = "30m"
+
+    @field_validator("backend", mode="before")
+    @classmethod
+    def _yaml_off(cls, v: Any) -> Any:
+        return "off" if v is False else v  # YAML 1.1 reads a bare `off` as false
 
 
 class ModelPrice(_Strict):
@@ -231,10 +236,11 @@ def _expand_env(text: str) -> str:
 
 
 def parse_policy(text: str) -> Policy:
-    raw = yaml.safe_load(_expand_env(text)) or {}
+    expanded = _expand_env(text)
+    raw = yaml.safe_load(expanded) or {}
     raw.pop("version", None)
     policy = Policy.model_validate(raw)
-    policy.version = hashlib.sha256(text.encode()).hexdigest()[:12]
+    policy.version = hashlib.sha256(expanded.encode()).hexdigest()[:12]
     for team in policy.teams:  # surface bad overrides at load time, not on first request
         policy.for_team(team)
     return policy

@@ -65,3 +65,34 @@ def test_shadow_budget_reports_but_allows(make_client):
     assert [chat(c, f"q{i}").status_code for i in range(3)] == [200, 200, 200]
     shadow = c.get("/admin/summary").json()["shadow_would_have"]
     assert any(k.startswith("budget/rate_limit") for k, _ in shadow)
+
+
+def test_mcp_tool_calls_are_rate_limited(make_client):
+    from .conftest import mcp
+
+    c = make_client(mutate=_limits(requests_per_minute=2))
+    codes = [("error" in mcp(c, "tools/call", {"name": "search_docs", "arguments": {"query": f"q{i}"}})) for i in range(3)]
+    assert codes == [False, False, True]
+
+
+def test_cost_limit_is_inclusive(make_client):
+    c = make_client(mutate=_limits(usd_per_day=0.0))
+    assert chat(c, "free?").status_code == 429
+
+
+def test_tool_only_turns_are_not_mistaken_for_a_loop(client):
+    from .conftest import KEYS
+
+    codes = []
+    for i in range(7):
+        r = client.post("/v1/chat/completions", headers=KEYS["alice"], json={"model": "mock-model", "messages": [
+            {"role": "user", "content": "run the tool"}, {"role": "assistant", "content": "calling"},
+            {"role": "tool", "content": f"result number {i}"}]})
+        codes.append(r.status_code)
+    assert codes == [200] * 7
+
+
+def test_tool_only_turn_still_gated(client):
+    r = client.post("/v1/chat/completions", headers={}, json={"model": "mock-model", "messages": [
+        {"role": "user", "content": "x"}, {"role": "assistant", "content": "y"}, {"role": "tool", "content": "z"}]})
+    assert r.status_code == 401
