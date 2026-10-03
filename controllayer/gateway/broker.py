@@ -92,7 +92,7 @@ def handle(req: dict, principal: Principal, policy: Policy, state: StateStore) -
     svc = services.SERVICES[policy.resources[res_id].connection["service"]]
     headers = {svc.auth_header: svc.auth_format.format(secret=_secret(policy, res_id))}
     try:
-        out = services.call(svc, tool, args, headers)
+        out = services.call(svc, tool, args, headers, mine.get(res_id, ()))
     except services.ServiceError as e:
         return text(f"{svc.title}: {e}", error=True)
     try:

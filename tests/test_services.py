@@ -52,7 +52,8 @@ def test_catalog_offers_twenty_services_with_scoped_tools():
     assert len(names) == len(set(names)) == 55
     for key, svc in services.SERVICES.items():
         assert 2 <= len(svc.tools) <= 4, key
-        assert svc.scopes <= {"read", "write", "admin", "exec"}, key
+        assert svc.scopes <= {"read", "write", "admin", "exec", "pii"}, key
+    assert {k for k, s in services.SERVICES.items() if "pii" in s.scopes} == {"postgres", "snowflake"}
 
 
 def test_tools_list_follows_the_live_grant(client):
@@ -172,11 +173,70 @@ def test_query_size_is_bounded(client, sql, error):
     assert out["truncated"] is True and 0 < out["row_count"] <= 50 and len(text(r)) < 1_100_000
 
 
-def test_pii_in_a_database_answer_is_redacted(client):
+OPS = {"x-api-key": "ops-agent-key"}  # platform, entitled to the pii scope of postgres-prod
+
+
+@pytest.mark.parametrize(
+    "tool,sql,rows",
+    [
+        (
+            "postgres_query",
+            "select name, national_id from customers where id in (1, 2)",
+            [{"name": "Jan Kowalski", "national_id": "****"}, {"name": "Maria Garcia", "national_id": None}],
+        ),
+        ("postgres_query", "select hex(national_id) as v from customers where id = 1", [{"v": "2A2A2A2A"}]),
+        (
+            "postgres_query",
+            "select substr(national_id, 1, 5) || '-' || substr(national_id, 6) as v from customers where id = 3",
+            [{"v": "****-"}],
+        ),
+        (
+            "postgres_query",
+            "select email, phone from customers where id = 1",
+            [{"email": "****@example.com", "phone": "****"}],
+        ),
+        (
+            "snowflake_query",
+            "select employee, work_email, base_pay_pln, payout_iban from compensation where level = 'L3'",
+            [{"employee": "Bob Lis", "work_email": "****@acme.io", "base_pay_pln": None, "payout_iban": "****"}],
+        ),
+    ],
+)
+def test_without_the_pii_scope_queries_run_on_masked_columns(client, tool, sql, rows):
     grant(client, "postgres-prod")
+    grant(client, "snowflake")
+    assert json.loads(text(call(client, tool, {"sql": sql})))["rows"] == rows
+
+
+def test_the_pii_scope_needs_its_own_entitlement(client):
+    r = client.post(
+        "/me/api/grants",
+        headers=ALICE,
+        json={"agent": "alice-coder", "resource": "postgres-prod", "scopes": ["read", "pii"], "hours": 1},
+    )
+    assert r.status_code == 400 and "subset of ['read']" in r.text
+    out = json.loads(text(call(client, "postgres_query", {"sql": "select national_id from customers"}, ALICE)))
+    assert {row["national_id"] for row in out["rows"]} == {"****", None}
+    out = json.loads(text(call(client, "postgres_query", {"sql": "select national_id from customers"}, OPS)))
+    assert [row["national_id"] for row in out["rows"]] == ["44051401359", None, "078-05-1120", "02070803628", None]
+
+
+def test_with_the_pii_scope_content_checks_still_redact(make_client):
+    client = make_client(
+        mutate=lambda p: p["resources"]["postgres-prod"]["scope_entitlements"]["pii"].update(teams=["engineering"])
+    )
+    grant(client, "postgres-prod", scopes=("read", "pii"))
     r = call(client, "postgres_query", {"sql": "select name, national_id from customers where national_id is not null"})
     rows = json.loads(text(r))["rows"]
     assert [row["national_id"] for row in rows] == ["[REDACTED:pesel]", "[REDACTED:us_ssn]", "[REDACTED:pesel]"]
+
+
+def test_masking_rules_name_real_columns_and_known_classes():
+    table = {"columns": "id INTEGER, ssn TEXT", "rows": [[1, "078-05-1120"]]}
+    with pytest.raises(ValueError, match=r"t.masked: unknown column or class \{'ssn': 'us_ssn'\}"):
+        services._masked({"t": table | {"masked": {"ssn": "us_ssn"}}})
+    with pytest.raises(ValueError, match=r"unknown column or class \{'tax_id': 'national_id'\}"):
+        services._masked({"t": table | {"masked": {"tax_id": "national_id"}}})
 
 
 def test_card_pasted_into_a_ticket_is_redacted_for_engineering_and_blocked_for_finance(client):
@@ -224,9 +284,9 @@ def test_credentials_are_injected_but_never_returned_or_audited(client, policy_d
     seen = []
     real = services.call
 
-    def spy(svc, tool, args, headers):
+    def spy(svc, tool, args, headers, scopes):
         seen.append(headers)
-        return real(svc, tool, args, headers)
+        return real(svc, tool, args, headers, scopes)
 
     monkeypatch.setattr(services, "call", spy)
 
@@ -257,6 +317,7 @@ def test_credentials_are_injected_but_never_returned_or_audited(client, policy_d
     [
         (lambda r: r["slack"]["connection"].update(service="slak"), "unknown service 'slak'"),
         (lambda r: r["slack"].update(scopes=["read", "exec"]), "scopes ['exec'] unlock no slack tool"),
+        (lambda r: r["slack"].update(scopes=["read", "pii"]), "scopes ['pii'] unlock no slack tool"),
         (lambda r: r["slack"]["connection"].pop("secret_env"), "connection is {service"),
         (lambda r: r["notion"]["connection"].update(service="slack"), "both offer service 'slack'"),
     ],

@@ -15,7 +15,7 @@ import math
 import re
 import sqlite3
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 from dataclasses import dataclass
 from functools import cached_property
 from pathlib import Path
@@ -24,6 +24,9 @@ from typing import Any
 import yaml
 
 DATA: dict[str, Any] = yaml.safe_load(Path(__file__).with_name("services.yaml").read_text())
+
+# A grant scope that unlocks no tool: with it, a tool answers from the unmasked data.
+PII = "pii"
 
 
 class ServiceError(Exception):
@@ -41,6 +44,7 @@ class Tool:
     params: dict[str, dict[str, Any]]
     run: Callable[[dict[str, Any]], Any]
     required: tuple[str, ...] = ()
+    run_pii: Callable[[dict[str, Any]], Any] | None = None  # the same call on the unmasked data
 
     def spec(self) -> dict[str, Any]:
         schema = {"type": "object", "properties": self.params, "required": list(self.required)}
@@ -60,16 +64,21 @@ class Service:
 
     @cached_property
     def scopes(self) -> set[str]:
-        return {t.scope for t in self.tools}
+        """The scopes a grant of this service can usefully hold."""
+        return {t.scope for t in self.tools} | ({PII} if any(t.run_pii for t in self.tools) else set())
 
 
-def call(service: Service, tool: Tool, args: dict[str, Any], headers: dict[str, str]) -> Any:
-    """One API call, authenticated with `headers` the way the service's real client would be."""
+def call(
+    service: Service, tool: Tool, args: dict[str, Any], headers: dict[str, str], scopes: Collection[str] = ()
+) -> Any:
+    """One API call, authenticated with `headers` the way the service's real client would be.
+    `scopes` are the caller's on this service: without `pii`, masked columns stay masked."""
     if not headers.get(service.auth_header):
         raise ServiceError(401, f"Unauthorized: missing {service.auth_header}")
     _validate(tool, args)
     defaults = {k: p["default"] for k, p in tool.params.items() if "default" in p}
-    return tool.run(defaults | args)
+    run = tool.run_pii if tool.run_pii and PII in scopes else tool.run
+    return run(defaults | args)
 
 
 # ---- argument schemas ---------------------------------------------------------------------------
@@ -214,6 +223,32 @@ def _cell(v: Any) -> Any:
     return v
 
 
+# Dynamic data masking, as Snowflake masking policies or PostgreSQL anonymizer rules do it: the query
+# runs on masked values, so no SQL function (hex, substr, ||) can rebuild the original from them.
+_MASKS: dict[str, Callable[[Any], Any]] = {
+    "email": lambda v: "****@" + v.rpartition("@")[2],  # the domain stays, for grouping by company
+    "phone": lambda v: "****",
+    "national_id": lambda v: "****",
+    "card_number": lambda v: "****",
+    "iban": lambda v: "****",
+    "salary": lambda v: None,
+}
+
+
+def _masked(tables: dict[str, dict]) -> dict[str, dict]:
+    out = {}
+    for name, t in tables.items():
+        cols = [c.split()[0] for c in t["columns"].split(", ")]
+        rules = t.get("masked", {})
+        bad = {c: k for c, k in rules.items() if c not in cols or k not in _MASKS}
+        if bad:
+            raise ValueError(f"services.yaml {name}.masked: unknown column or class {bad}; classes: {sorted(_MASKS)}")
+        fns = [_MASKS[rules[c]] if c in rules else None for c in cols]
+        rows = [[v if f is None or v is None else f(v) for f, v in zip(fns, r, strict=True)] for r in t["rows"]]
+        out[name] = t | {"rows": rows}
+    return out
+
+
 def _tables(tables: dict[str, dict]) -> list[dict[str, Any]]:
     return [
         {"table": n, "columns": [c.split()[0] for c in t["columns"].split(", ")], "rows": len(t["rows"])}
@@ -222,6 +257,7 @@ def _tables(tables: dict[str, dict]) -> list[dict[str, Any]]:
 
 
 def _sql_tools(prefix: str, tables: dict[str, dict], system: str, where: str, **sql_params: Any) -> tuple[Tool, ...]:
+    masked = _masked(tables)
     return (
         Tool(
             f"{prefix}_list_tables",
@@ -235,8 +271,9 @@ def _sql_tools(prefix: str, tables: dict[str, dict], system: str, where: str, **
             "read",
             f"Run one read-only SQL query (SELECT or WITH ... SELECT) on {where}. Writes and DDL are rejected.",
             {"sql": _s("A single SELECT statement"), **sql_params, "limit": _limit(100, 1000)},
-            lambda a: _query(tables, a["sql"], a["limit"], system),
+            lambda a: _query(masked, a["sql"], a["limit"], system),
             ("sql",),
+            lambda a: _query(tables, a["sql"], a["limit"], system),
         ),
     )
 

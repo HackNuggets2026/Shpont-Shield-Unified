@@ -2,6 +2,8 @@
 # like the real APIs' answers. Some hold what real company data holds - customer PII, a card number
 # pasted into a ticket or a CRM note, leaked keys, planted instructions - so the gateway's content
 # checks have something to catch. Dates are quoted so they stay strings.
+# `masked` classifies a SQL table's sensitive columns (column: class). Callers without the `pii`
+# scope query a copy of the data in which those columns are already masked.
 
 postgres:
   customers:
@@ -12,6 +14,7 @@ postgres:
       - [3, John Smith, john.smith@example.com, "+1 415 555 0134", US, enterprise, "078-05-1120", "2023-11-20"]
       - [4, Anna Nowak, anna.nowak@example.com, "+48 502 111 222", PL, pro, "02070803628", "2025-01-15"]
       - [5, Li Wei, li.wei@example.com, "+65 8123 4567", SG, starter, null, "2025-08-30"]
+    masked: { email: email, phone: phone, national_id: national_id }
   orders:
     columns: id INTEGER, customer_id INTEGER, amount_cents INTEGER, currency TEXT, status TEXT, created_at TEXT
     rows:
@@ -52,6 +55,13 @@ snowflake:
     rows:
       - [acc_7731, pro, "2026-09-04", price, 79.0]
       - [acc_6610, enterprise, "2026-09-15", moved to competitor, 5800.0]
+  compensation:
+    columns: employee TEXT, work_email TEXT, level TEXT, base_pay_pln INTEGER, payout_iban TEXT
+    rows:
+      - [Alice Nowicka, alice@acme.io, L4, 252000, PL27 1140 2004 0000 3002 0135 5387]
+      - [Bob Lis, bob@acme.io, L3, 196000, PL61 1090 1014 0000 0712 1981 2874]
+      - [Carol Wrona, carol@acme.io, intern, 72000, null]
+    masked: { work_email: email, base_pay_pln: salary, payout_iban: iban }
 
 supabase:
   feature_flags:

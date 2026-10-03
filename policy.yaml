@@ -181,6 +181,7 @@ semantic_controls:
 # A service's tools each need one scope (read, write, admin or exec); `scopes` lists the ones
 # security allows to be granted, so leaving one out keeps its tools away from every agent.
 # `entitled` says who may use a resource; `scope_entitlements` narrows single scopes further.
+# Without the `pii` scope, SQL runs on a copy of the data whose sensitive columns are masked.
 
 resources:
   github-acme:
@@ -223,8 +224,9 @@ resources:
     name: PostgreSQL (prod read replica)
     description: Customers, orders, feature usage. Read-only SQL.
     sensitivity: high
-    scopes: [read]
+    scopes: [read, pii]   # pii: unmasked national ids, emails and phones
     entitled: { roles: [developer], teams: [platform] }
+    scope_entitlements: { pii: { teams: [platform] } }
     max_grant_hours: 4
     connection: { service: postgres, secret_env: PROD_DB_PASSWORD }
   supabase:
@@ -256,10 +258,11 @@ resources:
   snowflake:
     type: service
     name: Snowflake (ANALYTICS)
-    description: MRR, sign-ups and churn. Read-only SQL.
-    sensitivity: medium
-    scopes: [read]
+    description: MRR, sign-ups, churn and compensation. Read-only SQL.
+    sensitivity: high
+    scopes: [read, pii]   # pii: unmasked salaries, IBANs and work emails
     entitled: { teams: [finance, engineering] }
+    scope_entitlements: { pii: { teams: [finance] } }
     max_grant_hours: 24
     connection: { service: snowflake, secret_env: SNOWFLAKE_PASSWORD }
   stripe:
