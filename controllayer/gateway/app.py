@@ -27,14 +27,14 @@ from ..types import Action, Context, Direction, Verdict
 from . import catalog, governance, hooks, ingest, mcp_demo, otel
 from .upstream import UpstreamClient
 
-DASHBOARD = Path(__file__).resolve().parent.parent / "dashboard" / "index.html"
-# The built SPA (web/: npm run build). Absent: the HTML dashboards are served instead.
+# The built console (web/: make web). Absent: / says how to build it.
 WEB_DIST = Path(__file__).resolve().parents[2] / "web" / "dist"  # ACL_WEB_DIST overrides
-NOT_BUILT = (
-    "The console is not built, so this is the old dashboard. "
-    "Run <code>make web</code> (or <code>cd web &amp;&amp; npm install &amp;&amp; npm run build</code>) and reload."
-)
-NOTICE_STYLE = "padding:10px 16px;background:#fff4d6;color:#5a4300;font:14px system-ui;border-bottom:1px solid #e8d48a"
+NOT_BUILT = """<!doctype html><html><head><meta charset="utf-8"><title>Shpont Shield</title></head>
+<body style="font:15px/1.5 system-ui;max-width:40rem;margin:4rem auto;padding:0 1rem">
+<h1 style="font-size:1.3rem">The console is not built</h1>
+<p>The gateway and its API are running. To get the console, run <code>make web</code>
+(or <code>cd web &amp;&amp; npm install &amp;&amp; npm run build</code>; needs Node 20+) and reload this page.</p>
+</body></html>"""
 # Paths the SPA's client-side routes must never shadow.
 API_PREFIXES = ("api/", "admin", "me", "v1/", "mcp/", "metrics", "assets/")
 
@@ -777,11 +777,8 @@ def create_app(
     else:
 
         @app.get("/", response_class=HTMLResponse)
-        async def dashboard():
-            if not DASHBOARD.exists():
-                return f"<p>{NOT_BUILT}</p>"
-            # The old dashboard still works, but say loudly that the real console is not built.
-            return DASHBOARD.read_text().replace("<body>", f'<body><div style="{NOTICE_STYLE}">{NOT_BUILT}</div>', 1)
+        async def not_built():
+            return NOT_BUILT
 
     return app
 

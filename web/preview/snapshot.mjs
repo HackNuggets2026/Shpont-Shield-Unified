@@ -2,7 +2,7 @@
 //
 //   node preview/snapshot.mjs --gateway http://127.0.0.1:8787 --out preview/snapshot
 //
-// It signs in as each demo identity in a real browser (system Chrome), walks the pages, clicks every tab
+// It signs in as the demo admin in a real browser (system Chrome), walks the pages, clicks every tab
 // and a couple of "Next" buttons, follows drill-down links up to a cap, and saves every GET /api/*
 // response. Responses are keyed by an FNV-1a hash of "<secret>\n<path>", the same hash src/lib/preview.ts uses.
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
@@ -20,10 +20,6 @@ const WORKERS = Number(arg("workers", 6));
 
 const IDENTITIES = [
   { secret: "demo-admin-token", label: "Admin", start: ["/console", "/console/org", "/console/people", "/console/workflows", "/console/security", "/console/resources", "/console/requests", "/console/activity"] },
-  { secret: "dev-alice-key", label: "alice (dev)", start: ["/portal", "/portal/menu", "/portal/access", "/portal/activity", "/portal/privacy"] },
-  { secret: "dev-frank-key", label: "frank (quarantined)", start: ["/portal", "/portal/menu", "/portal/access", "/portal/activity", "/portal/privacy"] },
-  { secret: "fin-bob-key", label: "bob (finance)", start: ["/portal", "/portal/menu", "/portal/access", "/portal/activity", "/portal/privacy"] },
-  { secret: "intern-key", label: "carol (intern)", start: ["/portal", "/portal/menu", "/portal/access", "/portal/activity", "/portal/privacy"] },
 ];
 
 // How many drill-down pages of each kind to visit; the rest fall back to "not in the preview".
@@ -68,7 +64,7 @@ async function crawl(browser, id, files) {
 
   await page.goto(`${GATEWAY}/login`);
   await page.getByRole("button", { name: id.label, exact: true }).click();
-  await page.waitForURL(/\/(console|portal)/, { timeout: 15_000 });
+  await page.waitForURL(/\/console/, { timeout: 15_000 });
   await settle(page);
 
   const queue = [...id.start];

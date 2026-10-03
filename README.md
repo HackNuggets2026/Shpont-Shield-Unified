@@ -35,7 +35,7 @@ python3.12 -m venv .venv && .venv/bin/pip install -e '.[dev]'
 make web                                # build the console (Node 20+); without it you get the old HTML dashboard
 .venv/bin/python -m seed --data-dir data/demo           # 30 days of a 5,000-person bank
 .venv/bin/python -m controllayer --data-dir data/demo   # gateway and console on http://127.0.0.1:8787
-open http://127.0.0.1:8787/             # sign in with demo-admin-token, or an employee key such as dev-frank-key
+open http://127.0.0.1:8787/             # sign in with demo-admin-token
 ```
 
 Other useful commands:
@@ -83,8 +83,8 @@ All controls, thresholds, allowed models, budgets and team overrides live in [`p
 
 | Endpoint | For |
 |---|---|
-| `/` | Admin dashboard: security (people, risk, incidents, restrictions), usage & menu (spend, forecast, breakdowns, leases, approvals), controls & audit |
-| `/me` | Employee dashboard (their own API key): usage, quota, menu, runs, leases, blocked events, admin activity about them |
+| `/` | Admin console (React, `make web`): overview, workflows, security, resources, requests, people and teams |
+| `/api/me/*` | JSON for an employee's own tools, with their own API key: usage, quota, menu, runs, leases, blocked events, admin activity about them |
 | `/admin/overview`, `/admin/usage?by=workflow,task`, `/admin/menu`, `/admin/leases`, `/admin/incidents`, `/admin/principals`, `/admin/requests`, `/admin/actions` | Governance JSON; POST variants change restrictions |
 | `/admin/audit/export?format=jsonl\|csv` | Audit log for security teams. Detected PII and secrets are masked in every event, whatever the action; the SHA-256 of the original is kept |
 | `/admin/catalog`, `/admin/grants` | The resource catalog by class, with usage, live leases and live grants |
@@ -104,13 +104,12 @@ The same gateway meters and limits *what AI work costs*, not just what it says.
 - **Resources beyond tokens.** MCP tools that start a simulator, VM or browser (`boot_simulator`, argent's `boot-device`, `create_vm`) open a **lease**, and stop tools close it. The gateway bills leases per minute, caps how many each person can run at once, and flags leases idle past a limit (zombies). Resources can be set to stop zombies automatically. Usage the gateway cannot see is reported with `POST /v1/usage`.
 - **Restrictions.** Admins can quarantine (read-only tools, 10% budget), revoke, scale budgets, approve workflows, and turn menu items off. Each change is validated, written to `data/admin-overlay.yaml` (merged over `policy.yaml`, hot-reloaded) and logged with a reason. Past 80% of a budget, requests are routed to a cheaper model instead of being refused.
 - **Security from usage.** Detections combine usage with verdicts: probing (repeated blocks), exfiltration (double weight when it comes with a token spike), usage spikes, a key used from a new client, sensitive tools an agent never used before, repeated secret pastes, and zombie or unlabeled resources. Incidents add to a per-person **risk score** that halves every 2 h. Crossing thresholds first tightens the person's budget, then quarantines them. Only an admin relaxes a restriction.
-- **Two dashboards.** `/` is the admin view, with Security, Usage & menu, and Controls & audit tabs. `/me` is the employee view, opened with their own API key. It shows their spend, budgets, measured menu prices, runs, running resources (with a Stop button), what was blocked and why, the incidents about them, and every admin action or content view concerning them. Viewing one person's events needs a stated reason, which that person can see.
+- **One console.** `/` is the admin console for platform, FinOps and security people. Employees have no screen of their own; `/api/me/*` gives their tools the same facts with their own API key: spend, budgets, menu prices, runs, running resources, what was blocked and why, and every admin action or content view concerning them. Viewing one person's events needs a stated reason, which that person can see.
 
 ```bash
 .venv/bin/python -m controllayer &
 .venv/bin/python demo/governance.py          # labelled work, simulators, an approval, an insider escalating
-open 'http://127.0.0.1:8787/?token=demo-admin-token'
-open 'http://127.0.0.1:8787/me?key=intern-key'
+open http://127.0.0.1:8787/   # sign in with demo-admin-token
 ```
 
 Usage, leases, incidents and approvals are stored in SQLite (`usage.path`), so budgets and history survive restarts.

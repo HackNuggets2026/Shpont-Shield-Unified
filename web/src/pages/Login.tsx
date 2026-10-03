@@ -5,23 +5,19 @@ import { useAuth } from "../auth";
 import { Button, ErrorBox, Field } from "../components/ui";
 import { IconShield } from "../components/icons";
 
-const DEMO = [
-  { label: "Admin", value: "demo-admin-token" },
-  { label: "alice (dev)", value: "dev-alice-key" },
-  { label: "frank (quarantined)", value: "dev-frank-key" },
-  { label: "bob (finance)", value: "fin-bob-key" },
-  { label: "carol (intern)", value: "intern-key" },
-];
+const DEMO = [{ label: "Admin", value: "demo-admin-token" }];
+
+const EMPLOYEE_KEY = "That is an employee API key. The console is for admins; employee keys are for the gateway and the /api/me endpoints.";
 
 export function Login() {
-  const { session, login } = useAuth();
+  const { session, login, logout } = useAuth();
   const nav = useNavigate();
   const [secret, setSecret] = useState("");
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
 
-  if (session) return <Navigate to={session.role === "admin" ? "/console" : "/portal"} replace />;
+  if (session?.role === "admin") return <Navigate to="/console" replace />;
 
   const submit = async (value = secret) => {
     if (!value.trim()) return;
@@ -29,7 +25,12 @@ export function Login() {
     setError(null);
     try {
       const s = await login(value, name);
-      nav(s.role === "admin" ? "/console" : "/portal", { replace: true });
+      if (s.role !== "admin") {
+        logout();
+        setError(new Error(EMPLOYEE_KEY));
+        return;
+      }
+      nav("/console", { replace: true });
     } catch (e) {
       setError(e instanceof ApiError && e.status === 401 ? new Error("That is neither the admin token nor a known API key.") : e);
     } finally {
@@ -54,7 +55,7 @@ export function Login() {
             void submit();
           }}
         >
-          <Field label="Admin token or your API key" hint="Admins land in the console; employees see their own portal.">
+          <Field label="Admin token" hint="The console is for platform, FinOps and security admins.">
             <input
               className="input font-mono"
               type="password"
@@ -62,7 +63,7 @@ export function Login() {
               autoFocus
               value={secret}
               onChange={(e) => setSecret(e.target.value)}
-              placeholder="e.g. dev-alice-key"
+              placeholder="e.g. demo-admin-token"
             />
           </Field>
           <Field label="Your name (admins, optional)" hint="Recorded as the actor of admin actions and shown to employees.">

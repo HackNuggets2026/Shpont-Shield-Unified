@@ -17,11 +17,10 @@ import math
 import time
 from collections.abc import Awaitable, Callable
 from fnmatch import fnmatch
-from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import JSONResponse
 
 from ..config import Policy, PolicyStore
 from ..controls import workflows
@@ -34,7 +33,6 @@ from ..usage import day_window
 from . import catalog as catalog_api
 from . import org as org_api
 
-ME_PAGE = Path(__file__).resolve().parent.parent / "dashboard" / "me.html"
 DAY = 86400.0
 INCIDENT_STATES = {"open", "acknowledged", "resolved", "dismissed"}
 
@@ -839,10 +837,6 @@ def register(
         key = api_key(request) or request.query_params.get("key")
         p = authenticate(store.policy, key)
         return p if p.authenticated else None
-
-    @app.get("/me", response_class=HTMLResponse)
-    async def me_page():
-        return ME_PAGE.read_text() if ME_PAGE.exists() else "<p>employee dashboard not built</p>"
 
     @app.get("/me/summary")
     async def me_summary(request: Request):

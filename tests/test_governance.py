@@ -361,11 +361,6 @@ def test_me_tips_for_idle_lease_and_unlabeled_usage(client):
     assert "idle 6 min" in tips and "no workflow label" in tips
 
 
-def test_me_page_served(client):
-    r = client.get("/me")
-    assert r.status_code == 200 and "<html" in r.text.lower()
-
-
 def test_require_label(make_client):
     c = make_client(mutate=lambda p: p["menu"].update(require_label=True))
     r = post_chat(c, "hello")

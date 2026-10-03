@@ -14,26 +14,19 @@ import { Security } from "./pages/console/Security";
 import { IncidentPage } from "./pages/console/Incident";
 import { Resources } from "./pages/console/Resources";
 import { Requests } from "./pages/console/Requests";
-import { PortalLayout } from "./pages/portal/PortalLayout";
-import { PortalHome } from "./pages/portal/Home";
-import { PortalMenu } from "./pages/portal/Menu";
-import { PortalAccess } from "./pages/portal/Access";
-import { PortalActivity } from "./pages/portal/Activity";
-import { PortalPrivacy } from "./pages/portal/Privacy";
 import { NotFound } from "./pages/NotFound";
 import type { ReactNode } from "react";
 
-function Guard({ role, children }: { role: "admin" | "employee"; children: ReactNode }) {
+// The console is for admins only; an employee key signs in to nothing and the login page says so.
+function Guard({ children }: { children: ReactNode }) {
   const { session } = useAuth();
-  if (!session) return <Navigate to="/login" replace />;
-  if (session.role !== role) return <Navigate to={session.role === "admin" ? "/console" : "/portal"} replace />;
+  if (session?.role !== "admin") return <Navigate to="/login" replace />;
   return <>{children}</>;
 }
 
 function Home() {
   const { session } = useAuth();
-  if (!session) return <Navigate to="/login" replace />;
-  return <Navigate to={session.role === "admin" ? "/console" : "/portal"} replace />;
+  return <Navigate to={session?.role === "admin" ? "/console" : "/login"} replace />;
 }
 
 export function App() {
@@ -44,7 +37,7 @@ export function App() {
       <Route
         path="/console"
         element={
-          <Guard role="admin">
+          <Guard>
             <ConsoleLayout />
           </Guard>
         }
@@ -62,21 +55,6 @@ export function App() {
         <Route path="incidents/:id" element={<IncidentPage />} />
         <Route path="resources" element={<Resources />} />
         <Route path="requests" element={<Requests />} />
-        <Route path="*" element={<NotFound />} />
-      </Route>
-      <Route
-        path="/portal"
-        element={
-          <Guard role="employee">
-            <PortalLayout />
-          </Guard>
-        }
-      >
-        <Route index element={<PortalHome />} />
-        <Route path="menu" element={<PortalMenu />} />
-        <Route path="access" element={<PortalAccess />} />
-        <Route path="activity" element={<PortalActivity />} />
-        <Route path="privacy" element={<PortalPrivacy />} />
         <Route path="*" element={<NotFound />} />
       </Route>
       <Route path="*" element={<NotFound standalone />} />
