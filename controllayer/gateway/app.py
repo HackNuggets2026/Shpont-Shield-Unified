@@ -180,6 +180,7 @@ def create_app(
                 model=model,
                 channel="chat",
                 metered=metered,
+                scored=i == last,
                 pii_override=override,
                 mask_map=mask_map,
             )
@@ -210,7 +211,15 @@ def create_app(
             if isinstance(content, list):
                 parts = [{k: val for k, val in p.items() if k != "text"} if _is_text_part(p) else p for p in content]
             if rest or parts:
-                rctx = Context(principal, direction, flatten([rest, parts]), model=model, channel="chat", metered=False)
+                rctx = Context(
+                    principal,
+                    direction,
+                    flatten([rest, parts]),
+                    model=model,
+                    channel="chat",
+                    metered=False,
+                    scored=i == last,
+                )
                 rv = await layer.evaluate(rctx)
                 if rv.blocked:
                     return _policy_error(rv)
@@ -229,7 +238,13 @@ def create_app(
             kept = []
             for tool in declared:
                 tctx = Context(
-                    principal, Direction.TOOL_DESCRIPTION, flatten(tool), model=model, channel="chat", metered=False
+                    principal,
+                    Direction.TOOL_DESCRIPTION,
+                    flatten(tool),
+                    model=model,
+                    channel="chat",
+                    metered=False,
+                    scored=False,
                 )
                 tv = await layer.evaluate(tctx)
                 if tv.blocked:
@@ -255,7 +270,9 @@ def create_app(
         # roles, anything a future API adds) gets the deterministic detectors before it leaves.
         outgoing = {**body, "messages": messages}
         sv = await layer.evaluate(
-            Context(principal, Direction.INPUT, flatten(outgoing), model=model, channel="chat", metered=False),
+            Context(
+                principal, Direction.INPUT, flatten(outgoing), model=model, channel="chat", metered=False, scored=False
+            ),
             semantic=False,
             audit_allow=False,  # a clean sweep is not a decision of its own
         )

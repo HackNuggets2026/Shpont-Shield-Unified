@@ -56,6 +56,8 @@ class Context:
     channel: str = "api"  # chat | mcp | sdk | dashboard
     # False for re-checks of conversation history: content is inspected, but not charged to budgets.
     metered: bool = True
+    # False for re-sent history: inspected every time, scored for insider risk only once.
+    scored: bool = True
     resource: str | None = None  # catalog id when the call uses a brokered company resource
     scope: str | None = None
     pii_override: str | None = None  # reason given with x-pii-override
@@ -96,7 +98,8 @@ class Verdict:
     latency_ms: dict[str, float] = field(default_factory=dict)
     status_code: int = 200
     reason: str = ""
-    mask_map: dict[str, str] = field(default_factory=dict)  # placeholder -> original, for reversible masking
+    mask_map: dict[str, str] = field(default_factory=dict)  # placeholders this verdict added
+    masked: bool = False  # text contains placeholders (new or reused from the request's map)
     ts: float = field(default_factory=time.time)
 
     @property

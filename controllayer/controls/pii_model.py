@@ -124,7 +124,8 @@ async def apply_overrides(
             f.detail += f" [overridden by user: {ctx.pii_override[:200]}]"
         return findings
     mo = cfg.model_override
-    if not mo.enabled or backend is None or ctx.direction is not Direction.INPUT:
+    targets = [f for f in targets if f.control == "pii_model" and f.category in mo.labels]
+    if not targets or not mo.enabled or backend is None or ctx.direction is not Direction.INPUT:
         return findings
     q = {"pii_necessary": {"type": "noul", "instructions": mo.instructions}}
     try:

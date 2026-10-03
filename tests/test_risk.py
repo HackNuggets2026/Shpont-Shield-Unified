@@ -108,3 +108,13 @@ def test_webhook_sink_receives_alert(make_client, policy_dir):
     while not got and time.time() < deadline:
         time.sleep(0.05)
     assert got and got[0]["principal"] == "alice"
+
+
+def test_resent_history_is_scored_once(client):
+    hist = []
+    for i in range(6):
+        hist += [{"role": "user", "content": f"customer Jan Kowalski turn {i}"}]
+        client.post("/v1/chat/completions", headers=KEYS["alice"], json={"model": "mock-model", "messages": hist})
+        hist += [{"role": "assistant", "content": "ok"}]
+    # 6 turns x one masked name (redact = 3 points); the echoed reply is the caller's own data
+    assert round(score(client, "alice")["score"]) == 18

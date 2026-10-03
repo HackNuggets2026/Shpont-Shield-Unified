@@ -176,6 +176,10 @@ class PiiOverride(_Strict):
     )
     threshold: Probability = 0.85
     keywords: list[str] = Field(default_factory=list)
+    # Only these Privacy Filter labels may be released by the model; regex PII (cards, IBANs) never is.
+    labels: list[str] = Field(
+        default_factory=lambda: ["private_person", "private_email", "private_phone", "private_address"]
+    )
 
 
 class PiiModelControl(ControlBase):

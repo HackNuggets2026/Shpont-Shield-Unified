@@ -157,3 +157,16 @@ def test_grants_persist_and_are_audited(client, policy_dir):
     grant(client)
     assert "alice-coder" in (policy_dir / "data/state.json").read_text()
     assert any(n["kind"] == "grant" for n in client.app.state.layer.audit.notes)
+
+
+@pytest.mark.parametrize("hours", [0, -1, "nan", "inf"])
+def test_grant_hours_must_be_positive_and_finite(client, hours):
+    r = grant(client, resource="build-server", scopes=("exec",), hours=hours)
+    assert r.status_code == 400
+    assert "build-server" not in client.app.state.layer.state.grants.get("alice-coder", {})
+    assert client.get("/admin/grants").status_code == 200
+
+
+def test_uncapped_resource_may_be_granted_without_expiry(client):
+    r = grant(client, resource="build-server", scopes=("exec",), hours=None)
+    assert r.status_code == 200 and r.json()["expires_at"] is None

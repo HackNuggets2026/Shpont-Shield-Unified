@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import time
 from typing import Any
 
@@ -54,6 +55,8 @@ def grant(
     bad = set(scopes) - set(res.scopes)
     if not scopes or bad:
         raise GrantError(f"scopes must be a non-empty subset of {res.scopes}")
+    if hours is not None and not (math.isfinite(hours) and hours > 0):
+        raise GrantError("hours must be a positive number")
     if res.max_grant_hours is not None and (hours is None or hours > res.max_grant_hours):
         raise GrantError(f"{rid!r} can be granted for at most {res.max_grant_hours} hours")
     now = time.time()
@@ -61,7 +64,7 @@ def grant(
         "scopes": sorted(set(scopes)),
         "granted_by": owner.id,
         "granted_at": now,
-        "expires_at": now + hours * 3600 if hours else None,
+        "expires_at": now + hours * 3600 if hours is not None else None,
     }
     state.grants.setdefault(agent, {})[rid] = g
     state.save()

@@ -218,3 +218,37 @@ def test_one_audit_row_per_clean_chat_turn(client):
         json={"model": "mock-model", "messages": [{"role": "user", "content": "hello"}]},
     )
     assert client.get("/admin/summary").json()["totals"]["events"] - before == 2  # input + output
+
+
+def test_cached_history_never_mixes_up_masked_people(policy_dir):
+    c, sent = recording(policy_dir)
+    chat(
+        c,
+        [
+            {"role": "user", "content": "customer Jan Kowalski"},
+            {"role": "assistant", "content": "ok"},
+            {"role": "user", "content": "customer Jan Kowalski"},
+            {"role": "assistant", "content": "ok"},
+            {"role": "user", "content": "x"},
+        ],
+    )
+    chat(
+        c,
+        [
+            {"role": "user", "content": "customer Anna Nowak"},
+            {"role": "assistant", "content": "ok"},
+            {"role": "user", "content": "customer Jan Kowalski"},
+            {"role": "assistant", "content": "ok"},
+            {"role": "user", "content": "y"},
+        ],
+    )
+    msgs = [m["content"] for m in sent[1]["messages"]]
+    assert msgs[0] == "customer <PRIVATE_PERSON_1>" and msgs[2] == "customer <PRIVATE_PERSON_2>"
+
+
+def test_model_override_never_releases_regex_pii(policy_dir):
+    sb = ScriptedBackend({"pii_necessary": [("reply to", 0.95)]})
+    c, sent = recording(policy_dir, backend=sb)
+    chat(c, [{"role": "user", "content": "reply to customer Jan Kowalski, card 4111 1111 1111 1111, ssn 123-45-6789"}])
+    out = sent[0]["messages"][0]["content"]
+    assert "Jan Kowalski" in out and "4111" not in out and "123-45-6789" not in out

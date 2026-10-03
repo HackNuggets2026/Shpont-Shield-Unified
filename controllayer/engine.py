@@ -165,7 +165,7 @@ class ControlLayer:
         transient = {"budget", "semantic_engine"}
         if (
             cacheable
-            and not verdict.mask_map
+            and not verdict.masked
             and not any(f.control in transient or f.category == "detector_unavailable" for f in verdict.findings)
         ):
             self._seen[key] = verdict
@@ -241,7 +241,8 @@ class ControlLayer:
         raw = level != "normal" and policy.insider_risk.watch_capture_raw
         if audit_allow or verdict.action is not Action.ALLOW:
             self.audit.record(ctx, verdict, extra, raw=raw)
-        self.risk.observe(policy, ctx, verdict, level)
+        if ctx.scored or verdict.blocked:  # a blocked request ends there, so it is never re-sent
+            self.risk.observe(policy, ctx, verdict, level)
         return verdict
 
 
@@ -332,4 +333,7 @@ def _decide(
     elif action is Action.WARN:
         reason = "; ".join(f"{f.control}/{f.category}" for f in findings if f.action is Action.WARN)
     added = {k: v for k, v in mask_map.items() if k not in before}
-    return Verdict(action, text, findings, ctx.request_id, version, latency, status, reason, mask_map=added)
+    masked = any(ph in text for ph in mask_map)
+    return Verdict(
+        action, text, findings, ctx.request_id, version, latency, status, reason, mask_map=added, masked=masked
+    )
