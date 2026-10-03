@@ -12,7 +12,7 @@ import {
   type TooltipProps,
 } from "recharts";
 import type { Timeseries } from "../api";
-import { dayLabel, pct, tokens as fmtTokens, usd, usdTick } from "../lib/format";
+import { count, dayLabel, money, pct, tokens as fmtTokens, usd, usdTick } from "../lib/format";
 import { cx, Empty } from "./ui";
 
 // Categorical slots, fixed order (validated palette, see index.css). Past 7 series, the rest fold into "Other".
@@ -32,13 +32,13 @@ interface Folded {
   rows: Record<string, number | string>[];
 }
 
-function fold(ts: Timeseries): Folded {
+function fold(ts: Pick<Timeseries, "days" | "series">, fixed?: Record<string, string>): Folded {
   const entries = Object.entries(ts.series); // server orders largest first
   const head = entries.slice(0, entries.length > MAX_SERIES + 1 ? MAX_SERIES : MAX_SERIES + 1);
   const tail = entries.slice(head.length);
   const keys = head.map(([k]) => k);
   const colors: Record<string, string> = {};
-  keys.forEach((k, i) => (colors[k] = SLOTS[i] ?? OTHER));
+  keys.forEach((k, i) => (colors[k] = fixed?.[k] ?? SLOTS[i] ?? OTHER));
   if (tail.length) {
     keys.push("Other");
     colors.Other = OTHER;
@@ -54,7 +54,7 @@ function fold(ts: Timeseries): Folded {
 
 type Fmt = (v: number) => string;
 
-function ChartTooltip({ active, payload, label, fmt }: TooltipProps<number, string> & { fmt: Fmt }) {
+function ChartTooltip({ active, payload, label, fmt, labelOf = seriesLabel }: TooltipProps<number, string> & { fmt: Fmt; labelOf?: (k: string) => string }) {
   if (!active || !payload?.length) return null;
   const items = payload.filter((p) => (p.value ?? 0) > 0).sort((a, b) => (b.value ?? 0) - (a.value ?? 0));
   const total = payload.reduce((s, p) => s + (p.value ?? 0), 0);
@@ -69,7 +69,7 @@ function ChartTooltip({ active, payload, label, fmt }: TooltipProps<number, stri
         <div key={p.dataKey as string} className="flex items-center justify-between gap-4 py-0.5">
           <span className="flex min-w-0 items-center gap-1.5 text-ink2">
             <span className="h-2 w-2 shrink-0 rounded-sm" style={{ background: p.color }} />
-            <span className="truncate">{seriesLabel(String(p.dataKey))}</span>
+            <span className="truncate">{labelOf(String(p.dataKey))}</span>
           </span>
           <span className="tnum text-ink">{fmt(p.value ?? 0)}</span>
         </div>
@@ -85,7 +85,9 @@ export function Legend({
   fmt,
   hidden,
   onToggle,
+  labelOf = seriesLabel,
 }: {
+  labelOf?: (k: string) => string;
   keys: string[];
   colors: Record<string, string>;
   totals?: Record<string, number>;
@@ -103,7 +105,7 @@ export function Legend({
           className={cx("flex items-center gap-1.5 text-ink2 hover:text-ink", hidden?.has(k) && "opacity-40")}
         >
           <span className="h-2.5 w-2.5 rounded-sm" style={{ background: colors[k] }} />
-          <span>{seriesLabel(k)}</span>
+          <span>{k === "Other" ? "Other" : labelOf(k)}</span>
           {totals && fmt && <span className="tnum text-muted">{fmt(totals[k] ?? 0)}</span>}
         </button>
       ))}
@@ -117,15 +119,24 @@ export function StackedChart({
   kind = "bar",
   metric = "usd",
   height = 260,
+  colors: fixedColors,
+  compact,
+  labelOf,
 }: {
-  ts: Timeseries;
+  ts: Pick<Timeseries, "days" | "series" | "totals">;
   kind?: "bar" | "area";
   metric?: "usd" | "tokens" | "events";
   height?: number;
+  /** Colors pinned per series (e.g. one per department) so a series keeps its hue across charts and filters. */
+  colors?: Record<string, string>;
+  /** Compact numbers ($412k, 1.8M) in the legend and tooltip, for org-wide totals. */
+  compact?: boolean;
+  labelOf?: (k: string) => string;
 }) {
-  const { keys, colors, rows } = useMemo(() => fold(ts), [ts]);
+  const { keys, colors, rows } = useMemo(() => fold(ts, fixedColors), [ts, fixedColors]);
   const [hidden, setHidden] = useState<Set<string>>(new Set());
-  const fmt: Fmt = metric === "usd" ? (v) => usd(v) : metric === "tokens" ? fmtTokens : (v) => String(Math.round(v));
+  const fmt: Fmt =
+    metric === "usd" ? (v) => (compact ? money(v) : usd(v)) : metric === "tokens" ? fmtTokens : (v) => (compact ? count(v) : String(Math.round(v)));
   const tick: Fmt = metric === "usd" ? usdTick : metric === "tokens" ? fmtTokens : (v) => String(v);
   const totals = useMemo(() => {
     const t: Record<string, number> = {};
@@ -157,7 +168,7 @@ export function StackedChart({
         minTickGap={24}
       />
       <YAxis tickFormatter={tick} tick={{ fill: "var(--axis)", fontSize: 11 }} axisLine={false} tickLine={false} width={52} />
-      <Tooltip content={<ChartTooltip fmt={fmt} />} cursor={{ fill: "rgb(var(--ink) / 0.05)", stroke: "rgb(var(--ink) / 0.2)" }} />
+      <Tooltip content={<ChartTooltip fmt={fmt} labelOf={labelOf} />} cursor={{ fill: "rgb(var(--ink) / 0.05)", stroke: "rgb(var(--ink) / 0.2)" }} />
     </>
   );
 
@@ -201,7 +212,7 @@ export function StackedChart({
           )}
         </ResponsiveContainer>
       </div>
-      <Legend keys={keys} colors={colors} totals={totals} fmt={fmt} hidden={hidden} onToggle={toggle} />
+      <Legend keys={keys} colors={colors} totals={totals} fmt={fmt} hidden={hidden} onToggle={toggle} labelOf={labelOf} />
     </div>
   );
 }

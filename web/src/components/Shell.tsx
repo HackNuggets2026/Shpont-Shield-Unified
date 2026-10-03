@@ -12,6 +12,8 @@ export interface NavItem {
   end?: boolean;
   badge?: number | null;
   badgeTone?: "bad" | "warn";
+  /** Other path prefixes that should light this item up (e.g. people pages under Organization). */
+  also?: string[];
 }
 
 function Brand({ area }: { area: string }) {
@@ -29,6 +31,7 @@ function Brand({ area }: { area: string }) {
 }
 
 function Nav({ items, onNavigate }: { items: NavItem[]; onNavigate?: () => void }) {
+  const { pathname } = useLocation();
   return (
     <nav className="space-y-0.5">
       {items.map((it) => (
@@ -40,7 +43,9 @@ function Nav({ items, onNavigate }: { items: NavItem[]; onNavigate?: () => void 
           className={({ isActive }) =>
             cx(
               "flex items-center gap-2.5 rounded-md px-2.5 py-2 text-sm font-medium transition-colors",
-              isActive ? "bg-accent/10 text-accent" : "text-ink2 hover:bg-raised hover:text-ink",
+              isActive || it.also?.some((p) => pathname === p || pathname.startsWith(p + "/"))
+                ? "bg-accent/10 text-accent"
+                : "text-ink2 hover:bg-raised hover:text-ink",
             )
           }
         >
@@ -53,7 +58,7 @@ function Nav({ items, onNavigate }: { items: NavItem[]; onNavigate?: () => void 
                 it.badgeTone === "bad" ? "bg-bad/15 text-bad" : "bg-warn/15 text-warn",
               )}
             >
-              {it.badge}
+              {it.badge >= 10000 ? `${Math.round(it.badge / 1000)}k` : it.badge.toLocaleString("en-US")}
             </span>
           )}
         </NavLink>
@@ -99,7 +104,7 @@ function UserBox() {
   );
 }
 
-export function Shell({ area, items }: { area: string; items: NavItem[] }) {
+export function Shell({ area, items, search }: { area: string; items: NavItem[]; search?: (close: () => void) => ReactNode }) {
   const [open, setOpen] = useState(false);
   const loc = useLocation();
   useEffect(() => setOpen(false), [loc.pathname]);
@@ -107,6 +112,7 @@ export function Shell({ area, items }: { area: string; items: NavItem[] }) {
   const side = (
     <div className="flex h-full flex-col gap-5 p-3">
       <Brand area={area} />
+      {search && <div>{search(() => setOpen(false))}</div>}
       <div className="flex-1 overflow-y-auto">
         <Nav items={items} onNavigate={() => setOpen(false)} />
       </div>

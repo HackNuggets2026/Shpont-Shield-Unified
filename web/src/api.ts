@@ -134,6 +134,10 @@ export interface Overview {
   incidents_open: number;
   requests_pending: number;
   at_risk: number;
+  /** Enterprise scale (docs/scale-contract.md). */
+  headcount?: number;
+  active?: number;
+  org_name?: string;
 }
 
 export interface Timeseries {

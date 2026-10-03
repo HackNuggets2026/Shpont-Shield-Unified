@@ -33,6 +33,10 @@
   --grid: #e1e0d9;
   --axis: #898781;
   --chart-surface: #ffffff;
+  /* Diverging map (treemap/heatmap): cool pole, neutral midpoint, warm pole. */
+  --div-cool: #2a78d6;
+  --div-mid: #f0efec;
+  --div-warm: #e34948;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -65,6 +69,9 @@
     --grid: #2a2e35;
     --axis: #8a909a;
     --chart-surface: #13161b;
+    --div-cool: #3987e5;
+    --div-mid: #383835;
+    --div-warm: #e66767;
   }
 }
 
@@ -97,6 +104,9 @@
   --grid: #2a2e35;
   --axis: #8a909a;
   --chart-surface: #13161b;
+  --div-cool: #3987e5;
+  --div-mid: #383835;
+  --div-warm: #e66767;
 }
 
 html,

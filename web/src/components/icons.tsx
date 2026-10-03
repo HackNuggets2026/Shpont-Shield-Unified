@@ -197,3 +197,24 @@ export const IconPlay = (p: P) => (
     <path d="m7 5 12 7-12 7V5z" />
   </I>
 );
+export const IconSearch = (p: P) => (
+  <I {...p}>
+    <circle cx="11" cy="11" r="6.5" />
+    <path d="m20 20-4.2-4.2" />
+  </I>
+);
+export const IconBuilding = (p: P) => (
+  <I {...p}>
+    <path d="M4 21V5.5L12 3l8 2.5V21M4 21h16M9 21v-4h6v4M8 8h1M12 8h1M16 8h-1M8 12h1M12 12h1M16 12h-1" />
+  </I>
+);
+export const IconChevronRight = (p: P) => (
+  <I {...p}>
+    <path d="m9 6 6 6-6 6" />
+  </I>
+);
+export const IconTrendUp = (p: P) => (
+  <I {...p}>
+    <path d="M4 17l6-6 4 4 6-7M20 8h-5M20 8v5" />
+  </I>
+);
