@@ -235,3 +235,14 @@ def test_approving_a_quota_request_never_lowers_the_scale(client):
     client.post("/admin/principals/bob", json={"budget_scale": 3.0, "reason": "quarter close"})
     rid = _quota_request(client, "bob", 1.5)
     assert client.post(f"/admin/requests/{rid}", json={"decision": "approve"}).json()["budget_scale"] == 3.0
+
+
+def test_menu_says_workflows_are_paused_for_a_quarantined_or_revoked_person(client):
+    menu = lambda: {w["name"]: w for w in client.get("/me/summary", headers=KEYS["alice"]).json()["menu"]}  # noqa: E731
+    assert menu()["bugfix"]["available"]
+    client.post("/admin/principals/alice", json={"status": "quarantined", "reason": "probing"})
+    m = menu()["bugfix"]
+    assert not m["available"] and m["why"].startswith("paused: quarantined") and "probing" in m["why"]
+    client.post("/admin/principals/alice", json={"status": "revoked", "reason": "left"})
+    assert client.get("/me/summary", headers=KEYS["alice"]).status_code == 200
+    assert menu()["chat_assist"]["why"].startswith("paused: access revoked")

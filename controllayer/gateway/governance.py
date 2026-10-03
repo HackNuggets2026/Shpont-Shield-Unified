@@ -67,8 +67,16 @@ def register(
     def menu_view(policy: Policy, who: Principal | None = None) -> list[dict[str, Any]]:
         since = time.time() - 30 * DAY
         rows = []
+        paused = None
+        if who is not None:
+            pp = policy.principal(who.id)
+            if pp.status == "revoked":
+                paused = f"paused: access revoked ({pp.reason or 'by an administrator'})"
+            elif pp.status == "quarantined":
+                tools = ", ".join(policy.quarantine.tools)
+                paused = f"paused: quarantined, only {tools} tools ({pp.reason or 'by an administrator'})"
         for name, wf in policy.menu.workflows.items():
-            why = workflows.availability(policy, name, wf, who.id, who.team, who.role) if who else None
+            why = paused or (workflows.availability(policy, name, wf, who.id, who.team, who.role) if who else None)
             rows.append(
                 {
                     "name": name,
