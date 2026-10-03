@@ -6,7 +6,8 @@ export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), "");
   const target = env.SHIELD_GATEWAY || "http://127.0.0.1:8787";
   return {
-    base: "/",
+    // The GitHub Pages preview lives under /<repo>/; set SHIELD_BASE for that build.
+    base: env.SHIELD_BASE || "/",
     plugins: [react()],
     server: {
       port: 5173,

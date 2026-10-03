@@ -9,3 +9,5 @@ build/
 .venv-web/
 web/node_modules/
 web/dist/
+web/preview/snapshot/
+web/dist-preview/

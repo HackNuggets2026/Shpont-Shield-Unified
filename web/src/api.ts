@@ -1,5 +1,7 @@
 // Typed client for the Shpont Shield gateway JSON API (/api/admin/*, /api/me/*, /api/session).
 
+import { PREVIEW, previewGet } from "./lib/preview";
+
 export type Role = "admin" | "employee";
 
 export interface AdminSession {
@@ -64,6 +66,13 @@ function errorMessage(body: unknown, fallback: string): string {
 }
 
 async function request<T>(method: string, path: string, body?: unknown, c: Credentials | null = creds): Promise<T> {
+  if (PREVIEW) {
+    if (method !== "GET") throw new ApiError(403, "This is a read-only preview, so changes are switched off. Run the project locally to try them.");
+    const hit = await previewGet(c?.secret ?? "", path);
+    if (hit.ok) return hit.data as T;
+    if (path.startsWith("/api/session")) throw new ApiError(401, "unknown key");
+    throw new ApiError(404, "Not part of the preview snapshot. Run the project locally to see everything.");
+  }
   const headers: Record<string, string> = { accept: "application/json", ...authHeaders(c) };
   if (body !== undefined) headers["content-type"] = "application/json";
   let resp: Response;
@@ -442,6 +451,7 @@ export const admin = {
 
 /** Downloads an admin export (needs the token header, so it cannot be a plain link). */
 export async function downloadExport(path: string, filename: string) {
+  if (PREVIEW) throw new ApiError(403, "Exports need the gateway; run the project locally to download them.");
   const resp = await fetch(path, { headers: authHeaders(creds) });
   if (!resp.ok) {
     let body: unknown = null;
