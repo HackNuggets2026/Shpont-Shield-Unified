@@ -390,7 +390,7 @@ detections:
     auto: true
     alert: 30
     tighten: 60                # budgets drop to 25%
-    quarantine: 90             # read-only tools, 10% budget; only an admin lifts it
+    quarantine: 80             # read-only tools, 10% budget; only an admin lifts it
     tighten_budget_scale: 0.25
 
 # principals:                  # usually written by the admin dashboard into admin_overlay

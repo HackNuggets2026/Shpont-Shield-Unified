@@ -45,7 +45,8 @@ def check(ctx: Context, policy: Policy) -> list[Finding]:
     if ctx.direction is Direction.INPUT and ctx.model and wf.models:
         if not any(fnmatch(ctx.model, pat) for pat in wf.models):
             return [_block("model_not_in_workflow", f"workflow {name!r} does not use model {ctx.model!r}")]
-    if ctx.direction is Direction.TOOL_CALL and ctx.tool and wf.tools:
+    # A tool behind an access grant is decided by its grant (scoped to a workflow or not), not the tool list.
+    if ctx.direction is Direction.TOOL_CALL and ctx.tool and wf.tools and not policy.grant_resources(ctx.tool):
         # Access-grant resources the workflow includes bring their tools with them.
         included = [t for r in wf.resources if r in policy.catalog for t in policy.catalog[r].tools]
         allowed = any(fnmatch(ctx.tool, pat) for pat in [*wf.tools, *included])

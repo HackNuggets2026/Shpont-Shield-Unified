@@ -456,10 +456,10 @@ class Seeder:
         auto = "auto:detections"
         self.store.log_admin(auto, "tighten", "frank", "risk score 72.4 reached tighten (60)",
                              {"budget_scale": 0.25}, ts=t_exfil + 1)  # fmt: skip
-        self.store.log_admin(auto, "quarantine", "frank", "risk score 118.9 reached quarantine (90)",
+        self.store.log_admin(auto, "quarantine", "frank", "risk score 118.9 reached quarantine (80)",
                              {"status": "quarantined"}, ts=now - 14 * 60 + 1)  # fmt: skip
         self.overlay["principals"].setdefault("frank", {}).update(
-            status="quarantined", budget_scale=0.25, reason="risk score 118.9 reached quarantine (90)", by=auto,
+            status="quarantined", budget_scale=0.25, reason="risk score 118.9 reached quarantine (80)", by=auto,
             since=now - 14 * 60 + 1,
         )  # fmt: skip
         self.store.log_admin(dana, "view_events", "frank", "reviewing the exfiltration incident", ts=now - 6 * 60)
