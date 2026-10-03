@@ -67,7 +67,7 @@ def params(page: Console) -> dict[str, str]:
 
 
 def open_tab(client, view: str, extra: str = "") -> Console:
-    page = Console(client, f"/security?ui=next&view={view}{extra}")
+    page = Console(client, f"/security?view={view}{extra}")
     assert not page.errors(), page.errors()
     assert len(page.html) < MAX_HTML
     return page
@@ -201,7 +201,7 @@ def test_audit_filters_are_sent_to_the_server_and_narrow_rows(client):
     pid = re.search(r'data-nav title="Only ([^"]+)"', page.html).group(1)
     page.type("principal", pid)
     assert query(page, "/admin/events?")["principal"] == pid
-    who = re.findall(r'href="/security\?ui=next&amp;person=([^"]+)" data-nav>', page.html)
+    who = re.findall(r'href="/security\?person=([^"]+)" data-nav>', page.html)
     assert who and all(w == pid for w in who[: len(who)])
 
     page.nav(next(h for h in links(page.html) if h.endswith("view=audit")))

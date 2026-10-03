@@ -83,7 +83,7 @@ def grants(client: TestClient, agent: str) -> dict:
 
 
 def page_of(client: TestClient, pid: str) -> Recording:
-    page = Recording(client, f"/security?ui=next&person={pid}")
+    page = Recording(client, f"/security?person={pid}")
     assert not page.errors(), page.errors()
     return page
 

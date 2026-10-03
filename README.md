@@ -56,9 +56,11 @@ Without Docker, set `ACL_SEMANTIC=ollama ACL_UPSTREAM=ollama` before starting th
 | URL | Who | What |
 |---|---|---|
 | `/me` | Employees (their own key; in demo mode a "viewing as" switch instead) | Usage, a monitoring notice, recent activity of themselves and their agents, and **company resources**: grant or revoke each of their agents' access to company services and MCP servers, with scopes and expiry (a scope click keeps the expiry; an expired grant is renewed explicitly) |
-| `/security` (also `/`) | Security staff (`?token=`, none in demo mode) | Posture, threats, controls, budgets, latency, audit trail, **insider risk** (scores; per person AUTO or an override to normal/watch/restricted), **silent alerts**, all agent grants (revoke), resource catalog (suspend) |
+| `/security` (also `/`) | Security staff (`?token=`, none in demo mode) | **Overview**: spend today / 7 / 30 days against budget, spend over time, cost per model and company service, spend per person, budget use, the people who most need attention. **People**: search, filter and sort everyone (server-side paging). **Person** (`?person=<id>`): their spend by service, budget, agents and grants (one-click on/off), risk level (AUTO or an override) and recent decisions. **Risk**, **Resources** (suspend, grants), **Controls**, **Audit** (filters, exports), **Try a prompt** |
 
-Both panels are plain HTML on [Primer CSS](https://primer.style/css) (loaded from jsDelivr): `panel.html` loads `core.js`, which fetches the data, composes the page and handles every action. Most actions are a single click: risk levels and filters are segmented controls, suspension is a toggle, and an agent's grant is edited by clicking its scopes.
+The console is `controllayer/dashboard/app.js` (router, helpers, SVG charts) plus one file per view in `views/`; `/me` is `core.js`. Both are plain HTML on [Primer CSS](https://primer.style/css) (loaded from jsDelivr). Every number and chart links to the filtered list behind it. Modules, URL parameters and the `/admin/analytics/*` API are in [docs/console-contract.md](docs/console-contract.md).
+
+`python -m controllayer.seed --people 2000 --days 30` generates a synthetic company for the console: people and agents in teams with daily budgets (`data/org.json`, which `identity.directory` merges into the policy), 30 days of usage across models and company services, risk scores, alerts, grants and overrides. Restart the gateway after seeding.
 
 ## Company resources for agents
 

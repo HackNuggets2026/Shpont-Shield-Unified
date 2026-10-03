@@ -37,7 +37,7 @@ def links(html: str) -> list[str]:
 
 
 def test_overview_renders_and_every_link_lands_on_a_view(big_org):
-    page = Console(big_org, "/security?ui=next")
+    page = Console(big_org, "/security")
     html = page.html
     assert not page.errors(), page.errors()
     for title in ("Spend over time", "Budget used", "Insider risk", "Cost by service", "Spend per person", "Top teams"):
@@ -55,7 +55,7 @@ def test_overview_renders_and_every_link_lands_on_a_view(big_org):
 
 
 def test_period_switch_reloads_with_that_period(big_org):
-    page = Console(big_org, "/security?ui=next")
+    page = Console(big_org, "/security")
     week = next(h for h in links(page.html) if "period=7" in h)
     page.nav(week)
     assert "period=7" in page.search
@@ -64,15 +64,17 @@ def test_period_switch_reloads_with_that_period(big_org):
 
 
 def test_token_is_sent_and_kept_only_when_given(big_org):
-    page = Console(big_org, "/security?ui=next&token=t0k")
+    page = Console(big_org, "/security?token=t0k")
     assert "token=t0k" in "".join(links(page.html))
-    plain = Console(big_org, "/security?ui=next")
+    plain = Console(big_org, "/security")
     assert all("token" not in h for h in links(plain.html))
 
 
-def test_classic_console_still_renders(big_org):
-    page = Console(big_org, "/security")
-    assert "Security Console" in page.html and not page.errors()
+def test_root_is_the_console_and_me_is_the_employee_panel(big_org):
+    console = Console(big_org, "/")
+    assert "Spend over time" in console.html and not console.errors()
+    panel = Console(big_org, "/me")
+    assert "My AI Workspace" in panel.html and "Spend over time" not in panel.html and not panel.errors()
 
 
 @pytest.fixture(scope="module")
@@ -96,7 +98,7 @@ def test_every_page_fits_two_screens_unless_it_is_an_inspection_page(org500):
     a measured layout."""
     top = org500.get("/admin/analytics/overview").json()["spend"]["top"][0]["id"]
     tabs = [v for v in ("overview", "people", "risk", "resources", "controls", "audit", "playground")]
-    pages = [f"/security?ui=next&view={v}" for v in tabs] + [f"/security?ui=next&person={top}"]
+    pages = [f"/security?view={v}" for v in tabs] + [f"/security?person={top}"]
     page = Console(org500, pages[0])
     seen = {}
     for url in pages:
@@ -109,7 +111,7 @@ def test_every_page_fits_two_screens_unless_it_is_an_inspection_page(org500):
 
 
 def test_overview_risk_is_a_top_five_with_profiles_and_next_steps(org500):
-    page = Console(org500, "/security?ui=next")
+    page = Console(org500, "/security")
     html = page.html
     top = org500.get("/admin/analytics/overview").json()["risk"]
     assert top["attention"] > 0 and f"{top['attention']}</span> people need attention" in html
@@ -121,7 +123,7 @@ def test_overview_risk_is_a_top_five_with_profiles_and_next_steps(org500):
 
 
 def test_logos_cover_every_service_and_model_family(big_org):
-    page = Console(big_org, "/security?ui=next")
+    page = Console(big_org, "/security")
 
     def logo(key):
         return page.js.eval(f"ACL.logo({json.dumps(key)})")

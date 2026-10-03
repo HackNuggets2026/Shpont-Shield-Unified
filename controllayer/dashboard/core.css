@@ -1,4 +1,4 @@
-/* Layout and a few composites; every control is Primer CSS. */
+/* Layout and a few composites; every control is Primer CSS. Employee panel (core.js) first. */
 body { margin: 0; }
 .acl-grid { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 16px; }
 .acl-s4 { grid-column: span 4; } .acl-s6 { grid-column: span 6; } .acl-s8 { grid-column: span 8; } .acl-s12 { grid-column: span 12; }
@@ -9,9 +9,8 @@ body { margin: 0; }
 .acl-num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .acl-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 16px 24px; }
 .acl-big { font-size: 24px; font-weight: 600; font-variant-numeric: tabular-nums; }
-.acl-big-sm { font-size: 16px; font-weight: 600; }
 .acl-tools { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
-.acl-meter { display: flex; min-width: 80px; margin: 4px 0 2px; }
+.acl-progress { display: flex; min-width: 80px; margin: 4px 0 2px; }
 .acl-pre { overflow: auto; max-height: 340px; border-radius: 6px; }
 .Header .form-select { color: #fff; background-color: transparent; border-color: rgba(255,255,255,.25); }
 .Header .BtnGroup-item:not(.btn-primary) { color: #fff; background: transparent; border-color: rgba(255,255,255,.25); }

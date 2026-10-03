@@ -12,7 +12,7 @@ from .test_console_js import MAX_HTML, links
 
 big_org = test_console_js.big_org  # the seeded 2,000-person org fixture
 
-URL = "/security?ui=next&view=people"
+URL = "/security?view=people"
 
 
 def last_people_query(page: Console) -> dict[str, str]:
@@ -41,7 +41,7 @@ def test_lists_one_page_of_the_org_by_spend(big_org):
     assert not page.errors(), page.errors()
     html = page.html
     assert len(html) < MAX_HTML
-    assert 'href="/security?ui=next&amp;view=people" data-nav aria-current="page">People</a>' in html  # a visible tab
+    assert 'href="/security?view=people" data-nav aria-current="page">People</a>' in html  # a visible tab
     assert last_people_query(page) == {"period": "30"}
     expected = api(big_org, period=30)
     assert row_ids(page) == [r["id"] for r in expected["rows"]] and len(expected["rows"]) == 50
@@ -82,7 +82,7 @@ def test_filter_chips_and_selects_send_their_params(big_org):
     page.nav(restricted)
     assert last_people_query(page)["risk"] == "restricted" and not page.errors()
     assert row_ids(page) == [r["id"] for r in api(big_org, risk="restricted")["rows"]]
-    assert 'aria-current="true" href="/security?ui=next&amp;view=people&amp;risk=restricted"' in page.html
+    assert 'aria-current="true" href="/security?view=people&amp;risk=restricted"' in page.html
 
     over = next(h for h in links(page.html) if "budget=over" in h)
     page.nav(over)
@@ -147,7 +147,7 @@ def test_pager_and_rows_per_page(big_org):
 
 
 def test_overview_links_land_filtered(big_org):
-    page = Console(big_org, "/security?ui=next")
+    page = Console(big_org, "/security")
     targets = sorted({h for h in links(page.html) if "view=people" in h})
     assert len(targets) >= 10
     seen = set()
@@ -168,14 +168,14 @@ def test_overview_links_land_filtered(big_org):
 def test_row_click_opens_the_person(big_org):
     page = Console(big_org, f"{URL}&team=sales&page=2")
     pid = row_ids(page)[3]
-    href = f"/security?ui=next&person={pid}"
+    href = f"/security?person={pid}"
     assert f'<tr data-href="{href.replace("&", "&amp;")}"' in page.html
     page.js.eval(
         "__fire('click', { button: 0, preventDefault: function () {}, target: __target(function (sel) {"
         f" return sel === 'tr[data-href]' ? __el('TR', {{ 'data-href': {json.dumps(href)} }}) : null; }}) }})"
     )
     page.settle()
-    assert url_params(page) == {"ui": "next", "person": pid}
+    assert url_params(page) == {"person": pid}
     assert page.requests[-1].startswith(f"GET /admin/analytics/person/{pid}?")
     assert not page.errors(), page.errors()
 
@@ -186,7 +186,7 @@ def test_agents_and_bad_filters(big_org):
     assert last_people_query(page)["kind"] == "agent"
     rows = api(big_org, kind="agent")["rows"]
     assert row_ids(page) == [r["id"] for r in rows]
-    assert f'of <a class="Link--primary text-bold" href="/security?ui=next&amp;person={rows[0]["owner"]}"' in page.html
+    assert f'of <a class="Link--primary text-bold" href="/security?person={rows[0]["owner"]}"' in page.html
     assert ">Agent</a></th>" in page.html and "agents included" not in page.html
 
     bad = Console(big_org, f"{URL}&risk=bogus")
@@ -202,4 +202,4 @@ def test_is_an_inspection_page_with_one_line_rows(big_org):
     page.nav(f"{URL}&per_page=100")
     assert len(row_ids(page)) == 100 and len(page.html) < MAX_HTML
     assert (page.height - short) / 75 <= 36  # every row stays one line
-    assert '<span class="acl-logo' in page.html  # top service or model carries its logo
+    assert 'class="acl-logo' in page.html  # top service or model carries its logo

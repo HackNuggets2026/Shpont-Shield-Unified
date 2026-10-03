@@ -1,6 +1,6 @@
 # Security console: modules and API contract
 
-The redesigned console is opt-in at `/security?ui=next` until it covers everything the classic console (`core.js`) does; then it becomes the default and the classic security code is removed. `/me` stays on `core.js`.
+The security console (`/security`, also `/`) is `app.js` plus the view files below. The employee panel (`/me`) is `core.js`.
 
 ## Front-end modules
 
@@ -12,7 +12,7 @@ The redesigned console is opt-in at `/security?ui=next` until it covers everythi
 | `views/person.js` | `?person=<id>` (agents too) |
 | `views/admin.js` | `?view=risk`, `resources`, `controls`, `audit`, `playground` |
 | `core.css` | all styles; console styles under "security console" |
-| `panel.html` | loads app.js, the views, then core.js |
+| `panel.html` | loads app.js, the views, then core.js; each starts only on its own path |
 
 Each view file touches only itself. A view not ready yet registers with `hidden: true` (no tab; still reachable by URL).
 

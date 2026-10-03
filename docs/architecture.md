@@ -79,7 +79,7 @@ If the model is down or times out, `fail_mode: closed` blocks and `open` allows 
 
 ## Budgets
 
-Commercial models are priced per 1M input/output tokens; Anthropic prompt-cache writes and reads count as input tokens priced at 1.25x and 0.1x unless the policy prices them. Local models are priced per compute-second, using measured upstream latency times `usd_per_compute_second`. Limits apply per principal, per team and globally per UTC day. The loop guard stops an agent that repeats the same call more than N times in a window.
+Commercial models are priced per 1M input/output tokens; Anthropic prompt-cache writes and reads count as input tokens priced at 1.25x and 0.1x unless the policy prices them. Local models are priced per compute-second, using measured upstream latency times `usd_per_compute_second`. Company-service calls are charged per call (`budgets.services`, with per-tool prices) against the same budgets. Limits apply per principal (`per_principal`, overridden field by field per person in `per_person`), per team and globally per UTC day. Every charge also lands in the console's usage history (daily buckets for 62 days, hourly for 48 hours, per principal and model or service; in memory, seeded from `data/history.json`). The loop guard stops an agent that repeats the same call more than N times in a window.
 
 ## OWASP mapping
 

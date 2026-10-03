@@ -23,7 +23,7 @@
   // ---- URL state ------------------------------------------------------------------------
   // The URL is the state: ?view=people&team=sales, ?person=alice. `period` and `token` survive navigation.
 
-  const KEEP = ["token", "period", "ui"];
+  const KEEP = ["token", "period"];
   ACL.params = () => Object.fromEntries(new URLSearchParams(location.search));
   ACL.href = (patch, reset = true) => {
     const cur = ACL.params();
@@ -476,7 +476,5 @@
     render(true);
     setInterval(() => { if (!document.hidden) render(false); }, 15000);
   };
-  // The redesigned console is opt-in (?ui=next) until it covers everything the classic one (core.js) does.
-  ACL.enabled = !location.pathname.startsWith("/me") && ACL.params().ui === "next";
-  if (ACL.enabled) document.addEventListener("DOMContentLoaded", ACL.start);
+  if (!location.pathname.startsWith("/me")) document.addEventListener("DOMContentLoaded", ACL.start); // /me is core.js
 })();
