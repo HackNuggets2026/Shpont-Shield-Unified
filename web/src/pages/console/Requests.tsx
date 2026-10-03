@@ -537,10 +537,13 @@ export function Requests() {
 }
 
 /** What a batch contains, counted: "8 access grants (Prod DB ×5, Deploy ×3) · 4 workflows · 2 budget raises". */
+const BATCH_ONE: Record<string, string> = { grant: "access grant", workflow: "workflow", quota: "budget raise" };
+const BATCH_MANY: Record<string, string> = { grant: "access grants", workflow: "workflows", quota: "budget raises" };
+
 function BulkSummary({ rows }: { rows: OrgRequest[] }) {
   const byKind = new Map<string, OrgRequest[]>();
   for (const r of rows) byKind.set(r.kind, [...(byKind.get(r.kind) ?? []), r]);
-  const what = (r: OrgRequest) => (r.kind === "grant" ? (r.detail?.resource ?? "?") : r.kind === "workflow" ? (r.workflow ?? "?") : `${r.scale ?? 2}×`);
+  const what = (r: OrgRequest) => (r.kind === "grant" ? (r.detail?.resource ?? "?") : r.kind === "workflow" ? (r.workflow ?? "?") : `${r.scale ?? 2}× budget`);
   const depts = new Set(rows.map((r) => r.department).filter(Boolean));
   return (
     <ul className="space-y-1 text-xs">
@@ -550,13 +553,13 @@ function BulkSummary({ rows }: { rows: OrgRequest[] }) {
         return (
           <li key={k} className="flex flex-wrap items-center gap-1.5">
             <Pill tone={KIND[k]?.tone ?? "neutral"}>
-              {rs.length} {KIND[k]?.label.toLowerCase() ?? k}
+              {rs.length} {(rs.length === 1 ? BATCH_ONE : BATCH_MANY)[k] ?? k}
             </Pill>
             <span className="text-ink2">
               {[...counts]
                 .sort((a, b) => b[1] - a[1])
                 .slice(0, 5)
-                .map(([w, n]) => (n > 1 ? `${w} ×${n}` : w))
+                .map(([w, n]) => (n > 1 ? `${w} (${n})` : w))
                 .join(", ")}
             </span>
           </li>
