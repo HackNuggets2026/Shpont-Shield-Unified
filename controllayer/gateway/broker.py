@@ -1,65 +1,52 @@
-"""Built-in `company` MCP server: agents use company resources without ever holding a credential.
+"""Built-in `company` MCP server: agents use company services without ever holding a credential.
 
-The gateway authorises each call against the agent's live grant (see resources.py), then performs
-it itself, injecting the secret from the gateway's environment. Agents only see results, which
-flow back through the normal tool_result checks.
+Every service in the catalog contributes its own tools (controllayer/services.py). The gateway
+authorises each call against the caller's live grant for the tool's scope (see resources.py),
+then performs it itself, injecting the secret from the gateway's environment. Callers only see
+results, which flow back through the normal tool_result checks.
 """
 
 from __future__ import annotations
 
+import json
 import os
-import time
 from typing import Any
 
-import httpx
-
+from .. import services
 from ..config import Policy
 from ..resources import usable
 from ..state import StateStore
 from ..types import Principal
 
-TOOLS = [
-    {
-        "name": "list_resources",
-        "description": "List the company resources you may use, with their scopes.",
-        "inputSchema": {"type": "object", "properties": {}},
-    },
-    {
-        "name": "call_api",
-        "description": "Call a company SaaS/API resource. Authentication is added for you.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "resource": {"type": "string"},
-                "method": {"type": "string", "enum": ["GET", "POST", "PUT", "PATCH", "DELETE"]},
-                "path": {"type": "string"},
-                "body": {"type": "object"},
-            },
-            "required": ["resource", "path"],
-        },
-    },
-    {
-        "name": "run_command",
-        "description": "Run a command on a company server resource.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {"resource": {"type": "string"}, "command": {"type": "string"}},
-            "required": ["resource", "command"],
-        },
-    },
-]
+LIST_RESOURCES = {
+    "name": "list_resources",
+    "description": "List the company services you may use now, with your scopes and the tools they unlock.",
+    "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
+}
 
 
-def scope_for(tool: str, args: dict[str, Any]) -> str | None:
-    """The scope a broker call needs; None for calls that touch no resource."""
-    if tool == "call_api":
-        return "read" if str(args.get("method", "GET")).upper() == "GET" else "write"
-    if tool == "run_command":
-        return "exec"
-    return None
+def catalog(policy: Policy) -> dict[str, tuple[str, services.Tool]]:
+    """Tool name -> (resource id, tool) for every service in the policy's catalog."""
+    return {
+        t.name: (rid, t)
+        for rid, r in policy.resources.items()
+        if r.type == "service"
+        for t in services.SERVICES[r.connection["service"]].tools
+    }
 
 
-async def handle(req: dict, principal: Principal, policy: Policy, state: StateStore, http: httpx.AsyncClient) -> dict:
+def target(policy: Policy, tool: str) -> tuple[str, str] | None:
+    """The resource and scope a tool call needs; None for tools that touch no resource."""
+    hit = catalog(policy).get(tool)
+    return (hit[0], hit[1].scope) if hit else None
+
+
+def _secret(policy: Policy, rid: str) -> str:
+    # Every backend is a mock, so an unset variable falls back to a fixed demo credential.
+    return os.environ.get(policy.resources[rid].connection["secret_env"]) or f"demo-{rid}-credential"
+
+
+def handle(req: dict, principal: Principal, policy: Policy, state: StateStore) -> dict:
     method, rid = req.get("method"), req.get("id")
 
     def ok(result: Any) -> dict:
@@ -72,52 +59,36 @@ async def handle(req: dict, principal: Principal, policy: Policy, state: StateSt
         return ok(
             {
                 "protocolVersion": "2025-06-18",
-                "serverInfo": {"name": "company", "version": "0.1"},
+                "serverInfo": {"name": "company", "version": "0.2"},
                 "capabilities": {"tools": {}},
             }
         )
     if method == "ping":
         return ok({})
+    tools = catalog(policy)
+    mine = usable(policy, state, principal)
     if method == "tools/list":
-        return ok({"tools": TOOLS})
+        offered = [t.spec() for res, t in tools.values() if t.scope in mine.get(res, ())]
+        return ok({"tools": [LIST_RESOURCES, *offered]})
     if method != "tools/call":
         return {"jsonrpc": "2.0", "id": rid, "error": {"code": -32601, "message": f"method not found: {method}"}}
 
     params = req.get("params") or {}
     name, args = params.get("name"), params.get("arguments") or {}
     if name == "list_resources":
-        mine = usable(policy, state, principal)
-        lines = [
-            f"{r_id}: {policy.resources[r_id].type} '{policy.resources[r_id].name}' scopes={scopes}"
-            for r_id, scopes in sorted(mine.items())
-        ]
+        lines = []
+        for res_id, scopes in sorted(mine.items()):
+            res = policy.resources[res_id]
+            names = [t.name for r, t in tools.values() if r == res_id and t.scope in scopes]
+            lines.append(f"{res_id}: {res.name} scopes={scopes} tools={names}")
         return text("\n".join(lines) or "no resources granted")
-
-    res = policy.resources.get(str(args.get("resource")))
-    if res is None:  # unreachable after the gateway's grant check, kept for direct callers
-        return text("unknown resource", error=True)
-    conn = res.connection
-    if name == "call_api":
-        if res.type not in ("saas", "credential"):
-            return text(f"{args['resource']} is a {res.type}, not an API", error=True)
-        url = str(conn.get("base_url", "")).rstrip("/") + "/" + str(args.get("path", "")).lstrip("/")
-        verb = str(args.get("method", "GET")).upper()
-        if url.startswith("mock://"):
-            body = conn.get("mock_responses", {}).get(f"{verb} {args.get('path')}", conn.get("mock_default", "200 OK"))
-            return text(str(body))
-        secret = os.environ.get(str(conn.get("secret_env", "")), "")
-        if not secret:
-            return text(f"credential for {args['resource']} is not configured on the gateway", error=True)
-        header = str(conn.get("auth_header", "Authorization"))
-        value = str(conn.get("auth_format", "Bearer {secret}")).format(secret=secret)
-        try:
-            r = await http.request(verb, url, json=args.get("body"), headers={header: value}, timeout=30)
-        except httpx.HTTPError as e:
-            return text(f"{type(e).__name__}: {e}", error=True)
-        return text(f"HTTP {r.status_code}\n{r.text[:20_000]}", error=r.status_code >= 400)
-    if name == "run_command":
-        if res.type != "server":
-            return text(f"{args['resource']} is a {res.type}, not a server", error=True)
-        # Demo: execution is simulated. A real deployment would hand off to a bastion / SSH CA here.
-        return text(f"[{conn.get('host', res.name)} {time.strftime('%H:%M:%S')}] $ {args.get('command')}\n(simulated)")
-    return text(f"unknown tool {name}", error=True)
+    if name not in tools:
+        return text(f"unknown tool {name}", error=True)
+    res_id, tool = tools[name]
+    svc = services.SERVICES[policy.resources[res_id].connection["service"]]
+    headers = {svc.auth_header: svc.auth_format.format(secret=_secret(policy, res_id))}
+    try:
+        out = services.call(svc, tool, args, headers)
+    except services.ServiceError as e:
+        return text(f"{svc.title}: {e}", error=True)
+    return text(json.dumps(out, ensure_ascii=False))

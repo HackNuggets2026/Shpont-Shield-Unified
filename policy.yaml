@@ -164,51 +164,185 @@ semantic_controls:
 
 # --- Company resources -------------------------------------------------------
 # Security owns this catalog. Employees see what they are entitled to in /me and grant it to
-# their agents (scope, expiry). Agents never receive credentials: the gateway performs each
+# their agents (scopes, expiry). Agents never receive credentials: the gateway performs each
 # call through the `company` MCP server and injects the secret from its own environment.
+# A service's tools each need one scope (read, write, admin or exec); `scopes` lists the ones
+# security allows to be granted, so leaving one out keeps its tools away from every agent.
 
 resources:
   github-acme:
-    type: saas
+    type: service
     name: GitHub (acme org)
-    description: Repositories, issues and pull requests
+    description: Repositories, issues and pull requests. Merging stays with humans.
     sensitivity: medium
     scopes: [read, write]
     entitled: { teams: [engineering, platform] }
     max_grant_hours: 168
-    connection:
-      base_url: mock://github
-      secret_env: GITHUB_TOKEN
-      mock_responses:
-        "GET /repos/acme/web/issues": '[{"number": 12, "title": "Login button misaligned"}]'
-  salesforce-crm:
-    type: saas
-    name: Salesforce CRM
-    description: Customer accounts and contacts (client personal data)
+    connection: { service: github, secret_env: GITHUB_TOKEN }
+  linear:
+    type: service
+    name: Linear
+    description: Issue tracking for ENG, PLAT and GROWTH
+    sensitivity: low
+    scopes: [read, write]
+    entitled: { teams: [engineering, platform, finance] }
+    connection: { service: linear, secret_env: LINEAR_API_KEY }
+  heroku:
+    type: service
+    name: Heroku (acme-api, acme-web)
+    description: Production apps - logs, dyno restarts, scaling
     sensitivity: high
-    scopes: [read]
-    entitled: { teams: [finance], roles: [analyst] }
+    scopes: [read, exec, admin]
+    entitled: { teams: [platform], roles: [developer] }
     max_grant_hours: 8
-    connection:
-      base_url: mock://salesforce
-      secret_env: SALESFORCE_TOKEN
-      mock_responses:
-        "GET /accounts/42": '{"name": "Jan Kowalski", "email": "jan@example.com", "card": "4111 1111 1111 1111"}'
-  prod-db-readonly:
-    type: credential
-    name: Production DB (read replica)
+    connection: { service: heroku, secret_env: HEROKU_API_KEY }
+  vercel:
+    type: service
+    name: Vercel
+    description: Marketing site and docs deployments
+    sensitivity: medium
+    scopes: [read, admin]
+    entitled: { teams: [engineering] }
+    max_grant_hours: 24
+    connection: { service: vercel, secret_env: VERCEL_TOKEN }
+  postgres-prod:
+    type: service
+    name: PostgreSQL (prod read replica)
+    description: Customers, orders, feature usage. Read-only SQL.
     sensitivity: high
     scopes: [read]
     entitled: { roles: [developer], teams: [platform] }
     max_grant_hours: 4
-    connection: { base_url: mock://db, secret_env: PROD_DB_PASSWORD, mock_default: "3 rows" }
-  build-server:
-    type: server
-    name: CI build server
+    connection: { service: postgres, secret_env: PROD_DB_PASSWORD }
+  supabase:
+    type: service
+    name: Supabase (internal tools)
+    description: Feature flags, support macros, beta sign-ups
+    sensitivity: medium
+    scopes: [read, write]
+    entitled: { teams: [engineering, platform] }
+    connection: { service: supabase, secret_env: SUPABASE_SERVICE_KEY }
+  upstash-redis:
+    type: service
+    name: Upstash Redis
+    description: Sessions and rate-limit counters
+    sensitivity: high
+    scopes: [read, write]
+    entitled: { teams: [engineering, platform] }
+    max_grant_hours: 8
+    connection: { service: upstash, secret_env: UPSTASH_REDIS_REST_TOKEN }
+  aws-s3:
+    type: service
+    name: AWS S3 (acme buckets)
+    description: CRM exports, deploy artifacts, public assets
+    sensitivity: high
+    scopes: [read, write]
+    entitled: { teams: [engineering, platform] }
+    max_grant_hours: 24
+    connection: { service: s3, secret_env: AWS_SECRET_ACCESS_KEY }
+  snowflake:
+    type: service
+    name: Snowflake (ANALYTICS)
+    description: MRR, sign-ups and churn. Read-only SQL.
+    sensitivity: medium
+    scopes: [read]
+    entitled: { teams: [finance, engineering] }
+    max_grant_hours: 24
+    connection: { service: snowflake, secret_env: SNOWFLAKE_PASSWORD }
+  stripe:
+    type: service
+    name: Stripe
+    description: Customers, charges and refunds
+    sensitivity: high
+    scopes: [read, write]
+    entitled: { teams: [finance] }
+    max_grant_hours: 8
+    connection: { service: stripe, secret_env: STRIPE_SECRET_KEY }
+  salesforce-crm:
+    type: service
+    name: Salesforce CRM
+    description: Customer accounts and opportunities (client personal data)
+    sensitivity: high
+    scopes: [read, write]
+    entitled: { teams: [finance], roles: [analyst] }
+    max_grant_hours: 8
+    connection: { service: salesforce, secret_env: SALESFORCE_TOKEN }
+  hubspot:
+    type: service
+    name: HubSpot
+    description: Marketing contacts and timeline notes
+    sensitivity: medium
+    scopes: [read, write]
+    entitled: { teams: [finance] }
+    connection: { service: hubspot, secret_env: HUBSPOT_PRIVATE_APP_TOKEN }
+  zendesk:
+    type: service
+    name: Zendesk
+    description: Support tickets (customer messages, untrusted content)
+    sensitivity: high
+    scopes: [read, write]
+    entitled: { teams: [engineering, finance] }
+    max_grant_hours: 24
+    connection: { service: zendesk, secret_env: ZENDESK_API_TOKEN }
+  slack:
+    type: service
+    name: Slack
+    description: Public channels
     sensitivity: low
-    scopes: [exec]
-    entitled: { teams: [engineering] }
-    connection: { host: build-01.acme.internal }
+    scopes: [read, write]
+    entitled: { teams: [engineering, finance, platform, interns] }
+    connection: { service: slack, secret_env: SLACK_BOT_TOKEN }
+  notion:
+    type: service
+    name: Notion
+    description: Company wiki (some pages are edited by guests)
+    sensitivity: low
+    scopes: [read, write]
+    entitled: { teams: [engineering, finance, platform, interns] }
+    connection: { service: notion, secret_env: NOTION_TOKEN }
+  google-drive:
+    type: service
+    name: Google Drive
+    description: Shared documents and spreadsheets
+    sensitivity: medium
+    scopes: [read, admin]
+    entitled: { teams: [engineering, finance, platform, interns] }
+    max_grant_hours: 24
+    connection: { service: gdrive, secret_env: GOOGLE_SERVICE_ACCOUNT_KEY }
+  datadog:
+    type: service
+    name: Datadog
+    description: Metrics, logs and monitors
+    sensitivity: low
+    scopes: [read, write]
+    entitled: { teams: [engineering, platform] }
+    connection: { service: datadog, secret_env: DD_API_KEY }
+  pagerduty:
+    type: service
+    name: PagerDuty
+    description: Incidents and on-call schedules
+    sensitivity: low
+    scopes: [read, write]
+    entitled: { teams: [engineering, platform] }
+    connection: { service: pagerduty, secret_env: PAGERDUTY_TOKEN }
+  zapier:
+    type: service
+    name: Zapier
+    description: Automations between Stripe, HubSpot, Zendesk and Slack
+    sensitivity: medium
+    scopes: [read, exec]
+    entitled: { teams: [finance, platform] }
+    max_grant_hours: 24
+    connection: { service: zapier, secret_env: ZAPIER_API_KEY }
+  sendgrid:
+    type: service
+    name: SendGrid
+    description: Transactional email to customers
+    sensitivity: medium
+    scopes: [read, write]
+    entitled: { teams: [platform, finance] }
+    max_grant_hours: 8
+    connection: { service: sendgrid, secret_env: SENDGRID_API_KEY }
   demo-tools:
     type: mcp_server
     name: Shared-drive tools (demo MCP server)

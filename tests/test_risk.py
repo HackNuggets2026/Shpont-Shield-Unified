@@ -193,7 +193,7 @@ def test_data_returned_to_an_agent_is_not_its_fault(client):
         json={"agent": "bob-assistant", "resource": "salesforce-crm", "scopes": ["read"], "hours": 1},
     )
     for i in range(14):
-        client.post(
+        r = client.post(
             "/mcp/company",
             headers={"x-api-key": "bob-agent-key"},
             json={
@@ -201,11 +201,13 @@ def test_data_returned_to_an_agent_is_not_its_fault(client):
                 "id": 1,
                 "method": "tools/call",
                 "params": {
-                    "name": "call_api",
-                    "arguments": {"resource": "salesforce-crm", "path": "/accounts/42", "body": {"i": i}},
+                    "name": "salesforce_get_account",
+                    # distinct arguments each time, so the loop guard stays out of it
+                    "arguments": {"account_id": "0015g00000KWL01", "fields": ["Description"] + ["Name"] * i},
                 },
             },
         )
+        assert r.json()["error"]["message"].startswith("blocked by policy: pii/credit_card")
     assert score(client, "bob-assistant") is None and score(client, "bob") is None
 
 

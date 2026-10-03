@@ -138,7 +138,7 @@ class Resource(_Strict):
     """A company resource employees can delegate to their agents. Agents never see its secret:
     the gateway brokers every use and injects credentials itself."""
 
-    type: Literal["server", "credential", "saas", "mcp_server"]
+    type: Literal["service", "mcp_server"]
     name: str
     description: str = ""
     sensitivity: Literal["low", "medium", "high"] = "medium"
@@ -146,8 +146,27 @@ class Resource(_Strict):
     entitled: Entitlement = Field(default_factory=Entitlement)
     max_grant_hours: float | None = Field(None, gt=0)
     suspended: bool = False
-    # saas/credential: base_url, auth_header, secret_env; server: host; mcp_server: server (upstream.mcp_servers key)
+    # service: service (a controllayer.services key), secret_env; mcp_server: server (upstream.mcp_servers key)
     connection: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def _connection(self) -> Resource:
+        from .services import SERVICES
+
+        conn = self.connection
+        if self.type == "mcp_server":
+            return self
+        if set(conn) != {"service", "secret_env"} or not isinstance(conn["secret_env"], str) or not conn["secret_env"]:
+            raise ValueError("a service's connection is {service: <name>, secret_env: <variable>}")
+        svc = SERVICES.get(conn["service"])
+        if svc is None:
+            raise ValueError(f"unknown service {conn['service']!r}; known: {sorted(SERVICES)}")
+        unused = set(self.scopes) - svc.scopes
+        if unused:
+            raise ValueError(
+                f"scopes {sorted(unused)} unlock no {conn['service']} tool; its tools need {sorted(svc.scopes)}"
+            )
+        return self
 
 
 class RiskLevels(_Strict):
@@ -313,9 +332,15 @@ class Policy(_Strict):
         for k in self.identity.api_keys.values():
             if k.owner and (k.owner not in owners or owners[k.owner].kind != "human"):
                 raise ValueError(f"agent {k.principal!r}: owner {k.owner!r} is not a known human principal")
+        offered: dict[str, str] = {}
         for rid, r in self.resources.items():
             if r.type == "mcp_server" and r.connection.get("server") not in self.upstream.mcp_servers:
                 raise ValueError(f"resource {rid!r}: connection.server must name an upstream.mcp_servers entry")
+            if r.type == "service":
+                # Tool names identify the resource a call uses, so each service is catalogued once.
+                other = offered.setdefault(r.connection["service"], rid)
+                if other != rid:
+                    raise ValueError(f"resources {other!r} and {rid!r} both offer service {r.connection['service']!r}")
 
         for name, known, cfg in (("pii", PII, self.pii), ("secrets", SECRETS, self.secrets)):
             unknown = set(cfg.entities) - set(known)

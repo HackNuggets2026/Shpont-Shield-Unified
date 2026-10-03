@@ -450,7 +450,7 @@ def create_app(
             if target == "builtin":
                 return mcp_demo.handle(r)
             if target == "broker":
-                return await broker.handle(r, principal, policy, layer.state, http)
+                return broker.handle(r, principal, policy, layer.state)
             resp = await http.post(target, json=r, headers={"accept": "application/json"})
             data = resp.json()
             if not isinstance(data, dict):
@@ -464,8 +464,8 @@ def create_app(
             if not isinstance(name, str) or not isinstance(args, dict):
                 return rpc(rid, -32602, "tools/call needs a string name and object arguments")
             resource, scope = server_resource, None
-            if target == "broker" and broker.scope_for(name, args):
-                resource, scope = str(args.get("resource")), broker.scope_for(name, args)
+            if target == "broker":
+                resource, scope = broker.target(policy, name) or (None, None)
             # All of params (name, _meta, ...), not only the arguments, reaches the server.
             ctx = Context(
                 principal,
