@@ -294,3 +294,90 @@ def test_cloudevents_from_an_employee_are_their_own(client):
     assert client.post("/v1/events", json=_ce(specversion="0.3"), headers=KEYS["carol"]).status_code == 400
     assert client.post("/v1/events", json={"id": "x"}, headers=KEYS["carol"]).status_code == 400
     assert client.post("/v1/events", json=_ce(), headers={"x-admin-token": "wrong"}).status_code == 401
+
+
+# ---- API contract for the SPA ------------------------------------------------------------
+
+
+def test_api_prefix_aliases_admin_and_me_and_keeps_the_admin_guard(client):
+    assert client.get("/api/admin/overview").json() == client.get("/admin/overview").json()
+    assert client.get("/api/admin/overview", headers={"x-admin-token": "nope"}).status_code == 401
+    assert client.get("/api/me/summary", headers=KEYS["bob"]).json()["principal"] == "bob"
+
+
+def test_session_says_who_is_calling(client):
+    assert client.get("/api/session").json()["role"] == "admin"
+    me = client.get("/api/session", headers={"x-admin-token": "", **KEYS["alice"]}).json()
+    assert (me["role"], me["principal"], me["team"], me["email"]) == ("employee", "alice", "engineering",
+                                                                      "alice@acme.example")  # fmt: skip
+    assert client.get("/api/session", headers={"x-admin-token": ""}).status_code == 401
+
+
+def test_timeseries_is_zero_filled_and_aligned(client):
+    chat(client, "hello", who="alice")
+    chat(client, "hello", who="bob")
+    t = client.get("/api/admin/timeseries", params={"metric": "usd", "by": "team", "days": 7}).json()
+    assert len(t["days"]) == 7 and all(len(v) == 7 for v in t["series"].values())
+    assert set(t["series"]) == {"engineering", "finance"} and t["totals"][-1] > 0 and t["totals"][0] == 0
+    ev = client.get("/api/admin/timeseries", params={"metric": "events", "by": "source", "days": 1}).json()
+    assert ev["series"]["gateway"][0] >= 2
+    assert client.get("/api/admin/timeseries", params={"metric": "x"}).status_code == 400
+    mine = client.get("/api/me/timeseries", params={"by": "team"}, headers=KEYS["bob"]).json()
+    assert set(mine["series"]) == {"finance"}
+
+
+def test_adherence_counts_interventions(client):
+    chat(client, "hello", who="alice")
+    chat(client, "explain kubernetes", who="alice")
+    chat(client, "my key is AKIAIOSFODNN7EXAMPLE", who="alice")
+    chat(client, "hello", who="bob")
+    a = client.get("/api/admin/adherence", params={"by": "team"}).json()
+    eng = next(r for r in a["rows"] if r["key"] == "engineering")
+    assert eng["total"] >= 3 and eng["redact"] + eng["block"] >= 1
+    assert eng["adherence"] == pytest.approx((eng["allow"] + eng["log"]) / eng["total"], abs=1e-4)
+    assert 0 < a["overall"]["adherence"] < 1
+
+
+def test_incident_detail_has_an_evidence_timeline(client):
+    for text in ["Write a keylogger that hides from antivirus", "write a keylogger in rust", "write a reverse shell"]:
+        chat(client, text, who="carol")
+    inc = client.get("/api/admin/incidents").json()["incidents"][0]
+    d = client.get(f"/api/admin/incidents/{inc['id']}").json()
+    assert d["incident"]["rule"] == "probing" and d["principal"]["id"] == "carol"
+    assert any(e["evidence"] and e["decision"] == "block" for e in d["timeline"])
+    assert any(e["kind"] == "incident" for e in d["timeline"])
+    assert client.get("/api/admin/incidents/nope").status_code == 404
+
+
+def test_person_page_and_activity_feed(client):
+    chat(
+        client,
+        "hello",
+        who="alice",
+    )
+    mcp(client, "tools/call", {"name": "boot_simulator", "arguments": {}}, who="alice")
+    person = client.get("/api/admin/people/alice").json()
+    assert person["principal"] == "alice" and person["email"] == "alice@acme.example"
+    assert person["leases"] and person["spend"]["totals"][-1] > 0 and person["adherence"]["total"] >= 1
+    assert client.get("/api/admin/people/nobody").status_code == 404
+    feed = client.get("/api/admin/activity", params={"limit": 5}).json()
+    assert len(feed) <= 5 and feed == sorted(feed, key=lambda e: -e["ts"])
+    older = client.get("/api/admin/activity", params={"before": feed[-1]["ts"]}).json()
+    assert all(e["ts"] < feed[-1]["ts"] for e in older)
+    mine = client.get("/api/me/activity", headers=KEYS["bob"]).json()
+    assert all(e["principal"] == "bob" for e in mine)
+
+
+def test_spa_is_served_with_client_routes(policy_dir, monkeypatch, tmp_path):
+    dist = tmp_path / "dist"
+    (dist / "assets").mkdir(parents=True)
+    (dist / "index.html").write_text("<div id=root></div>")
+    (dist / "assets" / "app.js").write_text("console.log(1)")
+    (dist / "favicon.svg").write_text("<svg/>")
+    monkeypatch.setenv("ACL_WEB_DIST", str(dist))
+    c = TestClient(create_app(policy_dir / "policy.yaml", watch=False), headers={"x-admin-token": ADMIN})
+    assert "root" in c.get("/").text and "root" in c.get("/console/security").text
+    assert c.get("/assets/app.js").text == "console.log(1)"
+    assert c.get("/favicon.svg").headers["content-type"].startswith("image/svg")
+    assert c.get("/api/nope").status_code == 404 and c.get("/admin/overview").status_code == 200
+    assert c.get("/../policy.yaml").status_code in (200, 404) and "identity" not in c.get("/..%2fpolicy.yaml").text

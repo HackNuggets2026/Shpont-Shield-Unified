@@ -426,6 +426,55 @@ class UsageStore:
             tuple(args),
         )
 
+    def timeseries(
+        self, metric: str, by: str | None, since: float, principal: str | None = None
+    ) -> list[dict[str, Any]]:
+        """Daily totals of usd | tokens (usage ledger) or events (activity stream), split by one column."""
+        if metric in ("usd", "tokens"):
+            if by is not None and by not in GROUPS - {"day"}:
+                raise ValueError(f"split usage by one of {sorted(GROUPS - {'day'})}")
+            val = "SUM(usd)" if metric == "usd" else "SUM(input_tokens+output_tokens)"
+            table, where = "usage", "ts>=? AND metered=1"
+        elif metric == "events":
+            if by is not None and by not in EVENT_FILTERS:
+                raise ValueError(f"split events by one of {sorted(EVENT_FILTERS)}")
+            val, table, where = "COUNT(*)", "events", "ts>=?"
+        else:
+            raise ValueError("metric must be usd, tokens or events")
+        args: list[Any] = [since]
+        if principal:
+            where += " AND principal=?"
+            args.append(principal)
+        key = f"COALESCE({by}, '(none)')" if by else "'total'"
+        return self._q(
+            f"SELECT strftime('%Y-%m-%d', ts, 'unixepoch') day, {key} key, COALESCE({val}, 0) value"
+            f" FROM {table} WHERE {where} GROUP BY day, key ORDER BY day",
+            tuple(args),
+        )
+
+    def adherence(self, by: str | None, since: float, principal: str | None = None) -> list[dict[str, Any]]:
+        """Policy checks (gateway, MCP, Claude Code hooks) per decision: allow/log adhere; warn/redact/block do not."""
+        if by is not None and by not in EVENT_FILTERS | {"day"}:
+            raise ValueError(f"group by one of {sorted(EVENT_FILTERS | {'day'})}")
+        col = "strftime('%Y-%m-%d', ts, 'unixepoch')" if by == "day" else f"COALESCE({by}, '(none)')" if by else "'all'"
+        where, args = "ts>=? AND kind LIKE 'check.%'", [since]
+        if principal:
+            where += " AND principal=?"
+            args.append(principal)
+        rows = self._q(
+            f"SELECT {col} key, decision, COUNT(*) n FROM events WHERE {where} GROUP BY key, decision",
+            tuple(args),
+        )
+        out: dict[str, dict[str, Any]] = {}
+        for r in rows:
+            o = out.setdefault(r["key"], {"key": r["key"], "total": 0, "allow": 0, "log": 0, "warn": 0,
+                                          "redact": 0, "block": 0})  # fmt: skip
+            o["total"] += r["n"]
+            o[r["decision"] if r["decision"] in o else "allow"] += r["n"]
+        for o in out.values():
+            o["adherence"] = round((o["allow"] + o["log"]) / o["total"], 4) if o["total"] else None
+        return sorted(out.values(), key=lambda o: o["key"])
+
     # ---- admin actions (who changed what, and who looked at whose content) -------
 
     def log_admin(self, actor: str, action: str, target: str, reason: str, detail: Any = None) -> None:

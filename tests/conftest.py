@@ -22,8 +22,9 @@ KEYS = {
 
 
 @pytest.fixture(autouse=True)
-def _no_data_dir(monkeypatch):
+def _no_data_dir(monkeypatch, tmp_path):
     monkeypatch.delenv("ACL_DATA_DIR", raising=False)
+    monkeypatch.setenv("ACL_WEB_DIST", str(tmp_path / "no-web"))  # tests see the API, not a local SPA build
 
 
 @pytest.fixture

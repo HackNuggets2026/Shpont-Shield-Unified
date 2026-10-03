@@ -315,6 +315,121 @@ def register(
         usage.decide_request(rid, "approved" if decision == "approve" else "denied", actor(request), note)
         return {"ok": True}
 
+    # ---- admin: charts, adherence, evidence, people, activity ---------------------------
+
+    def pivot(rows: list[dict[str, Any]], days: int, now: float) -> dict[str, Any]:
+        """Rows of (day, key, value) as aligned daily series, zero-filled, largest series first."""
+        start = _day_start(now) - (days - 1) * DAY
+        labels = [time.strftime("%Y-%m-%d", time.gmtime(start + i * DAY)) for i in range(days)]
+        idx = {d: i for i, d in enumerate(labels)}
+        series: dict[str, list[float]] = {}
+        for r in rows:
+            if r["day"] in idx:
+                series.setdefault(r["key"], [0.0] * days)[idx[r["day"]]] += round(r["value"] or 0, 6)
+        ordered = dict(sorted(series.items(), key=lambda kv: -sum(kv[1])))
+        return {
+            "days": labels,
+            "series": ordered,
+            "totals": [round(sum(v[i] for v in ordered.values()), 6) for i in range(days)],
+        }
+
+    def timeseries(metric: str, by: str | None, days: int, principal: str | None):
+        days = max(1, min(int(days), 120))
+        now = time.time()
+        try:
+            rows = usage.timeseries(metric, by or None, _day_start(now) - (days - 1) * DAY, principal)
+        except ValueError as e:
+            return err(str(e))
+        return {"metric": metric, "by": by, **pivot(rows, days, now)}
+
+    @app.get("/admin/timeseries")
+    async def admin_timeseries(metric: str = "usd", by: str | None = "workflow", days: int = 30):
+        return timeseries(metric, by, days, None)
+
+    @app.get("/admin/adherence")
+    async def admin_adherence(by: str | None = "team", days: int = 30):
+        """Share of policy checks that needed no intervention (allow or log), per team, workflow, source..."""
+        since = time.time() - max(1, min(days, 400)) * DAY
+        try:
+            rows = usage.adherence(by or None, since)
+            overall = usage.adherence(None, since)
+        except ValueError as e:
+            return err(str(e))
+        return {"by": by, "rows": rows, "overall": overall[0] if overall else None}
+
+    def incident_by_id(iid: str) -> dict[str, Any] | None:
+        hit = next((i for i in layer.risk.incidents if i["id"] == iid), None)
+        return hit or next((i for i in usage.incidents(since=0, limit=10_000) if i["id"] == iid), None)
+
+    @app.get("/admin/incidents/{iid}")
+    async def admin_incident(iid: str):
+        """One incident with its evidence: the events it names, and what the person did around it."""
+        inc = incident_by_id(iid)
+        if inc is None:
+            return err("no such incident", 404)
+        ids = [e for e in inc.get("evidence") or [] if e]
+        named = usage.events(request_id=ids, limit=200) if ids else []
+        around = usage.events(principal=inc["principal"], since=inc["ts"] - 3600, until=inc["ts"] + 900, limit=200)
+        seen, timeline = set(), []
+        for e in sorted([*named, *around], key=lambda e: e["ts"]):
+            if e["id"] in seen:
+                continue
+            seen.add(e["id"])
+            timeline.append({**e, "evidence": e.get("request_id") in ids or e["id"] in ids})
+        p = store.policy
+        score = layer.risk.score(inc["principal"], p)
+        actions = [a for a in usage.admin_actions(inc["principal"]) if a["ts"] >= inc["ts"] - 60]
+        return {
+            "incident": inc,
+            "timeline": timeline,
+            "principal": {
+                "id": inc["principal"],
+                "risk": score,
+                "level": layer.risk.level(score, p),
+                "status": p.principal(inc["principal"]).status,
+            },  # fmt: skip
+            "actions": actions,
+        }
+
+    @app.get("/admin/people/{pid}")
+    async def admin_person(pid: str, days: int = 30):
+        """Everything about one person except the content of their events (that needs a stated reason)."""
+        p, now = store.policy, time.time()
+        known = principals_known(p)
+        if pid not in known:
+            rows = usage.breakdown(["principal", "team"], now - 90 * DAY, pid)
+            if not rows:
+                return err("no such person", 404)
+            known[pid] = Principal(pid, rows[0]["team"], "?")
+        since = now - max(1, min(days, 120)) * DAY
+        return {
+            **principal_row(p, known[pid]),
+            "email": ident.email if (ident := p.identity_of(pid)) else None,
+            "spend": timeseries("usd", "workflow", days, pid),
+            "by_workflow": usage.breakdown(["workflow"], since, pid),
+            "by_resource": usage.breakdown(["resource"], since, pid),
+            "by_source": usage.breakdown(["source"], since, pid),
+            "adherence": (usage.adherence(None, since, pid) or [None])[0],
+            "incidents": [i for i in reversed(layer.risk.incidents) if i["principal"] == pid][:50],
+            "grants": [{**g.model_dump(), "live": g.live(now)} for g in p.principal(pid).grants],
+            "leases": layer.leases.snapshot(p, pid),
+            "requests": usage.requests(principal=pid),
+            "admin_actions": usage.admin_actions(pid),
+        }
+
+    @app.get("/admin/activity")
+    async def admin_activity(
+        limit: int = 50,
+        before: float | None = None,
+        source: str | None = None,
+        kind: str | None = None,
+        principal: str | None = None,
+        severity: str | None = None,
+    ):
+        """The live feed: newest events first (no content; masked text stays in the audit log)."""
+        return usage.events(limit=max(1, min(limit, 500)), before=before, source=source, kind=kind,
+                            principal=principal, severity=severity)  # fmt: skip
+
     # ---- employees ---------------------------------------------------------------------
 
     def me(request: Request) -> Principal | None:
@@ -430,6 +545,20 @@ def register(
         if who is None:
             return err("your API key is required", 401)
         return await _release(lease_id, who.id, f"released by {who.id}")
+
+    @app.get("/me/timeseries")
+    async def me_timeseries(request: Request, metric: str = "usd", by: str | None = "workflow", days: int = 30):
+        who = me(request)
+        if who is None:
+            return err("your API key is required", 401)
+        return timeseries(metric, by, days, who.id)
+
+    @app.get("/me/activity")
+    async def me_activity(request: Request, limit: int = 50, before: float | None = None):
+        who = me(request)
+        if who is None:
+            return err("your API key is required", 401)
+        return usage.events(principal=who.id, limit=max(1, min(limit, 500)), before=before)
 
     @app.post("/me/requests")
     async def me_request(request: Request):

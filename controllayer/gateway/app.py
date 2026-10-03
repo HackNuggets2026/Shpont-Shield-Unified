@@ -28,6 +28,10 @@ from . import catalog, governance, hooks, ingest, mcp_demo, otel
 from .upstream import UpstreamClient
 
 DASHBOARD = Path(__file__).resolve().parent.parent / "dashboard" / "index.html"
+# The built SPA (web/: npm run build). Absent: the HTML dashboards are served instead.
+WEB_DIST = Path(__file__).resolve().parents[2] / "web" / "dist"  # ACL_WEB_DIST overrides
+# Paths the SPA's client-side routes must never shadow.
+API_PREFIXES = ("api/", "admin", "me", "v1/", "mcp/", "metrics", "assets/")
 
 
 def _api_key(request: Request) -> str | None:
@@ -691,16 +695,81 @@ def create_app(
         lines += [f'acl_budget_usd{{scope="{r["scope"]}",key="{r["key"]}"}} {r["usd"]}' for r in snap["scopes"]]
         return PlainTextResponse("\n".join(lines) + "\n")
 
-    @app.get("/", response_class=HTMLResponse)
-    async def dashboard():
-        return DASHBOARD.read_text() if DASHBOARD.exists() else "<p>dashboard not built</p>"
+    @app.get("/api/session")
+    async def session(request: Request):
+        """Who is calling: the SPA routes an admin token to the console and an employee key to the portal."""
+        p = store.policy
+        token = p.identity.admin_token
+        given = request.headers.get("x-admin-token") or ""
+        if token and given and hmac.compare_digest(given, token):
+            return {"role": "admin", "name": (request.headers.get("x-admin-user") or "admin")[:80]}
+        who = authenticate(p, _api_key(request))
+        if who.authenticated:
+            ident = p.identity_of(who.id)
+            return {
+                "role": "employee",
+                "principal": who.id,
+                "team": who.team,
+                "job_role": who.role,
+                "email": ident.email if ident else None,
+                "status": p.principal(who.id).status,
+            }
+        return JSONResponse({"error": "sign in with the admin token or your API key"}, status_code=401)
 
     governance.register(app, store, layer, app_reclaim, _api_key, _json_object)
     catalog.register(app, store, layer, _api_key, _json_object)
     ingest.register(app, store, layer, _api_key)
     otel.register(app, store, layer, _api_key)
     hooks.register(app, store, layer, _api_key, _json_object)
+
+    @app.middleware("http")
+    async def api_prefix(request: Request, call_next):
+        """/api/admin/* and /api/me/* are the SPA's contract; they serve the same handlers as /admin/*, /me/*."""
+        path = request.scope["path"]
+        if path.startswith(("/api/admin", "/api/me")):
+            request.scope["path"] = path[4:]
+            request.scope["raw_path"] = request.scope["path"].encode()
+        return await call_next(request)
+
+    web = Path(os.environ.get("ACL_WEB_DIST") or WEB_DIST)
+    spa = web / "index.html"
+    if spa.exists():
+        from fastapi.staticfiles import StaticFiles
+
+        if (web / "assets").is_dir():
+            app.mount("/assets", StaticFiles(directory=web / "assets"), name="assets")
+
+        @app.get("/", response_class=HTMLResponse)
+        async def spa_root():
+            return HTMLResponse(spa.read_text())
+
+        @app.get("/{path:path}", include_in_schema=False)
+        async def spa_route(path: str):
+            if path.startswith(API_PREFIXES):
+                return JSONResponse({"error": "not found"}, status_code=404)
+            static = (web / path).resolve()
+            if static.is_file() and web.resolve() in static.parents:
+                return Response(static.read_bytes(), media_type=_media(static.suffix))
+            return HTMLResponse(spa.read_text())  # a client-side route
+    else:
+
+        @app.get("/", response_class=HTMLResponse)
+        async def dashboard():
+            return DASHBOARD.read_text() if DASHBOARD.exists() else "<p>dashboard not built</p>"
+
     return app
+
+
+def _media(suffix: str) -> str:
+    return {
+        ".svg": "image/svg+xml",
+        ".png": "image/png",
+        ".ico": "image/x-icon",
+        ".json": "application/json",
+        ".js": "text/javascript",
+        ".css": "text/css",
+        ".txt": "text/plain",
+    }.get(suffix, "application/octet-stream")
 
 
 class BadRequest(Exception):
