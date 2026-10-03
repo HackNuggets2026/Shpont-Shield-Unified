@@ -58,6 +58,12 @@ class Context:
     metered: bool = True
     # False for checks that are not the person's own act (playground runs, re-inspection sweeps).
     scored: bool = True
+    # True for content the gateway fetched (model replies, MCP results and tool lists): inspected,
+    # never held against the caller, or a hostile source could frame anyone.
+    fetched: bool = False
+    # True for chat history the client re-sends every turn: served from the verdict cache and
+    # scored once. The newest message is never `resent`, so retries keep adding up.
+    resent: bool = False
     resource: str | None = None  # catalog id when the call uses a brokered company resource
     scope: str | None = None
     pii_override: str | None = None  # reason given with x-pii-override

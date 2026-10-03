@@ -180,6 +180,7 @@ def create_app(
                 model=model,
                 channel="chat",
                 metered=metered,
+                resent=i != last,
                 pii_override=override,
                 mask_map=mask_map,
             )
@@ -217,6 +218,7 @@ def create_app(
                     model=model,
                     channel="chat",
                     metered=False,
+                    resent=i != last,
                 )
                 rv = await layer.evaluate(rctx)
                 if rv.blocked:
@@ -242,6 +244,7 @@ def create_app(
                     model=model,
                     channel="chat",
                     metered=False,
+                    resent=True,
                 )
                 tv = await layer.evaluate(tctx)
                 if tv.blocked:
@@ -304,6 +307,7 @@ def create_app(
             channel="chat",
             request_id=metered_ctx.request_id,
             known_pii=frozenset(known_pii),
+            fetched=True,
         )
         ov = await layer.evaluate(
             out_ctx, {"usd": round(cost, 6), "tokens": completion.input_tokens + completion.output_tokens}
@@ -467,7 +471,12 @@ def create_app(
                     continue
                 # Name, description and every schema string: poisoning hides in parameter descriptions too.
                 tctx = Context(
-                    principal, Direction.TOOL_DESCRIPTION, flatten(tool), tool=tool.get("name"), channel="mcp"
+                    principal,
+                    Direction.TOOL_DESCRIPTION,
+                    flatten(tool),
+                    tool=tool.get("name"),
+                    channel="mcp",
+                    fetched=True,
                 )
                 tv = await layer.evaluate(tctx, {"server": server})
                 if tv.blocked:
@@ -489,6 +498,7 @@ def create_app(
             tool=name,
             channel="mcp",
             request_id=request_id or uuid.uuid4().hex[:16],
+            fetched=True,
         )
         rv = await layer.evaluate(rctx, {"server": server, "method": method})
         if rv.blocked:

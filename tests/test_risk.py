@@ -164,3 +164,53 @@ def test_data_returned_to_an_agent_is_not_its_fault(client):
             },
         )
     assert score(client, "bob-assistant") is None and score(client, "bob") is None
+
+
+KEY = "key AKIAIOSFODNN7EXAMPLE"
+
+
+def _send(client, messages, **body):
+    return client.post(
+        "/v1/chat/completions", headers=KEYS["alice"], json={"model": "mock-model", "messages": messages, **body}
+    )
+
+
+def test_caller_written_tool_messages_and_tools_are_scored(client):
+    for i in range(3):
+        _send(
+            client,
+            [
+                {"role": "user", "content": "x"},
+                {"role": "assistant", "content": "y"},
+                {"role": "tool", "content": f"{KEY} #{i}"},
+            ],
+        )
+    assert score(client, "alice")["score"] == 30
+    for i in range(3):
+        _send(
+            client,
+            [{"role": "user", "content": f"q{i}"}],
+            tools=[{"type": "function", "function": {"name": "t", "description": f"{KEY} v{i}"}}],
+        )
+    assert score(client, "alice")["score"] == 60
+
+
+def test_guard_direction_does_not_dodge_scoring(client):
+    guard(client, KEY, direction="tool_result")
+    assert score(client, "alice")["score"] == 10
+
+
+def test_repeated_mcp_requests_each_count(client):
+    for _ in range(3):
+        client.post(
+            "/mcp/demo",
+            headers=KEYS["alice"],
+            json={"jsonrpc": "2.0", "id": 1, "method": "resources/read", "params": {"uri": KEY}},
+        )
+    assert score(client, "alice")["score"] == 30
+
+
+def test_retries_in_newest_message_fields_each_count(client):
+    for _ in range(3):
+        _send(client, [{"role": "user", "content": "hi", "name": KEY}])
+    assert score(client, "alice")["score"] == 30

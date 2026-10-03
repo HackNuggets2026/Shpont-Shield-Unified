@@ -16,7 +16,7 @@ import httpx
 
 from .config import Policy
 from .state import StateStore
-from .types import Context, Direction, Principal, Verdict
+from .types import Context, Principal, Verdict
 
 log = logging.getLogger(__name__)
 
@@ -67,14 +67,10 @@ class RiskEngine:
         if not cfg.enabled or not p.authenticated:
             return
         evidence = [f for f in v.findings if f.control not in _IGNORED_CONTROLS]
-        # Only what the person (or their agent) sends is evidence; model replies and data returned by
-        # tools or resources are not theirs, and scoring them would let a hostile source frame anyone.
-        if ctx.direction not in (Direction.INPUT, Direction.TOOL_CALL):
+        if ctx.fetched:
             evidence = []
-        # The client re-sends its whole history every turn, so unmetered content (history, message
-        # fields, declared tools) counts once; the newest message always counts, so retries add up.
         key = (p.id, ctx.direction.value, hashlib.sha256(ctx.text.encode()).hexdigest())
-        if not ctx.metered and key in self._scored:
+        if ctx.resent and key in self._scored:
             evidence = []
         self._scored[key] = None
         self._scored.move_to_end(key)

@@ -155,7 +155,7 @@ class ControlLayer:
         )
         # Brokered-resource checks depend on grant expiry (time), so they are never cached.
         cacheable = ctx.resource is None
-        if cacheable and not ctx.metered and key in self._seen:
+        if cacheable and ctx.resent and key in self._seen:
             self._seen.move_to_end(key)
             return self._seen[key]
         verdict = await self._evaluate(ctx, extra, semantic=semantic, audit_allow=audit_allow)
