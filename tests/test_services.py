@@ -312,3 +312,10 @@ def test_keywords_in_quoted_names_are_names(client):
     grant(client, "postgres-prod")
     r = call(client, "postgres_query", {"sql": 'select 1 as [delete], 2 as `drop`, 3 as "into"'})
     assert json.loads(text(r))["rows"] == [{"delete": 1, "drop": 2, "into": 3}]
+
+
+def test_a_redacted_value_keeps_the_answer_valid_json(client):
+    grant(client, "heroku")
+    lines = json.loads(text(call(client, "heroku_get_logs", {"app": "acme-api"})))
+    assert len(lines) == 4 and lines[3].endswith("status=200 service=41ms")
+    assert lines[2] == "2026-10-03T07:58:09Z app[worker.1]: connecting to [REDACTED:credentials_in_url]"

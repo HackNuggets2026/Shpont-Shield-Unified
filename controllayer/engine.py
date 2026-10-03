@@ -132,12 +132,24 @@ class ControlLayer:
             hits = [f for f in detect(clean) if f.action is Action.REDACT]
             return redact(clean, [sp for f in hits for sp in f.spans]) if hits else text  # untouched unless redacted
 
-        def walk(o: Any) -> Any:
+        def walk(o: Any, depth: int = 0) -> Any:
             if isinstance(o, dict):
-                return {fix(k) if isinstance(k, str) else k: walk(v) for k, v in o.items()}
+                return {fix(k) if isinstance(k, str) else k: walk(v, depth) for k, v in o.items()}
             if isinstance(o, list):
-                return [walk(v) for v in o]
-            return fix(o) if isinstance(o, str) else o
+                return [walk(v, depth) for v in o]
+            if not isinstance(o, str):
+                return o
+            # JSON in a string (an MCP text result, tool-call arguments) is redacted value by value and
+            # re-serialised, as flatten() inspects it: a span over the serialised text can eat `", "`.
+            if depth < 3 and o.lstrip()[:1] in ("{", "["):
+                try:
+                    inner = json.loads(o)
+                except ValueError:
+                    pass
+                else:
+                    cleaned = walk(inner, depth + 1)
+                    return o if cleaned == inner else json.dumps(cleaned, ensure_ascii=False)
+            return fix(o)
 
         out = walk(obj)
         if any(f.action.rank >= Action.REDACT.rank for f in detect(flatten(out))):
