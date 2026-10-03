@@ -79,8 +79,12 @@ def handle(req: dict, principal: Principal, policy: Policy, state: StateStore) -
         lines = []
         for res_id, scopes in sorted(mine.items()):
             res = policy.resources[res_id]
-            names = [t.name for r, t in tools.values() if r == res_id and t.scope in scopes]
-            lines.append(f"{res_id}: {res.name} scopes={scopes} tools={names}")
+            line = f"{res_id}: {res.name} scopes={scopes}"
+            if res.type == "mcp_server":
+                line += f" (MCP server at /mcp/{res.connection['server']})"
+            else:
+                line += f" tools={[t.name for r, t in tools.values() if r == res_id and t.scope in scopes]}"
+            lines.append(line)
         return text("\n".join(lines) or "no resources granted")
     if name not in tools:
         return text(f"unknown tool {name}", error=True)

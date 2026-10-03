@@ -154,6 +154,8 @@ _WRITE_SQL = re.compile(
 )
 _SQL_NOISE = re.compile(r"--[^\n]*|/\*.*?\*/|'(?:[^']|'')*'|\"(?:[^\"]|\"\")*\"", re.DOTALL)
 _QUERY_SECONDS = 2.0
+_MAX_VALUE_BYTES = 100_000
+_MAX_RESULT_CHARS = 1_000_000
 
 
 def read_only_sql(sql: str, system: str) -> None:
@@ -177,17 +179,26 @@ def _query(tables: dict[str, dict], sql: str, limit: int, system: str) -> dict[s
             db.execute(f"CREATE TABLE {name} ({t['columns']})")
             db.executemany(f"INSERT INTO {name} VALUES ({', '.join('?' * len(t['rows'][0]))})", t["rows"])
         db.execute("PRAGMA query_only = ON")
+        db.setlimit(sqlite3.SQLITE_LIMIT_LENGTH, _MAX_VALUE_BYTES)
         deadline = time.monotonic() + _QUERY_SECONDS
         db.set_progress_handler(lambda: time.monotonic() > deadline, 10_000)
         cur = db.execute(sql)
-        rows = cur.fetchmany(limit)
+        rows: list[tuple] = []
+        size, truncated = 0, False
+        for row in cur:
+            size += sum(len(str(v)) for v in row)
+            if len(rows) == limit or size > _MAX_RESULT_CHARS:
+                truncated = True
+                break
+            rows.append(row)
     except sqlite3.Error as e:
         msg = "canceling statement due to statement timeout" if "interrupted" in str(e) else str(e)
         raise ServiceError(400, f"{system}: {msg}") from None
     finally:
         db.close()
     cols = [d[0] for d in cur.description]
-    return {"columns": cols, "rows": [dict(zip(cols, r, strict=True)) for r in rows], "row_count": len(rows)}
+    rows_out = [dict(zip(cols, r, strict=True)) for r in rows]
+    return {"columns": cols, "rows": rows_out, "row_count": len(rows), "truncated": truncated}
 
 
 def _tables(tables: dict[str, dict]) -> list[dict[str, Any]]:

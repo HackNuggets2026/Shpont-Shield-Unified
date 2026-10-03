@@ -66,6 +66,17 @@ def test_tools_list_follows_the_live_grant(client):
     assert tool_names(client) == {"list_resources"}
 
 
+def test_list_resources_names_the_tools_each_grant_unlocks(client):
+    grant(client, "heroku", scopes=("read", "exec"))
+    grant(client, "demo-tools", scopes=("use",))
+    lines = text(call(client, "list_resources", {})).splitlines()
+    assert lines == [
+        "demo-tools: Shared-drive tools (demo MCP server) scopes=['use'] (MCP server at /mcp/demo)",
+        "heroku: Heroku (acme-api, acme-web) scopes=['exec', 'read'] "
+        "tools=['heroku_list_apps', 'heroku_get_logs', 'heroku_restart_dyno']",
+    ]
+
+
 def test_tools_list_drops_a_suspended_service(client):
     grant(client, "slack")
     assert "slack_read_channel" in tool_names(client)
@@ -132,7 +143,7 @@ def test_postgres_replica_rejects_writes_and_ddl(client, sql, found):
 def test_read_only_guard_reads_keywords_only_outside_literals(client):
     grant(client, "postgres-prod")
     r = call(client, "postgres_query", {"sql": "select id from orders where status <> 'delete me' -- drop\n"})
-    assert json.loads(text(r))["row_count"] == 6
+    assert json.loads(text(r)) | {"rows": None} == {"columns": ["id"], "rows": None, "row_count": 6, "truncated": False}
 
 
 def test_runaway_query_is_cancelled(client, monkeypatch):
@@ -141,6 +152,24 @@ def test_runaway_query_is_cancelled(client, monkeypatch):
     sql = "with recursive c(x) as (select 1 union all select x + 1 from c) select count(*) from c"
     r = call(client, "postgres_query", {"sql": sql})
     assert "statement timeout" in text(r)
+
+
+@pytest.mark.parametrize(
+    "sql,error",
+    [
+        ("select length(randomblob(500000000))", "string or blob too big"),
+        ("select a.id from orders a, orders b, orders c", None),  # 216 rows, cut to the limit
+        ("select hex(randomblob(40000)) from orders a, orders b", None),  # 36 x 80 kB, cut by size
+    ],
+)
+def test_query_size_is_bounded(client, sql, error):
+    grant(client, "postgres-prod")
+    r = call(client, "postgres_query", {"sql": sql, "limit": 50})
+    if error:
+        assert r["result"]["isError"] and error in text(r)
+        return
+    out = json.loads(text(r))
+    assert out["truncated"] is True and 0 < out["row_count"] <= 50 and len(text(r)) < 1_100_000
 
 
 def test_pii_in_a_database_answer_is_redacted(client):
