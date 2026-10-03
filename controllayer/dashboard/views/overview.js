@@ -11,7 +11,7 @@
   function spendChart(o) {
     const s = o.series, n = s.models.length;
     const day = (i) => new Date((s.start + i * 86400) * 1000).toISOString().slice(0, 10);
-    return c.columns({
+    return c.area({
       title: "Spend over time",
       width: 780,
       labels: c.bucketLabels(s, n),
@@ -65,7 +65,7 @@
     }));
     const marks = [["p50", o.spend.p50], ["p90", o.spend.p90]].map(([k, v]) => ({ at: at(v), label: `${k} ${h.usd(v)}` }));
     const top = o.spend.top.slice(0, 5).map((t) => ({ label: t.name, value: t.usd, sub: t.team, href: ACL.href({ person: t.id }) }));
-    return `<div class="f6 color-fg-muted">People by spend, agents included (p99 ${h.usd(o.spend.p99)})</div>${c.histogram(bins, marks, { title: "Spend per person", width: 400, height: 130 })}
+    return `<div class="f6 color-fg-muted">People by spend, agents included (p99 ${h.usd(o.spend.p99)})</div>${c.density(bins, marks, { title: "Spend per person", width: 400, height: 130 })}
       <div class="f6 text-bold mt-2 mb-1">Top spenders</div>${c.hbars(top)}${more("All people by spend", people({ sort: "-usd" }))}`;
   }
 

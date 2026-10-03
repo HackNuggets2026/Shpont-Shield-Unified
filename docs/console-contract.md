@@ -63,10 +63,10 @@ Every view fits in two viewport heights (1800 px at 1280 x 900) with a 500-perso
 
 ### Charts (`ACL.charts`)
 
-All inline SVG (`opts.width`: the viewBox width, default 640; set it near the rendered width, e.g. 380 in an `acl-c4` card, so axis text stays ~11 px), one palette (`--viz-1`..`--viz-5`, `--viz-other`, status colours in core.css), bars at most 24 px with 2 px gaps, a tooltip from `data-tip` on every mark, and a drill-down `href` where given.
-- `columns({labels, series: [{label, color, values}], ref: {value, label}, href: (i) => url, fmt})`: stacked columns over time, legend when 2+ series.
+All inline SVG (`opts.width`: the viewBox width, default 640; set it near the rendered width, e.g. 380 in an `acl-c4` card, so axis text stays ~11 px), one palette (`--viz-1`..`--viz-5`, `--viz-other`, status colours in core.css); time series and distributions are smooth curves, categories are bars (at most 24 px, 2 px gaps); a tooltip from `data-tip` on every mark, and a drill-down `href` where given.
+- `area({labels, series: [{label, color, values}], ref: {value, label}, href: (i) => url, fmt})`: stacked smooth areas over time (monotone curve, never overshoots), hover crosshair per point, legend when 2+ series.
 - `hbars([{label, value, color, sub, href, icon}], {fmt, max})`: ranked horizontal bars; `icon` is raw HTML before the label (e.g. `ACL.logo(key)`).
-- `histogram(bins: [{count, edge, end, tip, href}], markers: [{at, label}])`.
+- `density(bins: [{count, edge, end, tip, href}], markers: [{at, label}], {color})`: a distribution as one smooth curve over equal-width bins, with marker lines (e.g. p50/p90).
 - `split([{label, value, color, href}])`: a 100% bar with a labelled legend.
 - `line({labels, values, color, thresholds: [{value, label}], fmt})`.
 - `legend`, `bucketLabels(series, n)`, colours `PALETTE` (5 categorical, fixed order), `OTHER`, `KIND` (model / service), `STATUS` (normal / watch / restricted, budget bands).

@@ -173,11 +173,11 @@
 
   // ---- charts (inline SVG; palette in core.css: --viz-1.., status colours) ----------------
   // Every mark carries data-tip (shown by the shared tooltip) and, when it drills down, sits in an
-  // <a data-nav href>. Bars are at most 24px thick with a 4px rounded data end and 2px gaps.
+  // <a data-nav href>. Time series and distributions are smooth curves with a hover crosshair;
+  // categories are bars (at most 24px thick, 4px rounded data end, 2px gaps).
 
   const c = (ACL.charts = {});
   const VBW = 640; // default viewBox width; pass opts.width close to the rendered width so text stays ~11px
-  const R = 4;
   const ticks = (max, n = 4) => {
     if (max <= 0) return [0];
     const raw = max / n, mag = 10 ** Math.floor(Math.log10(raw));
@@ -187,56 +187,12 @@
     if (out[out.length - 1] < max) out.push(out[out.length - 1] + step);
     return out;
   };
-  // Bar path rounded at the data end only (top for columns, right for horizontal bars).
-  const colPath = (x, y, w, hgt, r = R) => {
-    if (hgt <= 0) return "";
-    r = Math.min(r, w / 2, hgt);
-    return `M${x},${y + hgt}V${y + r}Q${x},${y} ${x + r},${y}H${x + w - r}Q${x + w},${y} ${x + w},${y + r}V${y + hgt}Z`;
-  };
-  const barPath = (x, y, w, hgt, r = R) => {
-    if (w <= 0) return "";
-    r = Math.min(r, hgt / 2, w);
-    return `M${x},${y}H${x + w - r}Q${x + w},${y} ${x + w},${y + r}V${y + hgt - r}Q${x + w},${y + hgt} ${x + w - r},${y + hgt}H${x}Z`;
-  };
   const wrap = (inner, href, tip) => {
     const t = tip ? ` data-tip="${h.esc(tip)}"` : "";
     return href ? `<a href="${h.esc(href)}" data-nav${t}>${inner}</a>` : `<g tabindex="0"${t}>${inner}</g>`;
   };
   c.legend = (series) => `<div class="acl-legend">${series.map((s) =>
     `<span><i class="acl-swatch" style="background:${s.color}"></i>${h.esc(s.label)}${s.value != null ? ` <b>${h.esc(s.value)}</b>` : ""}</span>`).join("")}</div>`;
-
-  // Stacked columns over time. opts: {labels: [str], series: [{label, color, values}], fmt, ref: {value, label},
-  // href: (i) => url, height}
-  c.columns = (opts) => {
-    const W = opts.width || VBW, H = opts.height || 180, L = 48, B = 22, T = 8, n = opts.labels.length;
-    const totals = opts.labels.map((_, i) => opts.series.reduce((a, s) => a + (s.values[i] || 0), 0));
-    const yt = ticks(Math.max(...totals, opts.ref?.value || 0));
-    const max = yt[yt.length - 1] || 1, ph = H - B - T, band = (W - L) / n;
-    const bw = Math.min(24, Math.max(2, band - 2)), y = (v) => T + ph - (v / max) * ph;
-    const fmt = opts.fmt || h.usd;
-    let out = yt.map((v) => `<line class="acl-grid" x1="${L}" x2="${W}" y1="${y(v)}" y2="${y(v)}"/><text class="acl-axis" x="${L - 6}" y="${y(v) + 4}" text-anchor="end">${h.esc(fmt(v))}</text>`).join("");
-    const every = Math.ceil(n / 8);
-    opts.labels.forEach((lab, i) => {
-      const x = L + i * band + (band - bw) / 2;
-      let acc = 0, marks = "";
-      opts.series.forEach((s, k) => {
-        const v = s.values[i] || 0;
-        if (v <= 0) return;
-        const top = y(acc + v), bottom = y(acc) - (acc > 0 ? 2 : 0);
-        const last = opts.series.slice(k + 1).every((s2) => !(s2.values[i] > 0));
-        marks += last ? `<path d="${colPath(x, top, bw, bottom - top)}" fill="${s.color}"/>` : `<rect x="${x}" y="${top}" width="${bw}" height="${Math.max(0, bottom - top)}" fill="${s.color}"/>`;
-        acc += v;
-      });
-      const tip = `${lab}: ${fmt(totals[i])}` + opts.series.map((s) => `\n${s.label}: ${fmt(s.values[i] || 0)}`).join("");
-      out += wrap(`<rect class="acl-hit" x="${L + i * band}" y="${T}" width="${band}" height="${ph}"/>${marks}`, opts.href?.(i), tip);
-      if (i % every === 0 || i === n - 1) out += `<text class="acl-axis" x="${x + bw / 2}" y="${H - 6}" text-anchor="middle">${h.esc(lab)}</text>`;
-    });
-    out += `<line class="acl-base" x1="${L}" x2="${W}" y1="${y(0)}" y2="${y(0)}"/>`;
-    if (opts.ref && opts.ref.value > 0) {
-      out += `<line class="acl-ref" x1="${L}" x2="${W}" y1="${y(opts.ref.value)}" y2="${y(opts.ref.value)}"/><text class="acl-axis acl-ref-label" x="${W - 2}" y="${y(opts.ref.value) - 4}" text-anchor="end">${h.esc(opts.ref.label)}</text>`;
-    }
-    return `<svg class="acl-chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="${h.esc(opts.title || "chart")}">${out}</svg>` + (opts.series.length > 1 ? c.legend(opts.series) : "");
-  };
 
   // Ranked horizontal bars. rows: [{label, value, color?, href?, sub?, icon? (html before the label)}], opts: {fmt, max}
   c.hbars = (rows, opts = {}) => {
@@ -249,26 +205,6 @@
       const tip = `${r.label}: ${fmt(r.value)}${r.sub ? " (" + r.sub + ")" : ""}`;
       return r.href ? `<a class="acl-hbar-row" href="${h.esc(r.href)}" data-nav data-tip="${h.esc(tip)}">${bar}</a>` : `<div class="acl-hbar-row" tabindex="0" data-tip="${h.esc(tip)}">${bar}</div>`;
     }).join("")}</div>`;
-  };
-
-  // Histogram of counts with vertical markers. bins: [{label, count, href?, tip?}], markers: [{at: fractional bin index, label}]
-  c.histogram = (bins, markers = [], opts = {}) => {
-    const W = opts.width || VBW, H = opts.height || 150, L = 34, B = 22, T = 16, n = bins.length || 1;
-    const yt = ticks(Math.max(...bins.map((b) => b.count), 1), 3), max = yt[yt.length - 1];
-    const ph = H - B - T, band = (W - L) / n, bw = Math.min(48, band - 2), y = (v) => T + ph - (v / max) * ph;
-    let out = yt.map((v) => `<line class="acl-grid" x1="${L}" x2="${W}" y1="${y(v)}" y2="${y(v)}"/><text class="acl-axis" x="${L - 6}" y="${y(v) + 4}" text-anchor="end">${h.num(v)}</text>`).join("");
-    bins.forEach((b, i) => {
-      const x = L + i * band + (band - bw) / 2;
-      out += wrap(`<rect class="acl-hit" x="${L + i * band}" y="${T}" width="${band}" height="${ph}"/><path d="${colPath(x, y(b.count), bw, y(0) - y(b.count))}" fill="var(--viz-1)"/>`, b.href, b.tip || `${b.label}: ${b.count}`);
-      out += `<text class="acl-axis" x="${L + i * band}" y="${H - 6}" text-anchor="middle">${h.esc(b.edge ?? "")}</text>`;
-    });
-    if (bins.length && bins[bins.length - 1].end != null) out += `<text class="acl-axis" x="${W - 2}" y="${H - 6}" text-anchor="end">${h.esc(bins[bins.length - 1].end)}</text>`;
-    out += `<line class="acl-base" x1="${L}" x2="${W}" y1="${y(0)}" y2="${y(0)}"/>`;
-    markers.forEach((m) => {
-      const x = L + m.at * band;
-      out += `<line class="acl-marker" x1="${x}" x2="${x}" y1="${T - 4}" y2="${y(0)}"/><text class="acl-axis acl-marker-label" x="${x + 3}" y="${T - 6}">${h.esc(m.label)}</text>`;
-    });
-    return `<svg class="acl-chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="${h.esc(opts.title || "histogram")}">${out}</svg>`;
   };
 
   // A 100% bar split into labelled parts: [{label, value, color, href?}]. Labels always show (count + name).
@@ -308,6 +244,88 @@
       if (i % every === 0 || i === last) out += `<text class="acl-axis" x="${x(i)}" y="${H - 5}" text-anchor="${i === last ? "end" : "middle"}">${h.esc(lab)}</text>`;
     });
     return `<svg class="acl-chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="${h.esc(opts.title || "line chart")}">${out}</svg>`;
+  };
+
+  // Monotone cubic (Fritsch-Carlson) through [x, y] points: smooth, but never overshoots a peak or dips
+  // below the baseline between data points. Returns path commands starting with M.
+  const r1 = (v) => Math.round(v * 10) / 10;
+  const smooth = (pts) => {
+    const n = pts.length;
+    if (n < 3) return pts.map(([x, y], i) => `${i ? "L" : "M"}${r1(x)},${r1(y)}`).join("");
+    const dx = [], m = [], t = [];
+    for (let i = 0; i < n - 1; i++) { dx[i] = pts[i + 1][0] - pts[i][0]; m[i] = (pts[i + 1][1] - pts[i][1]) / dx[i]; }
+    t[0] = m[0]; t[n - 1] = m[n - 2];
+    for (let i = 1; i < n - 1; i++) {
+      t[i] = m[i - 1] * m[i] <= 0 ? 0 : (3 * (dx[i - 1] + dx[i])) / ((2 * dx[i] + dx[i - 1]) / m[i - 1] + (dx[i] + 2 * dx[i - 1]) / m[i]);
+    }
+    let d = `M${r1(pts[0][0])},${r1(pts[0][1])}`;
+    for (let i = 0; i < n - 1; i++) {
+      const k = dx[i] / 3;
+      d += `C${r1(pts[i][0] + k)},${r1(pts[i][1] + t[i] * k)} ${r1(pts[i + 1][0] - k)},${r1(pts[i + 1][1] - t[i + 1] * k)} ${r1(pts[i + 1][0])},${r1(pts[i + 1][1])}`;
+    }
+    return d;
+  };
+  // One hover column: hit area, hairline crosshair and a dot per series, revealed together on hover.
+  const xcol = (x, x0, w, T, ph, dots, href, tip) => wrap(
+    `<rect class="acl-hit" x="${r1(x0)}" y="${T}" width="${r1(w)}" height="${ph}"/>` +
+    `<line class="acl-xhair" x1="${r1(x)}" x2="${r1(x)}" y1="${T}" y2="${T + ph}"/>` +
+    dots.map(([y, col]) => `<circle class="acl-xdot" cx="${r1(x)}" cy="${r1(y)}" r="4" fill="${col}"/>`).join(""), href, tip);
+
+  // Stacked smooth areas over time. Same options as columns: {labels, series: [{label, color, values}], fmt, ref, href, height}
+  c.area = (opts) => {
+    const W = opts.width || VBW, H = opts.height || 180, L = 48, B = 22, T = 8, n = opts.labels.length;
+    const fmt = opts.fmt || h.usd;
+    const cum = [];
+    opts.series.forEach((s, k) => { cum[k] = opts.labels.map((_, i) => (k ? cum[k - 1][i] : 0) + (s.values[i] || 0)); });
+    const totals = cum.length ? cum[cum.length - 1] : opts.labels.map(() => 0);
+    const yt = ticks(Math.max(...totals, opts.ref?.value || 0, 0));
+    const max = yt[yt.length - 1] || 1, ph = H - B - T, y = (v) => T + ph - (v / max) * ph;
+    const step = n > 1 ? (W - L - 8) / (n - 1) : 0, x = (i) => L + 4 + i * step;
+    let out = yt.map((v) => `<line class="acl-grid" x1="${L}" x2="${W}" y1="${y(v)}" y2="${y(v)}"/><text class="acl-axis" x="${L - 6}" y="${y(v) + 4}" text-anchor="end">${h.esc(fmt(v))}</text>`).join("");
+    opts.series.forEach((s, k) => {
+      const top = cum[k].map((v, i) => [x(i), y(v)]);
+      const bottom = (k ? cum[k - 1] : cum[k].map(() => 0)).map((v, i) => [x(i), y(v)]).reverse();
+      out += `<path d="${smooth(top)}${smooth(bottom).replace(/^M/, "L")}Z" fill="${s.color}" fill-opacity=".16"/>`;
+      out += `<path d="${smooth(top)}" fill="none" stroke="${s.color}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`;
+    });
+    out += `<line class="acl-base" x1="${L}" x2="${W}" y1="${y(0)}" y2="${y(0)}"/>`;
+    if (opts.ref && opts.ref.value > 0) {
+      out += `<line class="acl-ref" x1="${L}" x2="${W}" y1="${y(opts.ref.value)}" y2="${y(opts.ref.value)}"/><text class="acl-axis acl-ref-label" x="${W - 2}" y="${y(opts.ref.value) - 4}" text-anchor="end">${h.esc(opts.ref.label)}</text>`;
+    }
+    opts.labels.forEach((lab, i) => {
+      const tip = `${lab}: ${fmt(totals[i])}` + (opts.series.length > 1 ? opts.series.map((s) => `\n${s.label}: ${fmt(s.values[i] || 0)}`).join("") : "");
+      const dots = opts.series.map((s, k) => [y(cum[k][i]), s.color]);
+      out += xcol(x(i), x(i) - step / 2, Math.max(step, 6), T, ph, dots, opts.href?.(i), tip);
+    });
+    if (n) out += `<circle cx="${r1(x(n - 1))}" cy="${r1(y(totals[n - 1]))}" r="3.5" fill="${opts.series[opts.series.length - 1]?.color || "var(--viz-1)"}" stroke="var(--viz-surface)" stroke-width="2"/>`;
+    const every = Math.ceil(n / 8);
+    opts.labels.forEach((lab, i) => {
+      if (i % every === 0 || i === n - 1) out += `<text class="acl-axis" x="${x(i)}" y="${H - 6}" text-anchor="${i === n - 1 ? "end" : i === 0 ? "start" : "middle"}">${h.esc(lab)}</text>`;
+    });
+    return `<svg class="acl-chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="${h.esc(opts.title || "area chart")}">${out}</svg>` + (opts.series.length > 1 ? c.legend(opts.series) : "");
+  };
+
+  // A distribution as one smooth curve over histogram bins (equal-width bands, labelled at their edges).
+  // bins: [{count, edge, end?, href?, tip?}], markers: [{at: fractional bin index, label}]
+  c.density = (bins, markers = [], opts = {}) => {
+    const W = opts.width || VBW, H = opts.height || 150, L = 34, B = 22, T = 16, n = bins.length || 1;
+    const yt = ticks(Math.max(...bins.map((b) => b.count), 1), 3), max = yt[yt.length - 1];
+    const ph = H - B - T, band = (W - L) / n, y = (v) => T + ph - (v / max) * ph, cx = (i) => L + (i + 0.5) * band;
+    const color = opts.color || "var(--viz-1)";
+    let out = yt.map((v) => `<line class="acl-grid" x1="${L}" x2="${W}" y1="${y(v)}" y2="${y(v)}"/><text class="acl-axis" x="${L - 6}" y="${y(v) + 4}" text-anchor="end">${h.num(v)}</text>`).join("");
+    const pts = [[L, y(0)], ...bins.map((b, i) => [cx(i), y(b.count)]), [W, y(0)]];
+    out += `<path d="${smooth(pts)}Z" fill="${color}" fill-opacity=".14"/><path d="${smooth(pts)}" fill="none" stroke="${color}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`;
+    out += `<line class="acl-base" x1="${L}" x2="${W}" y1="${y(0)}" y2="${y(0)}"/>`;
+    bins.forEach((b, i) => {
+      out += xcol(cx(i), L + i * band, band, T, ph, [[y(b.count), color]], b.href, b.tip || `${b.edge}: ${b.count}`);
+      out += `<text class="acl-axis" x="${L + i * band}" y="${H - 6}" text-anchor="${i ? "middle" : "start"}">${h.esc(b.edge ?? "")}</text>`;
+    });
+    if (bins.length && bins[bins.length - 1].end != null) out += `<text class="acl-axis" x="${W - 2}" y="${H - 6}" text-anchor="end">${h.esc(bins[bins.length - 1].end)}</text>`;
+    markers.forEach((m) => {
+      const x = L + m.at * band;
+      out += `<line class="acl-marker" x1="${x}" x2="${x}" y1="${T - 4}" y2="${y(0)}"/><text class="acl-axis acl-marker-label" x="${x + 3}" y="${T - 6}">${h.esc(m.label)}</text>`;
+    });
+    return `<svg class="acl-chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="${h.esc(opts.title || "distribution")}">${out}</svg>`;
   };
 
   c.PALETTE = ["var(--viz-1)", "var(--viz-2)", "var(--viz-3)", "var(--viz-4)", "var(--viz-5)"];

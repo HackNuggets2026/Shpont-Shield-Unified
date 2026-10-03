@@ -58,10 +58,10 @@
     if (!s.items.length) return h.empty("No spend in this period.");
     const n = s.values[0].length, cap = d.spend.daily_cap;
     const peak = Math.max(...Array.from({ length: n }, (_, i) => s.values.reduce((a, v) => a + (v[i] || 0), 0)));
-    // The cap line only when spend comes near it: otherwise it flattens the bars it is drawn over.
+    // The cap line only when spend comes near it: otherwise it flattens the curve it is drawn over.
     const ref = s.unit === "day" && cap && peak >= cap / 2 ? { value: cap, label: "daily cap " + h.usd(cap) } : null;
     const unit = s.unit === "hour" ? "per hour, last 24 h (UTC)" : "per day (UTC)";
-    return `<div class="f6 color-fg-muted mb-1">${unit}${cap ? ` · daily cap ${h.usd(cap)}` : ""}</div>` + c.columns({
+    return `<div class="f6 color-fg-muted mb-1">${unit}${cap ? ` · daily cap ${h.usd(cap)}` : ""}</div>` + c.area({
       title: "Spend over time",
       width: 780,
       labels: c.bucketLabels(s, n),
