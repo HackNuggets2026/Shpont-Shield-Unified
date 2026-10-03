@@ -11,6 +11,7 @@ import { Organization } from "./pages/console/Organization";
 import { OrgUnitPage } from "./pages/console/OrgUnit";
 import { ActivityPage } from "./pages/console/Activity";
 import { Security } from "./pages/console/Security";
+import { TrapsPage } from "./pages/console/Traps";
 import { IncidentPage } from "./pages/console/Incident";
 import { Resources } from "./pages/console/Resources";
 import { Requests } from "./pages/console/Requests";
@@ -52,6 +53,7 @@ export function App() {
         <Route path="people" element={<People />} />
         <Route path="people/:id" element={<PersonPage />} />
         <Route path="security" element={<Security />} />
+        <Route path="traps" element={<TrapsPage />} />
         <Route path="incidents/:id" element={<IncidentPage />} />
         <Route path="resources" element={<Resources />} />
         <Route path="requests" element={<Requests />} />

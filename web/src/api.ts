@@ -425,12 +425,38 @@ export interface DecoyRow {
   identifiers: string[];
   touches: number;
   people: number;
-  recent: { id: string; ts: number; principal: string; name?: string | null; team?: string | null; department?: string | null; rule: string; status: string; detail: string }[];
+  /** Touches still open or acknowledged. */
+  open: number;
+  recent: TrapTouch[];
+}
+
+export interface TrapTouch {
+  id: string;
+  ts: number;
+  principal: string;
+  name?: string | null;
+  team?: string | null;
+  department?: string | null;
+  rule: string;
+  severity: string;
+  status: string;
+  detail: string;
+  /** The decoy's name (events list only). */
+  trap?: string | null;
+}
+
+export interface Decoys {
+  decoys: DecoyRow[];
+  touches: number;
+  open: number;
+  /** People who opened a trap (not just asked for one). */
+  caught: number;
+  events: TrapTouch[];
 }
 
 export const admin = {
   overview: () => get<Overview>(`${A}/overview`),
-  decoys: () => get<{ decoys: DecoyRow[]; touches: number }>(`${A}/decoys`),
+  decoys: () => get<Decoys>(`${A}/decoys`),
   timeseries: (by: string, days = 30, metric = "usd") => get<Timeseries>(`${A}/timeseries${qs({ metric, by, days })}`),
   adherence: (by: string, days = 30) => get<Adherence>(`${A}/adherence${qs({ by, days })}`),
   usage: (by: string, days = 30) => get<Breakdown[]>(`${A}/usage${qs({ by, days })}`),

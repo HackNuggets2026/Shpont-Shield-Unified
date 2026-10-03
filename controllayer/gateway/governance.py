@@ -423,9 +423,16 @@ def register(
         """The traps, where they are planted, and everyone who touched one (newest first)."""
         p = store.policy
         hits = [i for i in all_incidents(0.0) if i["rule"] in DECOY_RULES]
+        fields = ("id", "ts", "principal", "name", "team", "department", "rule", "severity", "status", "detail")
+        live = ("open", "acknowledged")
+        trap_of: dict[str, str] = {}
+        for name, d in p.decoys.items():
+            for i in hits:
+                if repr(d.title) in (i.get("detail") or ""):
+                    trap_of.setdefault(i["id"], name)
         out = []
         for name, d in p.decoys.items():
-            mine = [i for i in hits if repr(d.title) in (i.get("detail") or "")]
+            mine = [i for i in hits if trap_of.get(i["id"]) == name]
             out.append(
                 {
                     "name": name,
@@ -436,16 +443,17 @@ def register(
                     "identifiers": d.identifiers,
                     "touches": len(mine),
                     "people": len({i["principal"] for i in mine}),
-                    "recent": [
-                        {
-                            k: i.get(k)
-                            for k in ("id", "ts", "principal", "name", "team", "department", "rule", "status", "detail")
-                        }  # fmt: skip
-                        for i in mine[:10]
-                    ],
+                    "open": sum(1 for i in mine if i["status"] in live),
+                    "recent": [{k: i.get(k) for k in fields} for i in mine[:10]],
                 }
             )
-        return {"decoys": out, "touches": len(hits)}
+        return {
+            "decoys": out,
+            "touches": len(hits),
+            "open": sum(1 for i in hits if i["status"] in live),
+            "caught": len({i["principal"] for i in hits if i["rule"] == "decoy_touch"}),
+            "events": [{**{k: i.get(k) for k in fields}, "trap": trap_of.get(i["id"])} for i in hits[:200]],
+        }
 
     @app.get("/admin/incidents")
     async def admin_incidents(

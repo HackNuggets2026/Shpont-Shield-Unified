@@ -11,7 +11,7 @@ import { IconLock } from "../icons";
 
 const KIND: Record<DecoyRow["kind"], string> = { document: "document", dataset: "dataset", credential: "credential", system: "system" };
 
-function TrapCard({ d }: { d: DecoyRow }) {
+export function TrapCard({ d }: { d: DecoyRow }) {
   const hit = d.touches > 0;
   return (
     <div className="soft-card relative overflow-hidden rounded-2xl p-4">
@@ -61,6 +61,7 @@ function TrapCard({ d }: { d: DecoyRow }) {
   );
 }
 
+/** All traps as cards; the Traps page shows them above the list of every touch. */
 export function Traps() {
   const q = useQuery({ queryKey: ["admin", "decoys"], queryFn: admin.decoys, refetchInterval: 10_000 });
   return (
