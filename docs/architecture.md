@@ -31,7 +31,7 @@ Such decisions are never cached, because expiry depends on time. Reaching a cata
 
 ## Insider risk
 
-`RiskEngine` keeps a decaying score per principal. Points come from each finding's *proposed* action, so shadowed and capped findings still count as intent, plus category weights. Rate limits, outages and auth failures are not evidence. A person's own level is the one security set manually if any (an override, in either direction), otherwise the score-based one. The effective level is the higher of that and, for agents, the owner's effective level. The level selects the policy variant (`watch_controls`), turns on raw capture, or blocks (`restricted`). It is part of the verdict cache key.
+`RiskEngine` keeps a decaying score per principal. Points come from each finding's *proposed* action, so shadowed and capped findings still count as intent, plus category weights. Rate limits, outages and auth failures are not evidence. A person's own level is the one security set manually if any (an override, in either direction). Otherwise it is the higher of the score-based level and the strongest unexpired external signal. The effective level is the higher of that and, for agents, the owner's own level. External signals (`POST /admin/risk/{pid}/signal`) are stored per source in `data/state.json` with their expiry. Expired ones are ignored on read and dropped on the next write. The endpoint is the one `/admin` path that skips the admin token; it accepts only a token from `identity.integrations`, never one equal to the admin token. The level selects the policy variant (`watch_controls`), turns on raw capture, or blocks (`restricted`). It is part of the verdict cache key.
 
 ## SIEM export
 

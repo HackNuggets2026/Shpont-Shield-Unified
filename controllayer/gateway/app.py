@@ -9,7 +9,9 @@ import hmac
 import io
 import json
 import logging
+import math
 import os
+import re
 import time
 import uuid
 from pathlib import Path
@@ -26,12 +28,16 @@ from ..controls.access import authenticate
 from ..controls.pii_model import PII_CONTROLS
 from ..decision import DecisionBackend
 from ..engine import ControlLayer, flatten
+from ..risk import LEVELS
 from ..types import Action, Context, Direction, Principal, Verdict
 from . import broker, mcp_demo
 from .upstream import UpstreamClient
 
 PANELS = Path(__file__).resolve().parent.parent / "dashboard"
 PANEL = PANELS / "panel.html"
+# Integrations post risk signals with their own token, not the admin token.
+SIGNAL_PATH = re.compile(r"/admin/risk/[^/]+/signal")
+SOURCE = re.compile(r"[A-Za-z0-9_.:-]{1,64}")
 
 
 def authenticate_principal(policy: Any, pid: str) -> Principal:
@@ -138,7 +144,9 @@ def create_app(
     async def admin_guard(request: Request, call_next):
         audit.client_ip.set(request.client.host if request.client else None)
         token = store.policy.identity.admin_token
-        if token and (request.url.path.startswith("/admin") or request.url.path == "/metrics"):
+        path = request.url.path
+        signal = request.method == "POST" and SIGNAL_PATH.fullmatch(path)
+        if token and not signal and (path.startswith("/admin") or path == "/metrics"):
             given = request.headers.get("x-admin-token") or request.query_params.get("token") or ""
             if not hmac.compare_digest(given, token):
                 return JSONResponse({"error": "admin token required"}, status_code=401)
@@ -891,6 +899,92 @@ def create_app(
             reset_score=bool(body.get("reset_score")),
         )
         return {"principal": pid, "level": level}
+
+    def integration(request: Request) -> tuple[str, Any] | None:
+        """The integration whose own token the request bears. A token equal to the admin token never
+        counts: an integration must not double as an admin credential."""
+        given = _api_key(request) or ""
+        admin = store.policy.identity.admin_token
+        for name, cfg in store.policy.identity.integrations.items():
+            token = os.environ.get(cfg.token_env)
+            if given and token and token != admin and hmac.compare_digest(given, token):
+                return name, cfg
+        return None
+
+    @app.post("/admin/risk/{pid}/signal")
+    async def risk_signal(pid: str, request: Request):
+        """An external tool raises a principal's level until the signal expires. It never lowers the
+        level and never overrides security's manual choice; `normal` withdraws the source's signal."""
+        found = integration(request)
+        if not found:
+            return JSONResponse({"error": "integration token required"}, status_code=401)
+        name, cfg = found
+        body = await _json_object(request)
+        policy = store.policy
+        principal = authenticate_principal(policy, pid)
+        if not principal.authenticated:
+            return JSONResponse({"error": f"unknown principal {pid!r}"}, status_code=404)
+        source = body.get("source") or name
+        if not isinstance(source, str) or not SOURCE.fullmatch(source):
+            raise BadRequest("source must be 1-64 letters, digits or _.:-")
+        key = name if source == name else f"{name}/{source}"  # an integration only writes its own sources
+        level, score = body.get("level"), body.get("score")
+        if (level is None) == (score is None):
+            raise BadRequest("give either level or score")
+        if score is not None:
+            if isinstance(score, bool) or not isinstance(score, int | float) or not math.isfinite(score) or score < 0:
+                raise BadRequest("score must be a non-negative number")
+            lv = policy.insider_risk.levels
+            level = "restricted" if score >= lv.restricted else "watch" if score >= lv.watch else "normal"
+        elif level not in LEVELS:
+            raise BadRequest("level must be normal, watch or restricted")
+        applied = min(level, cfg.max_level, key=LEVELS.index)
+        ttl = body.get("ttl_seconds")
+        if applied != "normal" and (
+            isinstance(ttl, bool)
+            or not isinstance(ttl, int | float)
+            or not 0 < ttl <= cfg.max_ttl_hours * 3600  # NaN fails this too
+        ):
+            raise BadRequest(f"ttl_seconds must be a number in (0, {cfg.max_ttl_hours * 3600:g}]")
+        reason = str(body.get("reason") or "")[:500]
+        before = layer.risk.level(policy, principal)
+        now = time.time()
+        signal = None
+        if applied != "normal":
+            signal = {"level": applied, "requested": level, "score": score, "reason": reason, "at": now}
+            signal["expires_at"] = now + ttl
+        withdrawn = layer.risk.put_signal(pid, key, signal) and signal is None
+        layer.audit.note(
+            "risk_signal",
+            name,
+            integration=name,
+            principal=pid,
+            source=key,
+            requested=level,
+            level=applied,
+            score=score,
+            ttl_seconds=ttl if signal else None,
+            reason=reason,
+        )
+        after = layer.risk.level(policy, principal)
+        if LEVELS.index(after) > LEVELS.index(before):
+            layer.risk.emit(policy, principal, after, f"level {before} -> {after}: signal from {key}", channel="signal")
+        return {
+            "principal": pid,
+            "source": key,
+            "requested": level,
+            "level": applied,
+            "expires_at": signal and signal["expires_at"],
+            "withdrawn": withdrawn,
+        }
+
+    @app.delete("/admin/risk/{pid}/signal/{source:path}")
+    async def risk_signal_dismiss(pid: str, source: str):
+        """Security drops an external signal it judged wrong."""
+        if not layer.risk.put_signal(pid, source, None):
+            return JSONResponse({"error": f"no active signal {source!r} for {pid!r}"}, status_code=404)
+        layer.audit.note("risk_signal_dismissed", "security", principal=pid, source=source)
+        return {"principal": pid, "source": source, "dismissed": True}
 
     @app.get("/admin/alerts")
     async def alerts(limit: int = 100):

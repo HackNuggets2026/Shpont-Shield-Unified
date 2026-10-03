@@ -38,6 +38,14 @@ class ApiKey(_Strict):
         return self
 
 
+class Integration(_Strict):
+    """An external tool (SIEM, EDR) that may raise a person's insider-risk level, never lower it."""
+
+    token_env: str  # environment variable holding this integration's own bearer token
+    max_level: Literal["watch", "restricted"] = "watch"  # stronger signals are capped to this
+    max_ttl_hours: float = Field(168, gt=0)
+
+
 class Identity(_Strict):
     require_auth: bool = True
     api_keys: dict[str, ApiKey] = Field(default_factory=dict)
@@ -45,6 +53,7 @@ class Identity(_Strict):
     admin_token: str | None = None
     # Demo only: the employee panel picks whom to show (x-acl-as) instead of asking for a key.
     panel_demo: bool = False
+    integrations: dict[Annotated[str, Field(pattern=r"^[A-Za-z0-9_.-]+$")], Integration] = Field(default_factory=dict)
 
 
 class ControlBase(_Strict):

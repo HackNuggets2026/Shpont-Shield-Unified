@@ -22,6 +22,10 @@ identity:
     # Agents act for an owner, who decides in the employee panel (/me) which resources they may use.
     alice-agent-key: { principal: alice-coder, team: engineering, role: developer, kind: agent, owner: alice }
     bob-agent-key: { principal: bob-assistant, team: finance, role: analyst, kind: agent, owner: bob }
+  # External tools that may raise (never lower) a person's insider-risk level: POST /admin/risk/{pid}/signal
+  # with "Authorization: Bearer <$token_env>". Disabled while the variable is unset.
+  integrations:
+    wazuh: { token_env: ACL_WAZUH_TOKEN, max_level: watch, max_ttl_hours: 24 }
 
 models:
   # Glob patterns. Requests naming any other model are refused before reaching it.

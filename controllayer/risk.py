@@ -46,11 +46,32 @@ class RiskEngine:
         s, lv = self.score(policy, pid), policy.insider_risk.levels
         return "restricted" if s >= lv.restricted else "watch" if s >= lv.watch else "normal"
 
+    def signals(self, pid: str) -> dict[str, dict[str, Any]]:
+        """Unexpired external signals for a principal, by source."""
+        now = time.time()
+        return {src: sig for src, sig in self.state.signals.get(pid, {}).items() if sig["expires_at"] > now}
+
+    def put_signal(self, pid: str, source: str, signal: dict[str, Any] | None) -> bool:
+        """Store a source's signal, replacing its previous one; None withdraws it. Expired ones are
+        dropped on the way. Returns whether the source had an active signal before."""
+        active = self.signals(pid)
+        had = active.pop(source, None) is not None
+        if signal:
+            active[source] = signal
+        if active:
+            self.state.signals[pid] = active
+        else:
+            self.state.signals.pop(pid, None)
+        self.state.save()
+        return had
+
     def own_level(self, policy: Policy, pid: str, manual: bool = True) -> str:
-        """A level set by security overrides the score-based one, in either direction."""
+        """A level set by security overrides everything else, in either direction. Without one (auto),
+        the score-based level, raised to the strongest active external signal."""
         if manual and pid in self.state.watch:
             return self.state.watch[pid]["level"]
-        return self.computed_level(policy, pid)
+        found = [self.computed_level(policy, pid), *(sig["level"] for sig in self.signals(pid).values())]
+        return max(found, key=LEVELS.index)
 
     def level(self, policy: Policy, principal: Principal, manual: bool = True) -> str:
         """Effective level. An agent is at least as restricted as its owner. `manual=False` gives
@@ -108,7 +129,21 @@ class RiskEngine:
             self.alert(policy, ctx, v, after, "; ".join(reasons))
 
     def alert(self, policy: Policy, ctx: Context, v: Verdict, level: str, reason: str) -> dict[str, Any]:
-        p = ctx.principal
+        return self.emit(
+            policy,
+            ctx.principal,
+            level,
+            reason,
+            request_id=v.request_id,
+            channel=ctx.channel,
+            direction=ctx.direction.value,
+            tool=ctx.tool,
+            action=v.action.value,
+            findings=[f"{f.control}/{f.category}" for f in v.findings],
+        )
+
+    def emit(self, policy: Policy, p: Principal, level: str, reason: str, **context: Any) -> dict[str, Any]:
+        """Record a silent alert and send it to every sink."""
         event = {
             "ts": time.time(),
             "principal": p.id,
@@ -117,12 +152,13 @@ class RiskEngine:
             "level": level,
             "score": round(self.score(policy, p.id), 2),
             "reason": reason,
-            "request_id": v.request_id,
-            "channel": ctx.channel,
-            "direction": ctx.direction.value,
-            "tool": ctx.tool,
-            "action": v.action.value,
-            "findings": [f"{f.control}/{f.category}" for f in v.findings],
+            "request_id": None,
+            "channel": None,
+            "direction": None,
+            "tool": None,
+            "action": None,
+            "findings": [],
+            **context,
         }
         self.alerts.append(event)
         for sink in policy.insider_risk.sinks:
@@ -155,7 +191,7 @@ class RiskEngine:
         task.add_done_callback(self._tasks.discard)
 
     def overview(self, policy: Policy) -> list[dict[str, Any]]:
-        pids = set(self._scores) | set(self.state.watch)
+        pids = set(self._scores) | set(self.state.watch) | {pid for pid in self.state.signals if self.signals(pid)}
         rows = []
         for k in policy.identity.api_keys.values():
             if k.principal not in pids:
@@ -170,6 +206,7 @@ class RiskEngine:
                     "score": round(self.score(policy, k.principal), 2),
                     "computed": self.computed_level(policy, k.principal),
                     "manual": self.state.watch.get(k.principal),
+                    "signals": [{"source": src, **sig} for src, sig in sorted(self.signals(k.principal).items())],
                     "auto": self.level(policy, principal, manual=False),
                     "level": self.level(policy, principal),
                 }

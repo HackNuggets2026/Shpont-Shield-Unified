@@ -415,6 +415,32 @@
 "operation"
 ]
 },
+"application": {
+"attrs": {
+"criticality": null,
+"data": null,
+"desc": null,
+"group": "group",
+"hostname": null,
+"labels": null,
+"name": null,
+"owner": "user",
+"product": "product",
+"region": null,
+"resource_relationship": "graph",
+"risk_level": null,
+"risk_level_id": null,
+"risk_score": null,
+"sbom": "sbom",
+"tags": "key_value_object",
+"type": null,
+"uid": null,
+"uid_alt": null,
+"url": "url",
+"version": null
+},
+"required": []
+},
 "delegation": {
 "attrs": {
 "created_time": null,

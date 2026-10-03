@@ -114,6 +114,11 @@
     </div>${set && r.level !== set ? muted(`raised to ${r.level} by ${esc(r.owner)}`) : ""}`;
   }
 
+  // Active external signals (e.g. from a SIEM): source, level, expiry; one click dismisses.
+  const signals = (r) => (r.signals || []).map((g) => `<span class="no-wrap" title="${esc(g.reason || "")}">
+      ${badge(tone(g.level), g.source + ": " + g.level)} ${muted(ago(g.expires_at))}${button("×", `data-act="dismiss-signal" data-p="${esc(r.principal)}" data-src="${esc(g.source)}" title="Dismiss this signal"`, "invisible")}</span>`).join(" ")
+    + (r.signals?.length && r.manual ? " " + muted("override wins") : "");
+
   function securityPage(d) {
     const s = d.s, total = s.totals.events || 0, lat = s.latency_ms.total || {};
     const g = s.budgets.scopes.find((r) => r.scope === "global") || {};
@@ -129,7 +134,7 @@
     ]) + `<div class="f6 color-fg-muted mt-3">p50 / p95 ms by stage: ${Object.entries(s.latency_ms).map(([k, v]) => `${esc(k)} ${v.p50} / ${v.p95}`).join(" · ") || "-"}</div>`;
 
     const risk = d.risk.principals.length ? table(["Who", "Score", "Level"], d.risk.principals.map((r) => [
-      `<b>${esc(r.principal)}</b><br>${muted(esc(r.team) + (r.owner ? " · agent of " + esc(r.owner) : "") + (r.manual?.reason ? " · " + esc(r.manual.reason) : ""))}`,
+      `<b>${esc(r.principal)}</b><br>${muted(esc(r.team) + (r.owner ? " · agent of " + esc(r.owner) : "") + (r.manual?.reason ? " · " + esc(r.manual.reason) : ""))}${r.signals?.length ? "<br>" + signals(r) : ""}`,
       `<span class="acl-big-sm ${FG[tone(r.computed)]}">${r.score}</span>`, levelControl(r),
     ]), [1]) : empty("No risk signals yet.");
 
@@ -287,6 +292,7 @@
     try {
       switch (d.act) {
         case "level": await send(`/admin/risk/${encodeURIComponent(d.p)}`, "POST", { level: d.v }); break;
+        case "dismiss-signal": await send(`/admin/risk/${encodeURIComponent(d.p)}/signal/${encodeURIComponent(d.src)}`, "DELETE"); break;
         case "admin-revoke": await send(`/admin/grants/${encodeURIComponent(d.agent)}/${encodeURIComponent(d.rid)}`, "DELETE"); break;
         case "suspend": await send(`/admin/resources/${encodeURIComponent(d.rid)}/suspend`, "POST", { suspended: d.on === "1" }); break;
         case "filter": state.filter = d.v; break;

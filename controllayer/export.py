@@ -269,7 +269,8 @@ def ocsf_note(n: dict[str, Any]) -> dict[str, Any]:
         "status_id": 1,
         "status": "Success",
         "message": kind,
-        "actor": {"user": _user(n["actor"])},
+        # A signal's actor is the integration (a system); everything else is a person or "security".
+        "actor": {"application": {"name": n["integration"]}} if n.get("integration") else {"user": _user(n["actor"])},
         "src_endpoint": _ip(n),
         **_risk(n.get("level")),
         "metadata": _metadata(n, "audit", ["security_control"] if n.get("level") in _RISK else []),
@@ -422,7 +423,13 @@ def ecs_note(n: dict[str, Any]) -> dict[str, Any]:
             "event": {"outcome": "success"},
             "message": kind,
             "source": _ip(n),
-            "user": _drop_none({"name": n["actor"], "id": n["actor"], "target": {"name": target} if target else None}),
+            "user": _drop_none(
+                {
+                    "name": None if n.get("integration") else n["actor"],
+                    "id": None if n.get("integration") else n["actor"],
+                    "target": {"name": target} if target else None,
+                }
+            ),
             "controllayer": _drop_none({k: v for k, v in n.items() if k not in ("ts", "src_ip")}),
         },
     )

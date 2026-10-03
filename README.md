@@ -64,7 +64,15 @@ Security defines a catalog in `policy.yaml` (`resources:`) with who is entitled 
 
 ## Insider risk
 
-Every finding adds points to the person's score, which decays with a 24 h half-life. An agent's points also count half against its owner. At `watch` the person gets a stricter policy (`insider_risk.watch_controls`) and full-text capture. At `restricted` everything is blocked. Security can override a person's level in either direction, or leave it on auto (score-based); an agent is never less restricted than its owner. Level changes, blocks while watched and selected categories (exfiltration, malware, leaked keys) raise **silent alerts** to the console, a JSONL file or a SIEM webhook (each sink sends native JSON, OCSF or ECS: `format:`). The employee's response is unchanged. Monitoring itself is disclosed (GDPR, Polish Labour Code art. 22³).
+Every finding adds points to the person's score, which decays with a 24 h half-life. An agent's points also count half against its owner. At `watch` the person gets a stricter policy (`insider_risk.watch_controls`) and full-text capture. At `restricted` everything is blocked. Other tools (a SIEM, an EDR) can raise a person's level with **external signals**, each capped, expiring and authenticated by that integration's own token. Security can override a person's level in either direction, or leave it on auto; an agent is never less restricted than its owner. Level changes, blocks while watched and selected categories (exfiltration, malware, leaked keys) raise **silent alerts** to the console, a JSONL file or a SIEM webhook (each sink sends native JSON, OCSF or ECS: `format:`). The employee's response is unchanged. Monitoring itself is disclosed (GDPR, Polish Labour Code art. 22³).
+
+A person's level, strongest rule first:
+
+1. **Override.** A level security set (`POST /admin/risk/{pid}` `{"level": "normal"|"watch"|"restricted"}`) is the level, in either direction. Scores and signals do not change it. `auto` removes it.
+2. **Auto.** Otherwise the higher of the score-based level and the strongest active external signal.
+3. **Owner.** An agent's level is the higher of its own and its owner's.
+
+An integration listed in `identity.integrations` (`{name: {token_env, max_level, max_ttl_hours}}`) sends `POST /admin/risk/{pid}/signal` with `Authorization: Bearer <its token>` and `{"level"` or `"score", "ttl_seconds", "source", "reason"}`. A score maps through `insider_risk.levels`. The level is capped at `max_level`. Each source (`<integration>` or `<integration>/<source>`) holds one signal, which its next signal replaces; `normal` withdraws it. An integration can only write its own sources. Signals persist in `data/state.json`, are audited, show in `/admin/risk` and the security panel (where one click dismisses them), and raise a silent alert when they lift a level. The admin token is not accepted on this endpoint, and an integration token works nowhere else.
 
 ## Contextual PII (OpenAI Privacy Filter)
 
