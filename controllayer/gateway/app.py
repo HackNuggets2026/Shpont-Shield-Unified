@@ -24,7 +24,7 @@ from ..controls.access import authenticate
 from ..decision import DecisionBackend
 from ..engine import ControlLayer, flatten
 from ..types import Action, Context, Direction, Verdict
-from . import governance, mcp_demo
+from . import catalog, governance, mcp_demo
 from .upstream import UpstreamClient
 
 DASHBOARD = Path(__file__).resolve().parent.parent / "dashboard" / "index.html"
@@ -89,8 +89,9 @@ def create_app(
     backend: DecisionBackend | None = None,
     upstream_client: httpx.AsyncClient | None = None,
     watch: bool = True,
+    data_dir: str | Path | None = None,
 ) -> FastAPI:
-    store = PolicyStore(policy_path or os.environ.get("ACL_POLICY", "policy.yaml"))
+    store = PolicyStore(policy_path or os.environ.get("ACL_POLICY", "policy.yaml"), data_dir=data_dir)
     layer = ControlLayer(store, backend=backend)
     http = upstream_client or httpx.AsyncClient(timeout=120)
 
@@ -695,6 +696,7 @@ def create_app(
         return DASHBOARD.read_text() if DASHBOARD.exists() else "<p>dashboard not built</p>"
 
     governance.register(app, store, layer, app_reclaim, _api_key, _json_object)
+    catalog.register(app, store, layer, _api_key, _json_object)
     return app
 
 

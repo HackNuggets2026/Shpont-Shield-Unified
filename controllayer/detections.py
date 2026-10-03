@@ -22,7 +22,16 @@ from .usage import UsageStore
 log = logging.getLogger(__name__)
 
 # Blocks that say nothing about intent: limits, identity, attribution, and secrets (their own rule).
-_NOT_PROBING = {"budget", "resources", "auth", "model_allowlist", "workflow", "secrets", "semantic_engine"}
+_NOT_PROBING = {
+    "budget",
+    "resources",
+    "auth",
+    "model_allowlist",
+    "workflow",
+    "access_grant",
+    "secrets",
+    "semantic_engine",
+}
 _EXFIL_CONTROLS = {"data_exfiltration", "confidential_output"}
 _LIVE = ("open", "acknowledged")
 LEVELS = ("none", "alert", "tighten", "quarantine")

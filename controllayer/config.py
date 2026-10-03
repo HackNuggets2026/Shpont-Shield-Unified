@@ -6,6 +6,8 @@ import hashlib
 import logging
 import os
 import re
+import time
+from fnmatch import fnmatch
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
@@ -157,7 +159,7 @@ class Budgets(_Strict):
     global_: BudgetLimits = Field(default_factory=BudgetLimits, alias="global")
     per_team: dict[str, BudgetLimits] = Field(default_factory=dict)
     per_principal: BudgetLimits = Field(default_factory=BudgetLimits)
-    pricing: dict[str, ModelPrice] = Field(default_factory=dict)
+    pricing: dict[str, ModelPrice] = Field(default_factory=dict, exclude=True)  # derived from the catalog
     loop_guard: LoopGuard = Field(default_factory=LoopGuard)
     downgrade: Downgrade = Field(default_factory=Downgrade)
 
@@ -242,12 +244,169 @@ class Resource(_Strict):
     auto_reclaim: bool = False  # stop zombies and over-time leases by calling the first stop tool
 
 
+# ---- Resource catalog -----------------------------------------------------------------
+# Everything an agent can touch is a catalogued resource (Kubernetes-style `kind: ResourceType`),
+# named by a URN (`urn:shield:<category>:<provider>:<type>`) and decided on with Cedar's model:
+# principal, action, resource, context. Three classes, each measured and limited differently.
+
+RESOURCE_CLASSES = ("consumable", "leasable", "access_grant")
+METERS = ("gateway", "mcp_tools", "telemetry", "billing_export", "report_api")
+
+
+class Price(_Strict):
+    usd_per_unit: float = 0.0  # per minute held, per request, per use, per GB...
+    usd_per_1m_input: float = 0.0  # LLM tokens
+    usd_per_1m_output: float = 0.0
+    usd_per_compute_second: float = 0.0  # locally hosted models: GPU amortisation, power
+
+
+class Lease(_Strict):
+    """How a leasable resource is opened, kept alive and closed through MCP tools."""
+
+    start_tools: list[str] = Field(default_factory=list)
+    stop_tools: list[str] = Field(default_factory=list)  # close one lease (by handle, else the newest)
+    stop_all_tools: list[str] = Field(default_factory=list)  # close every lease of this type the principal holds
+    activity_tools: list[str] = Field(default_factory=list)  # keep a lease from counting as idle
+    handle: LeaseHandle | None = None
+    max_concurrent_per_principal: int | None = None
+    idle_minutes: float | None = 15  # idle longer than this = zombie
+    auto_reclaim: bool = False  # stop zombies and over-time leases by calling the first stop tool
+
+
+class GrantSpec(_Strict):
+    """How access to a sensitive resource is obtained (OAuth RAR-style grants, time-boxed)."""
+
+    approval: Literal["admin", "workflow"] = "admin"  # workflow: being in a workflow that includes it is enough
+    max_minutes: float = Field(480, gt=0)  # longest grant an approver may give
+
+
+class ResourceType(_Strict):
+    """One catalog entry."""
+
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    class_: Literal["consumable", "leasable", "access_grant"] = Field("consumable", alias="class")
+    urn: str
+    title: str = ""
+    description: str = ""
+    category: str = "other"  # ai_model, compute, device, ci, data, action, saas...
+    provider: str = "internal"
+    unit: str = "unit"  # token, minute, request, use...
+    price: Price = Field(default_factory=Price)
+    meter: Literal["gateway", "mcp_tools", "telemetry", "billing_export", "report_api"] = "gateway"
+    models: list[str] = Field(default_factory=list)  # ai_model consumables: the model names (globs) it covers
+    tools: list[str] = Field(default_factory=list)  # access grants: the tools (globs) it protects
+    actions: list[str] = Field(default_factory=list)
+    lease: Lease | None = None
+    grant: GrantSpec | None = None
+    sensitivity: Literal["low", "medium", "high", "critical"] = "low"
+    owner: str = ""
+
+    @field_validator("urn")
+    @classmethod
+    def _urn(cls, v: str) -> str:
+        if not re.fullmatch(r"urn:shield:[a-z0-9_.-]+(:[a-zA-Z0-9_.*-]+)+", v):
+            raise ValueError(f"urn must look like urn:shield:<category>:<provider>:<type>, got {v!r}")
+        return v
+
+    @model_validator(mode="after")
+    def _shape(self) -> ResourceType:
+        if self.class_ == "leasable" and self.lease is None:
+            raise ValueError("a leasable resource needs a `lease` section")
+        if self.class_ == "access_grant":
+            if not self.tools:
+                raise ValueError("an access_grant resource needs the `tools` it protects")
+            if self.grant is None:
+                self.grant = GrantSpec()
+        return self
+
+    def legacy(self) -> Resource:
+        """The older `resources:` view the lease tracker and usage reports read."""
+        lease = self.lease.model_dump() if self.lease else {"idle_minutes": None}
+        per = self.price.usd_per_unit
+        return Resource(usd_per_minute=per if self.unit == "minute" else 0.0, usd_per_unit=per, **lease)
+
+
+class Grant(_Strict):
+    """One approved access, shaped like an OAuth Rich Authorization Request (RFC 9396) authorization_details entry."""
+
+    id: str
+    type: str = "shield_resource"
+    resource: str  # catalog name
+    locations: list[str] = Field(default_factory=list)  # URNs
+    actions: list[str] = Field(default_factory=list)  # empty = every action of the resource
+    workflow: str | None = None  # only inside this workflow; None = any
+    expires: float | None = None
+    granted_by: str = ""
+    reason: str = ""
+    granted_at: float | None = None
+
+    def live(self, now: float) -> bool:
+        return self.expires is None or self.expires > now
+
+
+def _slug(text: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-") or "x"
+
+
+def _shim_legacy(raw: dict) -> None:
+    """Fold the older `resources:` and `budgets.pricing` keys into `catalog:`, in place."""
+    catalog = raw.setdefault("catalog", {}) or {}
+    raw["catalog"] = catalog
+    for name, r in (raw.pop("resources", None) or {}).items():
+        r = dict(r or {})
+        leasing = {k: r.pop(k) for k in list(r) if k in Lease.model_fields}
+        per_minute, per_unit = r.pop("usd_per_minute", 0.0), r.pop("usd_per_unit", 0.0)
+        if r:
+            raise ValueError(f"resources.{name}: unknown keys {sorted(r)}")
+        entry: dict[str, Any] = {}
+        if leasing.get("start_tools"):
+            entry = {
+                "class": "leasable",
+                "category": "compute",
+                "meter": "mcp_tools",
+                "unit": "minute",
+                "lease": leasing,
+                "price": {"usd_per_unit": per_minute or per_unit},
+            }
+        elif leasing:
+            entry = {"lease": leasing}  # an overlay patch to an existing leasable entry
+        else:
+            entry = {
+                "meter": "report_api",
+                "unit": "minute" if per_minute else "unit",
+                "price": {"usd_per_unit": per_minute or per_unit},
+            }
+        if name in catalog:
+            _merge(catalog[name], {k: v for k, v in entry.items() if k in ("lease", "price")})
+        else:
+            catalog[name] = {"urn": f"urn:shield:{entry.get('category', 'other')}:internal:{_slug(name)}", **entry}
+    pricing = (raw.get("budgets") or {}).pop("pricing", None) or {}
+    for glob, price in pricing.items():
+        owner = next((n for n, e in catalog.items() if glob in (e.get("models") or [])), None)
+        if owner:
+            _merge(catalog[owner].setdefault("price", {}), dict(price or {}))
+            continue
+        name = _slug(glob)
+        while name in catalog:
+            name += "-model"
+        catalog[name] = {
+            "class": "consumable",
+            "urn": f"urn:shield:ai_model:unknown:{_slug(glob)}",
+            "category": "ai_model",
+            "unit": "token",
+            "models": [glob],
+            "price": dict(price or {}),
+        }
+
+
 class PrincipalPolicy(_Strict):
     """Per-person restrictions. Usually written by admins and detections into the admin overlay."""
 
     status: Literal["active", "quarantined", "revoked"] = "active"
     budget_scale: float = Field(1.0, ge=0)  # multiplies the per-principal token and USD limits
     approved_workflows: list[str] = Field(default_factory=list)
+    grants: list[Grant] = Field(default_factory=list)
     reason: str = ""
     by: str = ""
     since: float | None = None
@@ -336,7 +495,9 @@ class Policy(_Strict):
     teams: dict[str, TeamOverride] = Field(default_factory=dict)
     audit: Audit = Field(default_factory=Audit)
     menu: Menu = Field(default_factory=Menu)
-    resources: dict[str, Resource] = Field(default_factory=dict)
+    catalog: dict[str, ResourceType] = Field(default_factory=dict)
+    # Derived from `catalog` (older policies set these directly; the loader folds them into the catalog).
+    resources: dict[str, Resource] = Field(default_factory=dict, exclude=True)
     principals: dict[str, PrincipalPolicy] = Field(default_factory=dict)
     quarantine: Quarantine = Field(default_factory=Quarantine)
     detections: Detections = Field(default_factory=Detections)
@@ -347,6 +508,14 @@ class Policy(_Strict):
 
     version: str = ""  # content hash, filled by the loader
 
+    @model_validator(mode="before")
+    @classmethod
+    def _legacy(cls, data: Any) -> Any:
+        if isinstance(data, dict) and (data.get("resources") or (data.get("budgets") or {}).get("pricing")):
+            data = {**data, "budgets": dict(data.get("budgets") or {})}
+            _shim_legacy(data)
+        return data
+
     @model_validator(mode="after")
     def _known_entities(self) -> Policy:
         from .controls.patterns import PII, SECRETS  # patterns imports this module
@@ -355,15 +524,65 @@ class Policy(_Strict):
             unknown = set(cfg.entities) - set(known)
             if unknown:
                 raise ValueError(f"{name}.entities: unknown {sorted(unknown)}; known: {sorted(known)}")
+        self.resources = {n: r.legacy() for n, r in self.catalog.items() if r.class_ != "access_grant" and not r.models}
+        self.budgets.pricing = {
+            glob: ModelPrice(**r.price.model_dump(exclude={"usd_per_unit"}))
+            for r in self.catalog.values()
+            for glob in r.models
+        }
         for wf_name, wf in self.menu.workflows.items():
-            unknown = set(wf.resources) - set(self.resources)
+            unknown = set(wf.resources) - set(self.catalog)
             if unknown:
                 raise ValueError(f"menu.workflows.{wf_name}: unknown resources {sorted(unknown)}")
         for who, pp in self.principals.items():
             unknown = set(pp.approved_workflows) - set(self.menu.workflows)
             if unknown:
                 raise ValueError(f"principals.{who}: approved_workflows not on the menu: {sorted(unknown)}")
+            unknown = {g.resource for g in pp.grants} - set(self.catalog)
+            if unknown:
+                raise ValueError(f"principals.{who}: grants for unknown resources {sorted(unknown)}")
         return self
+
+    # ---- catalog lookups -----------------------------------------------------------
+
+    def model_resource(self, model: str | None) -> str | None:
+        """The catalog entry metering an LLM model: exact name first, then globs."""
+        if not model:
+            return None
+        models = [(n, g) for n, r in self.catalog.items() for g in r.models]
+        return next((n for n, g in models if g == model), None) or next(
+            (n for n, g in models if fnmatch(model, g)), None
+        )
+
+    def grant_resources(self, tool: str) -> list[str]:
+        """Access-grant resources protecting this tool."""
+        return [
+            n for n, r in self.catalog.items() if r.class_ == "access_grant" and any(fnmatch(tool, g) for g in r.tools)
+        ]
+
+    def live_grants(self, pid: str, now: float | None = None) -> list[Grant]:
+        now = now or time.time()
+        return [g for g in self.principal(pid).grants if g.live(now)]
+
+    def grant_for(self, pid: str, resource: str, action: str | None, workflow: str | None) -> Grant | None:
+        return next(
+            (
+                g
+                for g in self.live_grants(pid)
+                if g.resource == resource
+                and (not g.actions or action is None or action in g.actions)
+                and (g.workflow is None or g.workflow == workflow)
+            ),
+            None,
+        )
+
+    def covering_grant(self, pid: str, tool: str, workflow: str | None) -> Grant | None:
+        """A live grant that lets this principal call this tool (RBAC and the irreversible list included)."""
+        for name in self.grant_resources(tool):
+            g = self.grant_for(pid, name, None, workflow)
+            if g:
+                return g
+        return None
 
     def principal(self, pid: str) -> PrincipalPolicy:
         return self.principals.get(pid) or _ACTIVE
@@ -406,7 +625,7 @@ def _merge(base: dict, patch: dict, delete_none: bool = False) -> None:
 
 
 # What the admin overlay may touch: restrictions and limits, never identity, upstreams or detectors.
-OVERLAY_KEYS = {"principals", "menu", "budgets", "resources", "detections", "quarantine"}
+OVERLAY_KEYS = {"principals", "menu", "budgets", "catalog", "resources", "detections", "quarantine"}
 
 
 _ENV = re.compile(r"\$\{(\w+)(?::-([^}]*))?\}")
@@ -443,9 +662,12 @@ class PolicyStore:
     never drops enforcement.
     """
 
-    def __init__(self, path: str | Path):
+    def __init__(self, path: str | Path, data_dir: str | Path | None = None):
         self.path = Path(path)
         self.base_dir = self.path.parent
+        # Where state lives (usage db, audit log, admin overlay). Unset: paths resolve next to the policy file.
+        data_dir = data_dir or os.environ.get("ACL_DATA_DIR") or None
+        self.data_dir = Path(data_dir) if data_dir else None
         self.last_error: str | None = None
         # The base file names the overlay (which cannot rename itself), so it is read first.
         self.policy = parse_policy(self.path.read_text())
@@ -461,7 +683,17 @@ class PolicyStore:
     @property
     def overlay_path(self) -> Path | None:
         rel = self.policy.admin_overlay
-        return self.base_dir / rel if rel else None
+        return self.data_path(rel) if rel else None
+
+    def data_path(self, rel: str) -> Path:
+        """A state file named in the policy (`data/usage.sqlite`), moved under `data_dir` when one is set."""
+        p = Path(rel)
+        if p.is_absolute():
+            return p
+        if self.data_dir is None:
+            return self.base_dir / p
+        parts = p.parts[1:] if p.parts and p.parts[0] == "data" else p.parts
+        return self.data_dir.joinpath(*parts)
 
     def _overlay_text(self) -> str | None:
         p = self.overlay_path

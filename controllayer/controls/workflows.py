@@ -46,7 +46,10 @@ def check(ctx: Context, policy: Policy) -> list[Finding]:
         if not any(fnmatch(ctx.model, pat) for pat in wf.models):
             return [_block("model_not_in_workflow", f"workflow {name!r} does not use model {ctx.model!r}")]
     if ctx.direction is Direction.TOOL_CALL and ctx.tool and wf.tools:
-        if not any(fnmatch(ctx.tool, pat) for pat in wf.tools):
+        # Access-grant resources the workflow includes bring their tools with them.
+        included = [t for r in wf.resources if r in policy.catalog for t in policy.catalog[r].tools]
+        allowed = any(fnmatch(ctx.tool, pat) for pat in [*wf.tools, *included])
+        if not allowed and not policy.covering_grant(p.id, ctx.tool, name):
             return [_block("tool_not_in_workflow", f"workflow {name!r} does not use tool {ctx.tool!r}")]
     return []
 

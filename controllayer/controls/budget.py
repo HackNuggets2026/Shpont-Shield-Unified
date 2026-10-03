@@ -91,6 +91,38 @@ class BudgetLedger:
                 worst = max(worst, used.usd / limits.usd_per_day)
         return worst
 
+    def quota(self, ctx: Context, policy: Policy) -> list[dict]:
+        """Each daily token and USD limit that applies to the caller, with what is left (for RateLimit headers)."""
+        day, out = _day(), []
+        for scope, key, limits in self._scopes(ctx, policy):
+            used = self.usage.get((scope, key, day), Usage())
+            if limits.tokens_per_day:
+                out.append(
+                    {
+                        "scope": f"{scope}:{key}",
+                        "unit": "tokens",
+                        "limit": limits.tokens_per_day,
+                        "remaining": max(0, limits.tokens_per_day - used.tokens),
+                    }
+                )
+            if limits.usd_per_day:
+                cents = int(round(limits.usd_per_day * 100))
+                out.append(
+                    {
+                        "scope": f"{scope}:{key}",
+                        "unit": "usd-cents",
+                        "limit": cents,
+                        "remaining": max(0, int(cents - used.usd * 100)),
+                    }
+                )
+        return out
+
+    def absorb(self, principal: str, team: str, usd: float, ts: float) -> None:
+        """Spend recorded elsewhere (an imported bill): counts against today's budgets when it is today's."""
+        day = time.strftime("%Y-%m-%d", time.gmtime(ts))
+        if day == _day():
+            self._apply(principal, team, None, day, 0, 0, 0, usd, 0.0)
+
     def downgrade(self, ctx: Context, policy: Policy, model: str | None) -> str | None:
         """The cheaper model to use instead of `model`, once the caller is past `downgrade.at`."""
         d = policy.budgets.downgrade
@@ -197,7 +229,7 @@ class BudgetLedger:
         if self.store:
             self.store.add(
                 **_attribution(ctx),
-                resource="llm",
+                resource=policy.model_resource(model) or "llm",
                 model=model,
                 requests=1,
                 input_tokens=input_tokens,

@@ -1,4 +1,10 @@
-"""Resource leases: simulators, VMs and browsers an agent holds through MCP tools, metered per minute.
+"""Decisions on catalogued resources, and leases of the ones agents hold for a while.
+
+`authorize` is the one evaluator for all three resource classes, with Cedar's shape: a principal asks to
+perform an action on a resource in a context (workflow, task). Consumables are decided by budgets,
+leasables by concurrency caps, access grants by a live, time-boxed grant (or a workflow that includes them).
+
+Resource leases: simulators, VMs and browsers an agent holds through MCP tools, metered per minute.
 
 A start tool (boot_simulator, boot-device, create_vm) opens a lease, a stop tool closes it, and activity
 tools keep it alive. A lease idle for longer than the resource's `idle_minutes`, or older than its
@@ -12,6 +18,7 @@ import re
 import time
 import uuid
 from collections.abc import Callable
+from dataclasses import asdict, dataclass
 from fnmatch import fnmatch
 from typing import Any
 
@@ -25,6 +32,104 @@ Signal = Callable[[str, str, str, list[str]], None]  # rule, principal, detail, 
 
 def _any(tool: str, patterns: list[str]) -> bool:
     return any(fnmatch(tool, p) for p in patterns)
+
+
+@dataclass
+class Decision:
+    allow: bool
+    resource: str
+    urn: str
+    resource_class: str
+    action: str
+    reason: str
+    category: str = ""  # why it was refused, as a finding category
+    grant: str | None = None  # the grant that allowed it
+    remaining: float | None = None  # share of the tightest budget still free (consumables)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+def resolve(policy: Policy, ref: str) -> str | None:
+    """A catalog name from a name or a URN (instance suffixes like `/sim-1a2b3c` are ignored)."""
+    if ref in policy.catalog:
+        return ref
+    base = ref.split("/", 1)[0]
+    return next((n for n, r in policy.catalog.items() if r.urn == base or fnmatch(base, r.urn)), None)
+
+
+def authorize(
+    policy: Policy,
+    principal: Principal,
+    action: str,
+    resource: str,
+    workflow: str | None = None,
+    ledger: BudgetLedger | None = None,
+    held: int = 0,
+) -> Decision:
+    """May `principal` perform `action` on `resource` (a catalog name) within `workflow`?"""
+    r = policy.catalog[resource]
+    d = Decision(True, resource, r.urn, r.class_, action, "allowed")
+
+    def deny(category: str, reason: str) -> Decision:
+        d.allow, d.category, d.reason = False, category, reason
+        return d
+
+    pp = policy.principal(principal.id)
+    if pp.status == "revoked":
+        return deny("revoked", f"access revoked: {pp.reason or 'by an administrator'}")
+    if r.actions and action not in r.actions and action != "use":
+        return deny("unknown_action", f"{resource} supports {r.actions}, not {action!r}")
+    wf = policy.menu.workflows.get(workflow or "")
+    in_wf = wf is not None and resource in wf.resources
+
+    if r.class_ == "consumable":
+        if wf and wf.models and r.models and not any(fnmatch(m, p) for m in r.models for p in wf.models):
+            return deny("not_in_workflow", f"workflow {workflow!r} does not use {resource}")
+        if ledger is not None and policy.budgets.enabled:
+            ctx = Context(principal, Direction.INPUT, "", workflow=workflow)
+            used = ledger.utilization(ctx, policy)
+            d.remaining = round(max(0.0, 1 - used), 4)
+            if used >= 1:
+                return deny("budget_exhausted", f"{principal.id} has used {used:.0%} of a daily budget")
+        return d
+
+    if r.class_ == "leasable":
+        if action == "start":
+            if wf is not None and not in_wf:
+                return deny("resource_not_in_workflow", f"workflow {workflow!r} does not lease {resource}")
+            caps = [r.lease.max_concurrent_per_principal if r.lease else None]
+            caps.append(wf.resources[resource].max_concurrent if in_wf else None)
+            caps = [c for c in caps if c is not None]
+            if caps and held >= min(caps):
+                return deny("concurrency_limit", f"{principal.id} already holds {held} {resource}(s)")
+        return d
+
+    # access_grant
+    if pp.status == "quarantined":
+        return deny("quarantined", f"{principal.id!r} is quarantined; grants are suspended")
+    g = policy.grant_for(principal.id, resource, action, workflow)
+    if g:
+        d.grant, d.reason = g.id, f"grant {g.id} by {g.granted_by or 'admin'}"
+        return d
+    if r.grant and r.grant.approval == "workflow" and in_wf:
+        d.reason = f"included in workflow {workflow!r}"
+        return d
+    return deny("grant_required", f"{resource} needs an approved grant; request one at /me ({r.urn})")
+
+
+def check_grants(ctx: Context, policy: Policy) -> list[Finding]:
+    """Tool calls into access-grant resources (prod data, deploys, external email) need a live grant."""
+    if ctx.direction is not Direction.TOOL_CALL or not ctx.tool or not ctx.metered:
+        return []
+    declared = ctx.workflow if ctx.workflow_source == "declared" else None
+    out = []
+    for name in policy.grant_resources(ctx.tool):
+        r = policy.catalog[name]
+        d = authorize(policy, ctx.principal, r.actions[0] if r.actions else "use", name, declared)
+        if not d.allow:
+            out.append(_block("access_grant", d.category, d.reason))
+    return out
 
 
 class LeaseTracker:
@@ -46,22 +151,15 @@ class LeaseTracker:
         if ctx.direction is not Direction.TOOL_CALL or not ctx.tool or not ctx.metered:
             return []
         out: list[Finding] = []
-        wf = policy.menu.workflows.get(ctx.workflow or "") if ctx.workflow_source == "declared" else None
+        declared = ctx.workflow if ctx.workflow_source == "declared" else None
         for name, r in policy.resources.items():
             if not _any(ctx.tool, r.start_tools):
                 continue
-            if wf is not None and name not in wf.resources:
-                out.append(
-                    _block("workflow", "resource_not_in_workflow", f"workflow {ctx.workflow!r} does not lease {name}")
-                )
-                continue
-            caps = [r.max_concurrent_per_principal, wf.resources[name].max_concurrent if wf else None]
-            caps = [c for c in caps if c is not None]
             held = len(self.held(ctx.principal.id, name))
-            if caps and held >= min(caps):
-                out.append(
-                    _block("resources", "concurrency_limit", f"{ctx.principal.id} already holds {held} {name}(s)")
-                )
+            d = authorize(policy, ctx.principal, "start", name, declared, held=held)
+            if not d.allow:
+                control = "workflow" if d.category == "resource_not_in_workflow" else "resources"
+                out.append(_block(control, d.category, d.reason))
         return out
 
     # ---- after a successful call: open, touch or close --------------------------

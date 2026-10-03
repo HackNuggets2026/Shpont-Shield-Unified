@@ -13,14 +13,14 @@ from .config import Policy, PolicyStore
 from .controls import access, signatures, workflows
 from .controls.budget import BudgetLedger
 from .controls.patterns import pii, redact, secrets
-from .controls.resources import LeaseTracker
+from .controls.resources import LeaseTracker, check_grants
 from .controls.semantic import SemanticGuard
 from .decision import DecisionBackend, HeuristicBackend, OllamaSystemOne
 from .detections import RiskEngine
 from .types import Action, Context, Direction, Finding, Principal, Verdict
 from .usage import UsageStore
 
-_STATUS = {"auth": 401, "budget": 429, "resources": 429}
+_STATUS = {"auth": 401, "budget": 429, "resources": 429}  # access_grant: 403
 
 
 class ControlLayer:
@@ -30,7 +30,7 @@ class ControlLayer:
         self._backend_key: tuple | None = None
         self._backend: DecisionBackend | None = backend
         p = store.policy
-        usage_path = p.usage.path if p.usage.path == ":memory:" else store.base_dir / p.usage.path
+        usage_path = p.usage.path if p.usage.path == ":memory:" else store.data_path(p.usage.path)
         self.usage = UsageStore(usage_path)
         self.ledger = BudgetLedger(self.usage)
         self.leases = LeaseTracker(self.usage, self.ledger)
@@ -38,7 +38,7 @@ class ControlLayer:
         self.leases.on_signal = self.risk.signal
         # (principal, session) -> declared workflow, so later calls in a session inherit its label.
         self.sessions: OrderedDict[tuple[str, str], str] = OrderedDict()
-        self.audit = audit or AuditLog(store.base_dir / p.audit.path, p.audit.ring_size, p.audit.store_raw_text)
+        self.audit = audit or AuditLog(store.data_path(p.audit.path), p.audit.ring_size, p.audit.store_raw_text)
         self.feed = signatures.SignatureFeed(p.signatures.feed)
         self.feed.load(store.base_dir)
         self._team_cache: dict[tuple[str, str], Policy] = {}
@@ -153,7 +153,10 @@ class ControlLayer:
         verdict = await self._evaluate(ctx, extra, semantic=semantic)
         # Budget, lease, workflow and engine-failure outcomes depend on the moment or on headers, not on the
         # content: never cached.
-        if not any(f.control in ("budget", "resources", "workflow", "semantic_engine") for f in verdict.findings):
+        if not any(
+            f.control in ("budget", "resources", "workflow", "access_grant", "semantic_engine")
+            for f in verdict.findings
+        ):
             self._seen[key] = verdict
             if len(self._seen) > 10_000:
                 self._seen.popitem(last=False)
@@ -173,6 +176,7 @@ class ControlLayer:
         if not findings:
             findings += access.check_model(ctx, policy) + access.check_tool(ctx, policy)
             findings += workflows.check(ctx, policy)
+            findings += check_grants(ctx, policy)
         t = lap("gates", t_start)
 
         if not _blocked(findings) and ctx.metered and ctx.direction in (Direction.INPUT, Direction.TOOL_CALL):

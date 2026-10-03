@@ -36,7 +36,7 @@ def test_cost_budget_commercial_pricing(make_client):
 def test_local_model_cost_uses_compute_seconds(make_client):
     c = make_client(
         mutate=lambda p: (
-            p["budgets"]["pricing"].update({"mock-local": {"usd_per_compute_second": 1000.0}})
+            p["budgets"].setdefault("pricing", {}).update({"mock-local": {"usd_per_compute_second": 1000.0}})
             or p["models"]["allowed"].append("mock-local")
         )
     )

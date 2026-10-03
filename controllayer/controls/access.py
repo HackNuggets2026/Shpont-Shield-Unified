@@ -43,8 +43,11 @@ def check_tool(ctx: Context, policy: Policy) -> list[Finding]:
     cfg = policy.tool_access
     if not cfg.enabled or ctx.direction is not Direction.TOOL_CALL or not ctx.tool:
         return []
+    # A tool behind an access-grant resource is decided by its grant (controls/resources.py), not the role.
+    protected = bool(policy.grant_resources(ctx.tool))
+    grant = policy.covering_grant(ctx.principal.id, ctx.tool, ctx.workflow) if protected else None
     allowed = cfg.roles.get(ctx.principal.role, [])
-    if not any(fnmatch(ctx.tool, pat) for pat in allowed):
+    if not protected and not any(fnmatch(ctx.tool, pat) for pat in allowed):
         return [
             finding(
                 "tool_access",
@@ -66,14 +69,15 @@ def check_tool(ctx: Context, policy: Policy) -> list[Finding]:
                 detail=f"{ctx.principal.id!r} is quarantined; only {policy.quarantine.tools} are allowed",
             )
         ]
-    if any(fnmatch(ctx.tool, pat) for pat in cfg.irreversible):
+    if grant is None and any(fnmatch(ctx.tool, pat) for pat in cfg.irreversible):
+        how = "an approved grant" if protected else "human approval"
         return [
             finding(
                 "tool_access",
                 cfg,
                 "irreversible_action",
                 Action.BLOCK,
-                detail=f"{ctx.tool!r} is irreversible and needs human approval",
+                detail=f"{ctx.tool!r} is irreversible and needs {how}",
             )
         ]
     return []

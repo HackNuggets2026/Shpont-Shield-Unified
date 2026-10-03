@@ -20,7 +20,8 @@ SCHEMA = """
 CREATE TABLE IF NOT EXISTS usage (
     ts REAL, day TEXT, principal TEXT, team TEXT, workflow TEXT, task TEXT, session TEXT,
     resource TEXT, model TEXT, requests INTEGER, input_tokens INTEGER, output_tokens INTEGER,
-    quantity REAL, unit TEXT, usd REAL, compute_seconds REAL, request_id TEXT, metered INTEGER
+    quantity REAL, unit TEXT, usd REAL, compute_seconds REAL, request_id TEXT, metered INTEGER,
+    source TEXT, client TEXT
 );
 CREATE INDEX IF NOT EXISTS usage_day ON usage(day);
 CREATE INDEX IF NOT EXISTS usage_run ON usage(principal, workflow, task);
@@ -35,14 +36,17 @@ CREATE TABLE IF NOT EXISTS incidents (
 );
 CREATE TABLE IF NOT EXISTS requests (
     id TEXT PRIMARY KEY, ts REAL, principal TEXT, kind TEXT, workflow TEXT, scale REAL,
-    reason TEXT, status TEXT, decided_by TEXT, decided_at REAL, note TEXT
+    reason TEXT, status TEXT, decided_by TEXT, decided_at REAL, note TEXT, detail TEXT
 );
 CREATE TABLE IF NOT EXISTS admin_actions (
     ts REAL, actor TEXT, action TEXT, target TEXT, reason TEXT, detail TEXT
 );
 """
 
-GROUPS = {"workflow", "task", "team", "principal", "resource", "model", "day"}
+# Columns added after a table was first created: (table, column, type).
+MIGRATIONS = [("usage", "source", "TEXT"), ("usage", "client", "TEXT"), ("requests", "detail", "TEXT")]
+
+GROUPS = {"workflow", "task", "team", "principal", "resource", "model", "day", "source"}
 
 
 def day_of(ts: float) -> str:
@@ -65,6 +69,10 @@ class UsageStore:
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.execute("PRAGMA synchronous=NORMAL")  # WAL + NORMAL: durable across crashes of the process
         self.db.executescript(SCHEMA)
+        for table, col, typ in MIGRATIONS:
+            cols = {r[1] for r in self.db.execute(f"PRAGMA table_info({table})")}
+            if col not in cols:
+                self.db.execute(f"ALTER TABLE {table} ADD COLUMN {col} {typ}")
         self.lock = threading.Lock()
 
     def _q(self, sql: str, args: tuple = ()) -> list[dict[str, Any]]:
@@ -97,31 +105,33 @@ class UsageStore:
         request_id: str | None = None,
         metered: bool = True,
         ts: float | None = None,
+        source: str = "gateway",
+        client: str | None = None,
     ) -> None:
         ts = ts or time.time()
-        self._x(
-            "INSERT INTO usage VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            (
-                ts,
-                day_of(ts),
-                principal,
-                team,
-                workflow,
-                task,
-                session,
-                resource,
-                model,
-                requests,
-                input_tokens,
-                output_tokens,
-                quantity,
-                unit,
-                usd,
-                compute_seconds,
-                request_id,
-                int(metered),
-            ),
-        )
+        row = {
+            "ts": ts,
+            "day": day_of(ts),
+            "principal": principal,
+            "team": team,
+            "workflow": workflow,
+            "task": task,
+            "session": session,
+            "resource": resource,
+            "model": model,
+            "requests": requests,
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "quantity": quantity,
+            "unit": unit,
+            "usd": usd,
+            "compute_seconds": compute_seconds,
+            "request_id": request_id,
+            "metered": int(metered),
+            "source": source,
+            "client": client,
+        }
+        self._x(f"INSERT INTO usage ({', '.join(row)}) VALUES ({', '.join('?' * len(row))})", tuple(row.values()))
 
     def day_rows(self, day: str) -> list[dict[str, Any]]:
         """Metered totals for a day by principal, team and model: what the in-memory ledger is rebuilt from."""
@@ -178,6 +188,20 @@ class UsageStore:
             " SUM(CASE WHEN unit='minute' THEN quantity ELSE 0 END) minutes,"
             " SUM(CASE WHEN metered=0 THEN input_tokens ELSE 0 END) guard_tokens"
             f" FROM usage WHERE {where} GROUP BY {', '.join(cols)} ORDER BY usd DESC, tokens DESC",
+            tuple(args),
+        )
+
+    def cost_rows(self, since: float, until: float | None = None) -> list[dict[str, Any]]:
+        """Metered usage per day, person, workflow, task and resource: one line per FOCUS cost record."""
+        where, args = "ts>=? AND metered=1", [since]
+        if until is not None:
+            where += " AND ts<?"
+            args.append(until)
+        return self._q(
+            "SELECT day, principal, team, workflow, task, resource, model, unit, COALESCE(source, 'gateway') source,"
+            " SUM(requests) requests, SUM(input_tokens+output_tokens) tokens, SUM(quantity) quantity, SUM(usd) usd"
+            f" FROM usage WHERE {where} GROUP BY day, principal, team, workflow, task, resource, model, unit, source"
+            " ORDER BY day, principal",
             tuple(args),
         )
 
@@ -273,11 +297,34 @@ class UsageStore:
 
     # ---- approval requests -------------------------------------------------------
 
-    def add_request(self, principal: str, kind: str, workflow: str | None, scale: float | None, reason: str) -> str:
+    def add_request(
+        self,
+        principal: str,
+        kind: str,
+        workflow: str | None,
+        scale: float | None,
+        reason: str,
+        detail: dict | None = None,
+        ts: float | None = None,
+    ) -> str:
         rid = uuid.uuid4().hex[:12]
         self._x(
-            "INSERT INTO requests VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-            (rid, time.time(), principal, kind, workflow, scale, reason, "pending", None, None, ""),
+            "INSERT INTO requests (id, ts, principal, kind, workflow, scale, reason, status, decided_by, decided_at,"
+            " note, detail) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                rid,
+                ts or time.time(),
+                principal,
+                kind,
+                workflow,
+                scale,
+                reason,
+                "pending",
+                None,
+                None,
+                "",
+                json.dumps(detail) if detail else None,
+            ),
         )
         return rid
 
@@ -290,7 +337,10 @@ class UsageStore:
             where.append("status=?")
             args.append(status)
         sql = "SELECT * FROM requests" + (" WHERE " + " AND ".join(where) if where else "")
-        return self._q(sql + " ORDER BY ts DESC LIMIT 200", tuple(args))
+        rows = self._q(sql + " ORDER BY ts DESC LIMIT 200", tuple(args))
+        for r in rows:
+            r["detail"] = json.loads(r["detail"]) if r.get("detail") else None
+        return rows
 
     def decide_request(self, rid: str, status: str, actor: str, note: str) -> dict | None:
         self._x(

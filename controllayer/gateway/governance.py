@@ -293,7 +293,18 @@ def register(
         req, note = pending[0], str(body.get("note", ""))
         if decision == "approve":
             pp = store.policy.principal(req["principal"])
-            if req["kind"] == "workflow":
+            if req["kind"] == "grant":
+                grants = app.state.grant_for_request(
+                    store.policy,
+                    req["principal"],
+                    req["detail"] or {},
+                    actor(request),
+                    f"request {rid}: {req['reason']}",
+                )
+                if isinstance(grants, str):
+                    return err(grants, 422)
+                patch = {"grants": grants}
+            elif req["kind"] == "workflow":
                 patch = {"approved_workflows": sorted({*pp.approved_workflows, req["workflow"]})}
             else:
                 patch = {"budget_scale": float(req["scale"] or 2.0)}
@@ -340,6 +351,7 @@ def register(
                 "since": pp.since,
                 "approved_workflows": pp.approved_workflows,
             },
+            "grants": [{**g.model_dump(), "live": g.live(now)} for g in pp.grants if g.live(now - DAY)],
             "budgets": mine,
             "spend": {
                 "today": round(sum(r["usd"] for r in usage.breakdown(["principal"], today, who.id)), 6),
@@ -421,14 +433,28 @@ def register(
 
     @app.post("/me/requests")
     async def me_request(request: Request):
-        """Ask for a workflow that needs approval, or for more daily budget."""
+        """Ask for a workflow that needs approval, more daily budget, or a time-boxed grant to a resource."""
         who = me(request)
         if who is None:
             return err("your API key is required", 401)
         body = await json_object(request)
         kind, reason = body.get("kind"), str(body.get("reason") or "").strip()
-        if kind not in ("workflow", "quota") or not reason:
-            return err("kind must be workflow or quota, with a reason")
+        if kind not in ("workflow", "quota", "grant") or not reason:
+            return err("kind must be workflow, quota or grant, with a reason")
+        detail = None
+        if kind == "grant":
+            r = store.policy.catalog.get(str(body.get("resource") or ""))
+            if r is None or r.class_ != "access_grant":
+                return err(f"{body.get('resource')!r} is not a resource that can be granted")
+            try:
+                minutes = float(body.get("minutes") or (r.grant.max_minutes if r.grant else 60))
+            except (TypeError, ValueError):
+                return err("minutes must be a number")
+            detail = {"resource": body["resource"], "minutes": minutes}
+            if isinstance(body.get("actions"), list):
+                detail["actions"] = [a for a in body["actions"] if isinstance(a, str)]
+            if body.get("workflow") in store.policy.menu.workflows:
+                detail["workflow"] = body["workflow"]
         wf = body.get("workflow")
         if kind == "workflow" and wf not in store.policy.menu.workflows:
             return err(f"unknown workflow {wf!r}")
@@ -440,7 +466,7 @@ def register(
                 return err("scale must be a number")
             if not 0 < scale <= 10:
                 return err("scale must be between 0 and 10")
-        rid = usage.add_request(who.id, kind, wf if kind == "workflow" else None, scale, reason[:500])
+        rid = usage.add_request(who.id, kind, wf if kind == "workflow" else None, scale, reason[:500], detail)
         return {"ok": True, "id": rid}
 
     # ---- external meters -------------------------------------------------------------------

@@ -21,6 +21,11 @@ KEYS = {
 }
 
 
+@pytest.fixture(autouse=True)
+def _no_data_dir(monkeypatch):
+    monkeypatch.delenv("ACL_DATA_DIR", raising=False)
+
+
 @pytest.fixture
 def policy_dir(tmp_path: Path) -> Path:
     shutil.copy(ROOT / "policy.yaml", tmp_path / "policy.yaml")

@@ -48,12 +48,6 @@ budgets:
   per_team:
     engineering: { tokens_per_day: 1000000, usd_per_day: 20 }
     interns: { tokens_per_day: 20000, usd_per_day: 0.5, requests_per_minute: 10 }
-  pricing:
-    gpt-4o-mini: { usd_per_1m_input: 0.15, usd_per_1m_output: 0.60 }
-    # Local models cost compute time, not tokens. Keys may be globs, matching models.allowed.
-    "llama3.2:*": { usd_per_compute_second: 0.0004 }
-    "qwen3:*": { usd_per_compute_second: 0.0003 }
-    "mock-*": { usd_per_1m_input: 1.0, usd_per_1m_output: 2.0 }
   loop_guard: { max_identical_calls: 5, window_seconds: 60 }
   downgrade:                 # past 80% of a daily budget, answer with a cheaper model instead of refusing
     enabled: true
@@ -98,7 +92,7 @@ tool_access:
     analyst: ["read_*", "search_*", "send_email"]
     automation: ["*"]
     intern: ["search_*", "*simulator*"]
-  irreversible: ["delete_*", "drop_*", "transfer_funds", "send_email"]
+  irreversible: ["delete_*", "drop_*", "transfer_funds"]   # sensitive tools are access grants in the catalog
 
 # --- Semantic (AI-based) controls ---------------------------------------------
 # Each entry is one question to the decision model. Add an entry to add a guardrail.
@@ -195,6 +189,7 @@ menu:
       description: analysing spreadsheets, reports or business data
       teams: [finance, engineering]
       tools: ["read_*", "search_*"]
+      resources: { external_email: {} }   # may email results out (an access grant included by the workflow)
       per_run: { tokens: 100000 }
       keywords: ["revenue", "spreadsheet", "forecast", "quarter"]
     load_test:
@@ -206,28 +201,147 @@ menu:
       resources: { vm: { max_concurrent: 1, max_minutes: 120 } }
       per_run: { usd: 20.0 }
 
-resources:
-  simulator:
-    usd_per_minute: 0.01
-    start_tools: [boot_simulator, boot-device]          # demo server, argent
-    stop_tools: [shutdown_simulator]
-    stop_all_tools: [stop-all-simulator-servers]
-    activity_tools: ["simulator_*", "gesture-*", describe, screenshot, launch-app]
-    handle: { pattern: "sim-[0-9a-f]{6}", arg: id }
-    max_concurrent_per_principal: 2
-    idle_minutes: 10
-    auto_reclaim: true
-  vm:
-    usd_per_minute: 0.05
-    start_tools: [create_vm]
-    stop_tools: [destroy_vm]
-    activity_tools: ["vm_*", run_tests]
-    handle: { pattern: "vm-[0-9a-f]{6}", arg: id }
-    max_concurrent_per_principal: 1
-    idle_minutes: 30
-    auto_reclaim: true
+# --- Resource catalog ------------------------------------------------------------
+# Everything an agent can touch, one entry each (Kubernetes-style ResourceType, exportable to Backstage).
+# Named by URN: urn:shield:<category>:<provider>:<type>. Three classes:
+#   consumable    a quantity in a unit (tokens, CI minutes): limited by budgets, cheaper-model fallback
+#   leasable      time held (simulators, VMs): limited by concurrency, max duration, idle shutdown
+#   access_grant  uses of something sensitive (prod data, deploys, external email): needs a time-boxed grant
+# Workflows on the menu list the resources they include; grants are approved per person (RFC 9396 shape).
+
+catalog:
+  gpt-4o-mini:
+    class: consumable
+    urn: urn:shield:ai_model:openai:gpt-4o-mini
+    title: GPT-4o mini
+    category: ai_model
+    provider: openai
+    unit: token
+    models: [gpt-4o-mini]
+    price: { usd_per_1m_input: 0.15, usd_per_1m_output: 0.60 }
+  llama:
+    class: consumable
+    urn: urn:shield:ai_model:local:llama3.2
+    title: Llama 3.2 (on-prem GPU)
+    category: ai_model
+    provider: local
+    unit: token
+    models: ["llama3.2:*"]
+    price: { usd_per_compute_second: 0.0004 }   # local models cost compute time, not tokens
+  qwen:
+    class: consumable
+    urn: urn:shield:ai_model:local:qwen3
+    title: Qwen 3 (on-prem GPU)
+    category: ai_model
+    provider: local
+    unit: token
+    models: ["qwen3:*"]
+    price: { usd_per_compute_second: 0.0003 }
+  mock:
+    class: consumable
+    urn: urn:shield:ai_model:demo:mock
+    title: Mock model (demo upstream)
+    category: ai_model
+    provider: demo
+    unit: token
+    models: ["mock-*"]
+    price: { usd_per_1m_input: 1.0, usd_per_1m_output: 2.0 }
+  claude_code:
+    class: consumable
+    urn: urn:shield:ai_model:anthropic:claude-code
+    title: Claude Code subscription usage
+    category: ai_model
+    provider: anthropic
+    unit: token
+    meter: telemetry            # reported by Claude Code's OpenTelemetry export, priced by Claude Code itself
+    models: ["claude-*"]
   ci_minutes:
-    usd_per_minute: 0.008     # reported by CI runners: POST /v1/usage {resource: ci_minutes, quantity: 12}
+    class: consumable
+    urn: urn:shield:ci:github:actions-minutes
+    title: CI runner minutes
+    category: ci
+    provider: github
+    unit: minute
+    meter: report_api           # POST /v1/usage {resource: ci_minutes, quantity: 12}
+    price: { usd_per_unit: 0.008 }
+  cloud:
+    class: consumable
+    urn: urn:shield:compute:aws:account
+    title: Cloud bill (FOCUS import)
+    category: compute
+    provider: aws
+    unit: usd
+    meter: billing_export       # POST /v1/import/focus with a FOCUS CSV
+    price: { usd_per_unit: 1.0 }
+  simulator:
+    class: leasable
+    urn: urn:shield:device:apple:ios-simulator
+    title: iOS simulator
+    category: device
+    provider: apple
+    unit: minute
+    meter: mcp_tools
+    actions: [start, use, stop]
+    price: { usd_per_unit: 0.01 }
+    lease:
+      start_tools: [boot_simulator, boot-device]          # demo server, argent
+      stop_tools: [shutdown_simulator]
+      stop_all_tools: [stop-all-simulator-servers]
+      activity_tools: ["simulator_*", "gesture-*", describe, screenshot, launch-app]
+      handle: { pattern: "sim-[0-9a-f]{6}", arg: id }
+      max_concurrent_per_principal: 2
+      idle_minutes: 10
+      auto_reclaim: true
+  vm:
+    class: leasable
+    urn: urn:shield:compute:internal:sandbox-vm
+    title: Sandbox VM
+    category: compute
+    unit: minute
+    meter: mcp_tools
+    actions: [start, use, stop]
+    price: { usd_per_unit: 0.05 }
+    lease:
+      start_tools: [create_vm]
+      stop_tools: [destroy_vm]
+      activity_tools: ["vm_*", run_tests]
+      handle: { pattern: "vm-[0-9a-f]{6}", arg: id }
+      max_concurrent_per_principal: 1
+      idle_minutes: 30
+      auto_reclaim: true
+  prod_db:
+    class: access_grant
+    urn: urn:shield:data:internal:prod-db
+    title: Production database (read)
+    category: data
+    unit: use
+    actions: [read]
+    tools: [query_prod_db]
+    sensitivity: high
+    owner: data-platform
+    grant: { approval: admin, max_minutes: 240 }
+  prod_deploy:
+    class: access_grant
+    urn: urn:shield:action:internal:prod-deploy
+    title: Production deploy
+    category: action
+    unit: use
+    actions: [deploy]
+    tools: ["deploy_*"]
+    sensitivity: critical
+    owner: platform
+    grant: { approval: admin, max_minutes: 60 }
+  external_email:
+    class: access_grant
+    urn: urn:shield:action:internal:external-email
+    title: Email outside the company
+    category: action
+    unit: use
+    actions: [send]
+    tools: [send_email]
+    sensitivity: high
+    owner: security
+    grant: { approval: workflow }    # included by workflows that list it; otherwise ask for a grant
 
 quarantine:                    # what a quarantined principal keeps
   tools: ["read_*", "search_*"]
