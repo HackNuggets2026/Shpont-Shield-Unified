@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>AI Control Layer</title>
+<title>Security Console</title>
 <style>
 :root {
   --bg: #f6f7f9; --panel: #fff; --text: #1b1f24; --muted: #5f6b7a; --border: #e2e6eb;
@@ -55,7 +55,7 @@ pre { white-space: pre-wrap; word-break: break-word; font-size: 12px; background
 </head>
 <body>
 <header>
-  <h1>AI Control Layer</h1>
+  <h1>Security Console</h1>
   <div class="meta">policy <b id="pname">-</b> v<b id="pver">-</b> · reloads <b id="preloads">0</b> <span id="perr" class="err"></span></div>
   <div class="meta">signature feed <b id="feed">-</b></div>
   <div class="meta">semantic <b id="sem">-</b></div>
@@ -86,6 +86,26 @@ pre { white-space: pre-wrap; word-break: break-word; font-size: 12px; background
     <div class="events scroll"><table id="events"></table></div>
   </section>
 
+  <section class="card span8 scroll">
+    <h2>Insider risk</h2>
+    <div class="detail" style="margin-bottom:6px">Scores decay over time. Watch = stricter policy + full-text capture; restricted = blocked.
+      Monitoring is disclosed to employees; alerts are not.</div>
+    <table id="risk"></table>
+  </section>
+  <section class="card span4 scroll">
+    <h2>Security alerts</h2>
+    <div id="alerts" class="events"></div>
+  </section>
+
+  <section class="card span8 scroll">
+    <h2>Agent resource grants</h2>
+    <table id="grants"></table>
+  </section>
+  <section class="card span4 scroll">
+    <h2>Resource catalog</h2>
+    <table id="catalog"></table>
+  </section>
+
   <section class="card span12">
     <h2>Try a prompt</h2>
     <div class="toolbar">
@@ -113,7 +133,56 @@ function hbars(el, rows) {
     `<div class="hbar"><span title="${esc(k)}">${esc(k)}</span><div class="bar hot"><i style="width:${pct(v, max)}%"></i></div><b>${v}</b></div>`).join("");
 }
 
+const LEVELS = ["normal", "watch", "restricted"];
+const badge = (cls, text) => `<span class="pill ${cls}">${esc(text)}</span>`;
+const lvl = (l) => badge(l === "restricted" ? "block" : l === "watch" ? "warn" : "allow", l);
+const SENS = { high: "block", medium: "warn", low: "allow" };
+
+async function refreshSecurity() {
+  const [risk, al, gr] = await Promise.all([api("/admin/risk"), api("/admin/alerts"), api("/admin/grants")].map((p) => p.then((r) => r.json())));
+  // Do not re-render under someone choosing a level.
+  if (!$("risk").contains(document.activeElement)) $("risk").innerHTML = "<tr><th>Who</th><th class=num>Score</th><th>Level</th><th>Manual</th><th>Set level</th></tr>" +
+    (risk.principals.map((r) => `<tr><td>${esc(r.principal)}<span class="tag">${esc(r.team)}</span>${r.owner ? `<span class="tag">agent of ${esc(r.owner)}</span>` : ""}</td>
+      <td class=num>${r.score}</td><td>${lvl(r.level)}</td>
+      <td class="detail">${r.manual ? esc(r.manual.level + (r.manual.reason ? ": " + r.manual.reason : "")) : "-"}</td>
+      <td><select data-level="${esc(r.principal)}">${LEVELS.map((l) => `<option ${l === (r.manual?.level || "normal") ? "selected" : ""}>${l}</option>`).join("")}</select>
+        <label class="detail"><input type="checkbox" data-reset="${esc(r.principal)}"> reset score</label>
+        <button data-apply="${esc(r.principal)}">Apply</button></td></tr>`).join("") ||
+      '<tr><td colspan=5 class="empty">no risk signals yet</td></tr>');
+  $("alerts").innerHTML = (al.alerts.map((a) => `<div style="margin-bottom:8px">${lvl(a.level)} <b>${esc(a.principal)}</b>
+      <span class="detail">${new Date(a.ts * 1000).toLocaleTimeString()} · score ${a.score}</span>
+      <div class="detail">${esc(a.reason)} · ${esc(a.findings.join(", "))}</div></div>`).join("") || '<div class="empty">no alerts</div>') +
+    (al.sink_errors.length ? `<div class="err">sink errors: ${esc(al.sink_errors.join("; "))}</div>` : "");
+  $("grants").innerHTML = "<tr><th>Agent</th><th>Owner</th><th>Resource</th><th>Scopes</th><th>Expires</th><th>State</th><th></th></tr>" +
+    (gr.grants.map((g) => `<tr><td>${esc(g.agent)}</td><td>${esc(g.owner)}</td><td>${esc(g.resource)}</td><td>${esc(g.scopes.join(", "))}</td>
+      <td class="detail">${g.expires_at ? new Date(g.expires_at * 1000).toLocaleString() : "never"}</td>
+      <td>${g.active ? badge("allow", "active") : badge("block", "inactive")}</td>
+      <td><button data-revoke="${esc(g.agent)}|${esc(g.resource)}">Revoke</button></td></tr>`).join("") ||
+      '<tr><td colspan=7 class="empty">no grants</td></tr>');
+  $("catalog").innerHTML = "<tr><th>Resource</th><th>Sensitivity</th><th></th></tr>" +
+    gr.resources.map((r) => `<tr><td>${esc(r.name)}<div class="detail">${esc(r.id)} · ${esc(r.type)}</div></td>
+      <td>${badge(SENS[r.sensitivity], r.sensitivity)}</td>
+      <td><button data-suspend="${esc(r.id)}" data-on="${r.suspended ? "0" : "1"}">${r.suspended ? "Resume" : "Suspend"}</button></td></tr>`).join("");
+}
+
+document.addEventListener("click", async (ev) => {
+  const t = ev.target, d = t.dataset;
+  if (d.apply) {
+    const level = document.querySelector(`select[data-level="${CSS.escape(d.apply)}"]`).value;
+    const reset_score = document.querySelector(`input[data-reset="${CSS.escape(d.apply)}"]`).checked;
+    const reason = level === "normal" ? "" : (prompt(`Reason for setting ${d.apply} to ${level}:`) || "");
+    await api(`/admin/risk/${encodeURIComponent(d.apply)}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ level, reason, reset_score }) });
+  } else if (d.revoke) {
+    const [agent, rid] = d.revoke.split("|");
+    await api(`/admin/grants/${encodeURIComponent(agent)}/${encodeURIComponent(rid)}`, { method: "DELETE" });
+  } else if (d.suspend) {
+    await api(`/admin/resources/${encodeURIComponent(d.suspend)}/suspend`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ suspended: d.on === "1" }) });
+  } else return;
+  refresh();
+});
+
 async function refresh() {
+  refreshSecurity().catch(() => {});
   let s;
   try { s = await (await api("/admin/summary")).json(); } catch { $("updated").textContent = "gateway unreachable"; return; }
   $("pname").textContent = s.policy.name; $("pver").textContent = s.policy.version; $("preloads").textContent = s.policy.reloads;
