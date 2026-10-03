@@ -9,7 +9,7 @@ import { Sparkline } from "../../components/charts";
 import { LevelPill, PersonStatusPill } from "../../components/pills";
 import { Card, Empty, ErrorBox, Kpi, Loading, PageHeader, Pill, Q, Segmented, Select, cx } from "../../components/ui";
 import { IconAlert, IconRadar, IconShield, IconUsers } from "../../components/icons";
-import { DepartmentSelect, OrgLine, Pager, SearchBox, TeamSelect, useUrlFilters } from "../../components/opsKit";
+import { DepartmentSelect, OrgLine, Pager, SearchBox, TeamSelect, useDepartments, useUrlFilters } from "../../components/opsKit";
 import { IncidentsTable } from "../../components/security/IncidentsTable";
 import { OpenedClosedChart } from "../../components/security/OpenedClosedChart";
 import { RiskMeter } from "../../components/security/RiskMeter";
@@ -79,7 +79,12 @@ export function Security() {
   const summary = useQuery({ queryKey: ["admin", "incidents", "summary", 30], queryFn: () => ops.incidentSummary(30), refetchInterval: 10_000 });
   const openBySev = useOpenBySeverity(summary.data?.by_severity);
   const matrix = useMatrix(summary.data?.by_rule_department, summary.isSuccess || summary.isError);
-  const outliers = useQuery({ queryKey: ["admin", "outliers", "risk", 20], queryFn: () => ops.riskOutliers(20), refetchInterval: 10_000 });
+  const outliers = useQuery({
+    queryKey: ["admin", "outliers", "risk", 20],
+    queryFn: async () => (await ops.riskOutliers(20)).filter((p) => p.risk >= 0.5 || p.status !== "active"),
+    refetchInterval: 10_000,
+  });
+  const { q: org } = useDepartments();
   const restricted = useQuery({
     queryKey: ["admin", "people", "restricted-counts"],
     queryFn: async () => {
@@ -117,7 +122,7 @@ export function Security() {
     return { ...c, active: c.open + c.acknowledged } as Record<StatusFilter, number>;
   }, [s]);
   const openTotal = statusCounts?.open ?? (openBySev ? SEVERITIES.reduce((a, k) => a + (openBySev[k] ?? 0), 0) : undefined);
-  const atRisk = s ? s.by_department.reduce((a, d) => a + (d.people_at_risk ?? 0), 0) : undefined;
+  const atRisk = s ? s.by_department.reduce((a, d) => a + (d.people_at_risk ?? 0), 0) : (org.data?.totals.people_at_risk ?? undefined);
   const rules = useMemo(() => {
     const known = new Set([...(s?.by_rule.map((r) => r.rule) ?? []), ...Object.keys(RULES)]);
     return [...known].sort((a, b) => ruleLabel(a).localeCompare(ruleLabel(b)));
