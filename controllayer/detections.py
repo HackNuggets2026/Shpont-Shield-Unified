@@ -159,6 +159,34 @@ class RiskEngine:
             if not lo <= hour < hi:
                 self._fire("off_hours", pid, f"activity at {hour:02d}:00 UTC", [v.request_id])
 
+    def observe_event(self, e: dict[str, Any], policy: Policy) -> None:
+        """Events from outside the gateway (Claude Code telemetry, CloudEvents)."""
+        d = policy.detections
+        if not d.enabled or e.get("principal") in (None, "unattributed"):
+            return
+        try:
+            self._observe_event(e, d.rules, time.time())
+        except Exception:  # noqa: BLE001 - a detection bug must never fail ingest
+            log.exception("detection failed")
+
+    def _observe_event(self, e: dict[str, Any], rules: dict[str, DetectionRule], now: float) -> None:
+        pid, kind, ref = e["principal"], e.get("kind") or "", [e.get("id") or ""]
+        if "permission" in kind and "mode" in kind and e.get("severity") == "medium":
+            self._fire("permission_bypass", pid, f"switched Claude Code to {e.get('decision')!r}", ref)
+        if kind == "cc.mcp_server_connection" and e.get("tool") and "unapproved_mcp_server" in rules:
+            approved = rules["unapproved_mcp_server"].tools
+            if not any(fnmatch(e["tool"], g) for g in approved):
+                self._fire("unapproved_mcp_server", pid, f"connected to MCP server {e['tool']!r}", ref)
+        if kind == "cc.tool_decision" and e.get("decision") == "reject":
+            if self._count(pid, "rejected_edit_storm", now, rules):
+                r = rules["rejected_edit_storm"]
+                self._fire(
+                    "rejected_edit_storm",
+                    pid,
+                    f"{r.count}+ tool calls rejected in {r.window_minutes:.0f} min, latest {e.get('tool')!r}",
+                    ref,
+                )
+
     def signal(self, rule: str, principal: str, detail: str, evidence: list[str]) -> None:
         """Findings from elsewhere (resource leases)."""
         self._fire(rule, principal, detail, evidence)

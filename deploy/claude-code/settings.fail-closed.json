@@ -1,0 +1,55 @@
+{
+  "env": {
+    "CLAUDE_CODE_ENABLE_TELEMETRY": "1",
+    "OTEL_METRICS_EXPORTER": "otlp",
+    "OTEL_LOGS_EXPORTER": "otlp",
+    "OTEL_EXPORTER_OTLP_PROTOCOL": "http/json",
+    "OTEL_EXPORTER_OTLP_ENDPOINT": "http://127.0.0.1:8787",
+    "OTEL_EXPORTER_OTLP_HEADERS": "Authorization=Bearer dev-alice-key",
+    "OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE": "delta",
+    "OTEL_METRIC_EXPORT_INTERVAL": "5000",
+    "OTEL_LOGS_EXPORT_INTERVAL": "2000",
+    "OTEL_RESOURCE_ATTRIBUTES": "workflow=bugfix,task=DEMO-1",
+    "SHIELD_URL": "http://127.0.0.1:8787",
+    "SHIELD_KEY": "dev-alice-key",
+    "SHIELD_WORKFLOW": "bugfix",
+    "SHIELD_TASK": "DEMO-1"
+  },
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/shield-hook.sh",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/shield-hook.sh",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/shield-hook.sh",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

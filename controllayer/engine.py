@@ -41,6 +41,7 @@ class ControlLayer:
         self.risk = RiskEngine(self.usage, store)
         self.leases.on_signal = self.risk.signal
         self.ingestor = Ingestor(self.usage, self.ledger, store)
+        self.ingestor.listeners.append(self.risk.observe_event)
         self.leases.urns = {n: r.urn for n, r in p.catalog.items()}
         # (principal, session) -> declared workflow, so later calls in a session inherit its label.
         self.sessions: OrderedDict[tuple[str, str], str] = OrderedDict()

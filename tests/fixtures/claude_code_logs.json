@@ -1,0 +1,73 @@
+{
+  "resourceLogs": [
+    {
+      "resource": {
+        "attributes": [
+          {"key": "service.name", "value": {"stringValue": "claude-code"}},
+          {"key": "service.version", "value": {"stringValue": "2.1.0"}},
+          {"key": "workflow", "value": {"stringValue": "bugfix"}},
+          {"key": "task", "value": {"stringValue": "BUG-77"}}
+        ]
+      },
+      "scopeLogs": [
+        {
+          "scope": {"name": "com.anthropic.claude_code.events", "version": "2.1.0"},
+          "logRecords": [
+            {
+              "timeUnixNano": "1790000000000000000",
+              "body": {"stringValue": "claude_code.user_prompt"},
+              "attributes": [
+                {"key": "event.name", "value": {"stringValue": "user_prompt"}},
+                {"key": "session.id", "value": {"stringValue": "sess-1"}},
+                {"key": "user.email", "value": {"stringValue": "alice@acme.example"}},
+                {"key": "terminal.type", "value": {"stringValue": "iTerm.app"}},
+                {"key": "prompt_length", "value": {"intValue": "42"}},
+                {"key": "prompt", "value": {"stringValue": "fix the checkout bug, key AKIAIOSFODNN7EXAMPLE"}}
+              ]
+            },
+            {
+              "timeUnixNano": "1790000001000000000",
+              "body": {"stringValue": "claude_code.api_request"},
+              "attributes": [
+                {"key": "event.name", "value": {"stringValue": "api_request"}},
+                {"key": "session.id", "value": {"stringValue": "sess-1"}},
+                {"key": "user.email", "value": {"stringValue": "alice@acme.example"}},
+                {"key": "model", "value": {"stringValue": "claude-sonnet-4-5"}},
+                {"key": "cost_usd", "value": {"doubleValue": 0.0123}},
+                {"key": "duration_ms", "value": {"intValue": "2300"}},
+                {"key": "input_tokens", "value": {"intValue": "1200"}},
+                {"key": "output_tokens", "value": {"intValue": "300"}},
+                {"key": "cache_read_tokens", "value": {"intValue": "9000"}},
+                {"key": "cache_creation_tokens", "value": {"intValue": "0"}}
+              ]
+            },
+            {
+              "timeUnixNano": "1790000002000000000",
+              "body": {"stringValue": "claude_code.tool_decision"},
+              "attributes": [
+                {"key": "event.name", "value": {"stringValue": "tool_decision"}},
+                {"key": "session.id", "value": {"stringValue": "sess-1"}},
+                {"key": "user.email", "value": {"stringValue": "alice@acme.example"}},
+                {"key": "tool_name", "value": {"stringValue": "Edit"}},
+                {"key": "decision", "value": {"stringValue": "reject"}},
+                {"key": "source", "value": {"stringValue": "user_reject"}}
+              ]
+            },
+            {
+              "timeUnixNano": "1790000003000000000",
+              "body": {"stringValue": "claude_code.tool_result"},
+              "attributes": [
+                {"key": "event.name", "value": {"stringValue": "tool_result"}},
+                {"key": "session.id", "value": {"stringValue": "sess-1"}},
+                {"key": "user.email", "value": {"stringValue": "alice@acme.example"}},
+                {"key": "tool_name", "value": {"stringValue": "Bash"}},
+                {"key": "success", "value": {"stringValue": "true"}},
+                {"key": "duration_ms", "value": {"intValue": "800"}}
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -87,11 +87,13 @@ signatures:
 
 tool_access:
   mode: block
+  # MCP tool names, and Claude Code's built-in tools (Read, Edit, Bash...) for traffic from its hooks.
   roles:
-    developer: ["read_*", "search_*", "http_get", "run_tests", "*simulator*", "create_vm", "destroy_vm"]
-    analyst: ["read_*", "search_*", "send_email"]
+    developer: ["read_*", "search_*", "http_get", "run_tests", "*simulator*", "create_vm", "destroy_vm",
+                Read, Glob, Grep, Edit, MultiEdit, Write, NotebookEdit, Bash, WebFetch, WebSearch, Task, TodoWrite]
+    analyst: ["read_*", "search_*", "send_email", Read, Glob, Grep, WebSearch, TodoWrite]
     automation: ["*"]
-    intern: ["search_*", "*simulator*"]
+    intern: ["search_*", "*simulator*", Read, Glob, Grep, Edit, Write, TodoWrite]
   irreversible: ["delete_*", "drop_*", "transfer_funds"]   # sensitive tools are access grants in the catalog
 
 # --- Semantic (AI-based) controls ---------------------------------------------
@@ -168,12 +170,13 @@ menu:
       keywords: ["explain", "summari[sz]e", "rewrite", "translate"]
     pr_review:
       description: reviewing a code change or pull request
-      tools: ["read_*", "search_*", "run_tests"]
+      tools: ["read_*", "search_*", "run_tests", Read, Glob, Grep, Bash, Task, TodoWrite]   # reviews do not edit
       per_run: { tokens: 150000, usd: 1.0 }
       keywords: ["review (this|the|my) (pr|pull request|diff|change)", "code review"]
     bugfix:
       description: debugging and fixing a defect
-      tools: ["read_*", "search_*", "run_tests", "http_get", "create_vm", "destroy_vm"]
+      tools: ["read_*", "search_*", "run_tests", "http_get", "create_vm", "destroy_vm",
+              Read, Glob, Grep, Edit, MultiEdit, Write, Bash, WebFetch, Task, TodoWrite]
       resources: { vm: { max_concurrent: 1, max_minutes: 60 } }
       per_run: { usd: 3.0 }
       keywords: ["bug", "stack ?trace", "exception", "fix (the|this)"]
@@ -344,7 +347,7 @@ catalog:
     grant: { approval: workflow }    # included by workflows that list it; otherwise ask for a grant
 
 quarantine:                    # what a quarantined principal keeps
-  tools: ["read_*", "search_*"]
+  tools: ["read_*", "search_*", Read, Glob, Grep]
   budget_scale: 0.1
 
 detections:
@@ -360,6 +363,10 @@ detections:
     off_hours: { enabled: false, weight: 5, hours_utc: [6, 20], window_minutes: 240 }
     zombie_resource: { weight: 10, window_minutes: 30 }
     unlabeled_resource: { weight: 5, window_minutes: 60 }
+    # Claude Code telemetry
+    permission_bypass: { weight: 30, window_minutes: 60 }                 # --dangerously-skip-permissions
+    unapproved_mcp_server: { weight: 25, window_minutes: 60, tools: [demo, argent, github, "acme-*"] }
+    rejected_edit_storm: { weight: 15, count: 5, window_minutes: 10 }     # an agent pushing past "no"
   response:
     auto: true
     alert: 30

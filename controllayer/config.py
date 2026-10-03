@@ -428,6 +428,9 @@ DETECTION_RULES = (
     "off_hours",
     "zombie_resource",
     "unlabeled_resource",
+    "permission_bypass",
+    "unapproved_mcp_server",
+    "rejected_edit_storm",
 )
 
 
@@ -439,7 +442,7 @@ class DetectionRule(_Strict):
     factor: float = Field(3.0, gt=0)  # usage_spike / exfiltration: window tokens vs the baseline window
     min_tokens: int = 2000  # usage_spike: never fire below this many tokens per window
     min_history: int = Field(5, ge=0)  # new_client, tool_drift: events before "new" means anything
-    tools: list[str] = Field(default_factory=list)  # tool_drift: sensitive tools; empty = any
+    tools: list[str] = Field(default_factory=list)  # tool_drift: sensitive tools; unapproved_mcp_server: approved
     hours_utc: tuple[int, int] = (6, 20)  # off_hours: working hours
 
 

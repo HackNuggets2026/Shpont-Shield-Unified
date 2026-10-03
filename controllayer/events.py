@@ -43,7 +43,7 @@ def verdict_event(ctx: Context, v: Verdict, policy: Policy) -> dict[str, Any]:
     return {
         "ts": v.ts,
         "id": v.request_id + ":" + ctx.direction.value[:3],
-        "source": "mcp" if ctx.channel == "mcp" else "gateway",
+        "source": {"mcp": "mcp", "claude_code": "claude_code"}.get(ctx.channel, "gateway"),
         "kind": f"check.{ctx.direction.value}",
         "principal": ctx.principal.id,
         "team": ctx.principal.team,
