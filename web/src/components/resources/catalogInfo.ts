@@ -126,6 +126,6 @@ export function usageShort(r: CatalogItem): string {
   if (u.tokens) bits.push(`${tokens(u.tokens)} tokens`);
   if (u.minutes) bits.push(`${n(u.minutes)} min${r.class === "leasable" ? " held" : ""}`);
   if (u.requests) bits.push(`${n(u.requests)} ${r.class === "access_grant" ? "uses" : "calls"}`);
-  if (!bits.length && u.usd > 0) return r.meter === "billing_export" ? "imported monthly" : "cost only";
+  if (!bits.length && u.usd > 0) return r.meter === "billing_export" ? "imported bill" : "cost only";
   return bits.join(" · ") || "no usage";
 }
