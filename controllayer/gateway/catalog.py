@@ -32,6 +32,7 @@ from ..controls.access import authenticate
 from ..controls.resources import authorize, resolve
 from ..engine import ControlLayer
 from ..types import Context, Direction, Principal
+from ..usage import day_window
 
 DAY = 86400.0
 CLASSES = ("consumable", "leasable", "access_grant")
@@ -157,7 +158,7 @@ def register(
     @app.get("/admin/catalog")
     async def admin_catalog(days: int = 30):
         p, now = store.policy, time.time()
-        since = now - max(1, min(days, 365)) * DAY
+        since = day_window(days, now, 365)
         used = {r["resource"]: r for r in usage.breakdown(["resource"], since)}
         leases = layer.leases.snapshot(p)
         grants = all_grants(p, now)

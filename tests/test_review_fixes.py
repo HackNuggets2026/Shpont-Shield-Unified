@@ -278,7 +278,7 @@ def test_incidents_list_includes_history_beyond_the_scoring_window(make_client):
     _old_incident(make_client())
     c = make_client()  # the risk engine loads only the last 7 days
     _incident_on_carol(c)
-    rows = c.get("/admin/incidents").json()["incidents"]
+    rows = c.get("/admin/incidents", params={"sort": "newest"}).json()["incidents"]
     by = {r["id"]: r for r in rows}
     assert by["old-1"]["scored"] is False and any(r["scored"] for r in rows if r["principal"] == "carol")
     assert rows[0]["ts"] >= rows[-1]["ts"]

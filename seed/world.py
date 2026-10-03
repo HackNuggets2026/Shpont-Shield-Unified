@@ -281,17 +281,25 @@ class Seeder:
 
     # ---- governance history --------------------------------------------------------
 
+    WORKFLOW = {("carol", "secret_paste"): "chat_assist", ("judy", "zombie_resource"): "bugfix",
+                ("mallory", "new_client"): "data_analysis", ("ivan", "probing"): "chat_assist",
+                ("dan", "usage_spike"): "bugfix", ("grace", "secret_paste"): "data_analysis",
+                ("frank", "tool_drift"): "data_analysis", ("frank", "exfiltration"): "data_analysis",
+                ("frank", "usage_spike"): "data_analysis", ("frank", "probing"): "data_analysis"}  # fmt: skip
+
     def incident(self, ts: float, pid: str, rule: str, detail: str, status: str, weight: float | None = None,
                  evidence: list[str] | None = None, note: str = "") -> str:  # fmt: skip
+        wf = self.WORKFLOW.get((pid, rule))  # erin's unlabeled simulator has none, by definition
         r = self.policies.policy.detections.rules[rule]
         w = r.weight if weight is None else weight
         inc = {"id": self.id()[:12], "ts": ts, "principal": pid, "rule": rule, "severity": incident_severity(w),
-               "weight": w, "detail": detail, "evidence": evidence or [], "status": "open", "note": ""}  # fmt: skip
+               "weight": w, "detail": detail, "evidence": evidence or [], "status": "open", "note": "",
+               "workflow": wf}  # fmt: skip
         self.store.add_incident(inc)
         if status != "open":
             self.store.set_incident(inc["id"], status, note)
         self.store.add_event({"ts": ts, "id": "inc-" + inc["id"], "source": "detections", "kind": "incident",
-                              "principal": pid, "team": self.team_of(pid), "decision": rule,
+                              "principal": pid, "team": self.team_of(pid), "decision": rule, "workflow": wf,
                               "severity": inc["severity"], "request_id": (evidence or [None])[-1],
                               "detail": {"incident": inc["id"], "detail": detail, "weight": w,
                                          "evidence": evidence or []}})  # fmt: skip
@@ -533,12 +541,8 @@ def seed(
         org.governance(p, s.overlay)
         org.access(p, s.overlay)
         org.running_now()
-        named = store._q(
-            f"SELECT principal, team, SUM(usd) usd, SUM(input_tokens+output_tokens) tokens FROM usage"
-            f" WHERE metered=1 AND principal IN ({', '.join('?' * len(ORG))}) GROUP BY principal, team",
-            tuple(x.id for x in ORG),
-        )
-        org.earlier({r["principal"]: (r["team"], r["usd"] / days, int(r["tokens"] / days)) for r in named})
+        org.earlier()
+        store.rebuild_rollups()  # the bulk rows went in without them
         store.db.execute("COMMIT")
     except BaseException:
         store.db.execute("ROLLBACK")

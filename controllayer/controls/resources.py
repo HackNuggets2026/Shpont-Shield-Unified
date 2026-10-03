@@ -28,7 +28,7 @@ from ..usage import UsageStore
 from .budget import BudgetLedger
 from .workflows import availability
 
-Signal = Callable[[str, str, str, list[str]], None]  # rule, principal, detail, evidence
+Signal = Callable[..., None]  # rule, principal, detail, evidence, workflow=...
 
 
 def _any(tool: str, patterns: list[str]) -> bool:
@@ -245,7 +245,11 @@ class LeaseTracker:
         self._event("lease.start", lease, policy_urn(self.urns, name, handle), now)
         if not ctx.workflow or ctx.workflow == "unlabeled":
             self.on_signal(
-                "unlabeled_resource", ctx.principal.id, f"{name} leased outside any workflow", [ctx.request_id]
+                "unlabeled_resource",
+                ctx.principal.id,
+                f"{name} leased outside any workflow",
+                [ctx.request_id],
+                workflow=ctx.workflow,
             )
 
     def _target(self, principal: str, name: str, r: Resource, args: dict) -> dict | None:
@@ -309,7 +313,7 @@ class LeaseTracker:
                 detail = (
                     f"{lease['resource']} {lease['handle'] or lease['id']}: {', '.join(new)} ({idle / 60:.0f} min idle)"
                 )
-                self.on_signal("zombie_resource", lease["principal"], detail, [lease["id"]])
+                self.on_signal("zombie_resource", lease["principal"], detail, [lease["id"]], workflow=lease["workflow"])
             due = self.reclaim_at(lease, policy)
             if due is not None and now >= due and now - self._tried.get(lease["id"], 0.0) >= 60:
                 self._tried[lease["id"]] = now

@@ -131,12 +131,16 @@ but returns at most 200 rows: everyone restricted or at risk first, then the hig
 Small choices the contract left open, or where it could not be followed exactly.
 
 - **Windows.** `days=N` means N whole UTC days, today included (`window.since` is midnight UTC N-1 days ago);
-  `usd_prev` is the N days before that. The seeder writes the window before the seeded one as well (usage only,
-  one row per person and working day, ~8% lower spend), so `usd_prev` and `growth` have something to compare.
+  `usd_prev`/`adherence_prev` are the N days before that. This now also holds for `/admin/usage` (days != 1),
+  `/admin/adherence`, `/admin/value` and `/admin/catalog`, which used rolling `now - N days` windows before: whole
+  days are what the daily rollups answer exactly. The seeder writes the window before the seeded one too (usage
+  per person, day, workflow and source, plus check rollups; no single events), with department-specific growth
+  (finance shrank ~7%, data +14%, engineering +15%) and slightly worse adherence.
 - **`headcount`** counts people in the directory; **`active`** counts anyone with metered usage in the window
   (a principal outside the directory, e.g. `unattributed`, can be active without adding to headcount).
-- **`people_at_risk`** is people with an open or acknowledged incident, or a risk score at or above `detections.response.alert`.
-  The score alone halves every 2 h, so it would empty out during a demo.
+- **`people_at_risk`** (org, departments, teams, units, incident summary) and the overview's `at_risk` share one
+  definition: a risk score at or above `detections.response.alert`, over the risk engine's incidents (the last
+  7 days, open or acknowledged, decaying with the half-life). It moves during a demo as scores decay.
 - **`interventions`** are checks that ended in warn, redact or block; adherence is `1 - interventions/checks`.
 - **Team rows** carry `owner` (the team's manager in the directory, else the department owner) and `teams: 1`.
 - **`/admin/people`**: `status=limited` means status `active` with `budget_scale < 1`; `status=active` includes
@@ -158,3 +162,19 @@ Small choices the contract left open, or where it could not be followed exactly.
   reload (an automatic tighten or quarantine) and a newly opened incident also clear it. The activity feed,
   incident list and leases are never cached.
 - **`/admin/principals`** keeps its array shape, capped at 200. `demo/live.py` now reads `/admin/people?q=`.
+- **Incidents.** The default order is now `sort=severity` (high, medium, low; then open before acknowledged;
+  then newest); `sort=newest` gives the old order. `status` and `severity` take comma lists; `status=attention`
+  is open or acknowledged; `q` matches the person's id or name. Incidents carry `workflow` (new column; set
+  from the triggering call, event or lease). `GET /admin/incidents/summary` adds `by_rule_department`,
+  `by_workflow` and `by_severity: {window: {high, medium, low}, open: {...}}`.
+- **Requests.** The array shape stays; the total is in the `x-total-count` header, or use `envelope=1` for
+  `{total, requests}`. `status=decided` is approved or denied; `order=oldest` for a queue.
+  `POST /admin/requests/bulk {ids, decision, note}` returns `{ok, results: [{id, ok, error?}]}`.
+- **`/admin/usage?compare=1`** adds `usd_prev` per row (the same number of whole days before).
+- **Workflow `title`** (optional, in `policy.yaml`) is exposed in `/admin/menu` and `/me/summary`'s menu; a
+  workflow without one gets its id, humanized.
+- **Performance.** Four rollup tables kept in step on every write (`unit_day`, `person_day`, `event_day`,
+  `runs`; rebuilt in one pass after the seeder's bulk load, or when an older database is opened) answer the
+  aggregates; raw tables answer per-person and per-task questions through their indexes. `demo/perf.py`
+  measures every admin GET cold. The one exception to the 300 ms budget is `GET /admin/export/focus`: it is a
+  bulk CSV download (~9 MB per day of the 5k org, one row per run), not a console read.

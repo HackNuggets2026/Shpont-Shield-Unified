@@ -245,10 +245,10 @@ class OrgSeeder:
             for m in self.members:
                 if not m.active:
                     continue
-                if weekend:
-                    if self.rng.random() > 0.08:
+                if weekend:  # ~12% of a weekday: on-call, deadlines, the odd keen person
+                    if self.rng.random() > 0.35:
                         continue
-                    factor = 0.4
+                    factor = 0.45
                 else:
                     if self.rng.random() > 0.9:  # leave, sick days, meetings all day
                         continue
@@ -327,64 +327,75 @@ class OrgSeeder:
         m.days += 1
 
     def claude_code(self, m: Member, day0: float, factor: float, common: dict) -> None:
+        """Claude Code sessions, each labelled with a workflow; the day's telemetry rolled up per workflow."""
         rng = self.rng
         sessions = poisson(rng, 2.6 * factor)
         if not sessions:
             return
         daily = m.cc_month / 21 * math.exp(rng.gauss(0, 0.35)) * factor
-        wfs = ("bugfix", "pr_review") if m.dept.code in ("ENG", "PLS") else ("data_analysis", "bugfix")
+        if m.dept.code in ("ENG", "PLS"):
+            wfs = {"bugfix": 5, "pr_review": 4, "ui_qa": 2 if m.team in m.dept.lease_teams else 0.3}
+        else:
+            wfs = {"data_analysis": 6, "bugfix": 2, "pr_review": 1}
         who = {**common, "source": "claude_code", "client": "claude-code/2.1.288 (vscode)"}
-        req = toks = acc = rej = added = removed = commits = prs = 0
-        usd_day, t_last = 0.0, 0.0
+        per: dict[str, dict[str, Any]] = {}
         for _ in range(sessions):
             t = self.when(m, day0)
             if t >= self.now:
                 continue
             usd = daily / sessions * rng.uniform(0.6, 1.4)
-            wf = rng.choice(wfs)
+            wf = pick(rng, wfs)
             n = max(1, int(usd / 0.3))
             inp, out = int(usd * 0.4 / 3e-6), int(usd * 0.3 / 15e-6)  # the rest is cache reads
             task = f"{PREFIX[wf]}-{rng.randint(100, 9999)}"
             self.usage.append({"ts": t, **who, "workflow": wf, "task": task, "session": self.id(),
                                "resource": "claude_code", "model": "claude-sonnet-4-5", "requests": n,
                                "input_tokens": inp, "output_tokens": out, "usd": usd, "unit": "token"})  # fmt: skip
-            req, toks, usd_day, t_last = req + n, toks + inp + out, usd_day + usd, max(t_last, t)
+            a = per.setdefault(wf, dict.fromkeys(("req", "toks", "usd", "t", "acc", "rej", "added", "removed",
+                                                  "commits", "prs", "sessions"), 0))  # fmt: skip
             tools = int(n * rng.uniform(0.4, 0.8))
             r = sum(1 for _ in range(tools) if rng.random() < 0.035)
-            acc, rej = acc + tools - r, rej + r
-            a = rng.randint(10, 380)
-            added, removed = added + a, removed + rng.randint(0, a)
-            commits += rng.randint(1, 3) if rng.random() < 0.5 else 0
-            prs += 1 if rng.random() < 0.15 else 0
-        if not req:
-            return
-        m.usd_cc += usd_day
-        m.tok_cc += toks
-        e = {**who, "ts": t_last + 120}
-        self.events.append({**e, "kind": "cc.api_request", "model": "claude-sonnet-4-5", "decision": "ok",
-                            "usd": usd_day, "tokens": toks, "n": req})  # fmt: skip
-        if acc:
-            self.events.append({**e, "kind": "cc.tool_decision", "decision": "accept", "severity": "info", "n": acc})
-        if rej == 1:
-            self.events.append({**e, "kind": "cc.tool_decision", "tool": rng.choice(["Bash", "Edit", "Write"]),
-                                "decision": "reject", "severity": "low"})  # fmt: skip
-        elif rej:
-            self.events.append({**e, "kind": "cc.tool_decision", "decision": "reject", "severity": "low", "n": rej})
-        self.events.append({**e, "kind": "metric.lines_of_code", "decision": "added", "detail": {"value": added},
-                            "n": sessions})  # fmt: skip
-        self.events.append({**e, "kind": "metric.lines_of_code", "decision": "removed", "detail": {"value": removed},
-                            "n": sessions})  # fmt: skip
-        self.events.append({**e, "kind": "metric.session", "detail": {"value": sessions}, "n": sessions})
-        if commits:
-            self.events.append({**e, "kind": "metric.commit", "detail": {"value": commits}, "n": max(2, commits)})
-        if prs:
-            self.events.append({**e, "kind": "metric.pull_request", "detail": {"value": prs}, "n": max(2, prs)})
+            added = rng.randint(10, 380)
+            a["req"] += n
+            a["toks"] += inp + out
+            a["usd"] += usd
+            a["t"] = max(a["t"], t)
+            a["acc"] += tools - r
+            a["rej"] += r
+            a["added"] += added
+            a["removed"] += rng.randint(0, added)
+            a["commits"] += rng.randint(1, 3) if rng.random() < 0.5 else 0
+            a["prs"] += 1 if rng.random() < 0.15 else 0
+            a["sessions"] += 1
+        for wf, a in per.items():
+            m.usd_cc += a["usd"]
+            m.tok_cc += a["toks"]
+            e = {**who, "ts": a["t"] + 120, "workflow": wf}
+            self.events.append({**e, "kind": "cc.api_request", "model": "claude-sonnet-4-5", "decision": "ok",
+                                "usd": a["usd"], "tokens": a["toks"], "n": a["req"]})  # fmt: skip
+            if a["acc"]:
+                self.events.append({**e, "kind": "cc.tool_decision", "decision": "accept", "severity": "info",
+                                    "n": a["acc"]})  # fmt: skip
+            if a["rej"] == 1:
+                self.events.append({**e, "kind": "cc.tool_decision", "tool": rng.choice(["Bash", "Edit", "Write"]),
+                                    "decision": "reject", "severity": "low"})  # fmt: skip
+            elif a["rej"]:
+                self.events.append({**e, "kind": "cc.tool_decision", "decision": "reject", "severity": "low",
+                                    "n": a["rej"]})  # fmt: skip
+            n = max(2, a["sessions"])  # rollups: n > 1, so they stay out of the activity feed
+            for kind, decision, v in (("metric.lines_of_code", "added", a["added"]),
+                                      ("metric.lines_of_code", "removed", a["removed"]),
+                                      ("metric.session", None, a["sessions"]), ("metric.commit", None, a["commits"]),
+                                      ("metric.pull_request", None, a["prs"])):  # fmt: skip
+                if v:
+                    self.events.append({**e, "kind": kind, "decision": decision, "detail": {"value": v}, "n": n})
 
     def lease(self, m: Member, wf: str, task: str, t: float) -> None:
         rng = self.rng
         resource, tool, prefix, price = (
             ("simulator", "boot_simulator", "sim", 0.01) if wf == "ui_qa" else ("vm", "create_vm", "vm", 0.05)
         )
+        stop = "shutdown_simulator" if resource == "simulator" else "destroy_vm"
         minutes = (
             rng.uniform(8, 35) if wf == "ui_qa" else rng.uniform(60, 120) if wf == "load_test" else rng.uniform(10, 55)
         )
@@ -400,7 +411,7 @@ class OrgSeeder:
         self.leases.append({"id": lid, "resource": resource, "handle": f"{prefix}-{rng.getrandbits(24):06x}",
                             "server": "demo", "principal": m.id, "team": m.team, "workflow": wf, "task": task,
                             "tool": tool, "started": t, "last_activity": end - (minutes - 6) * 60 if zombie else end,
-                            "ended": end, "end_reason": "reclaimed: idle" if zombie else f"stopped by {tool}",
+                            "ended": end, "end_reason": "reclaimed: idle" if zombie else f"stopped by {stop}",
                             "usd": usd, "flags": '["idle"]' if zombie else "[]",
                             "flagged_at": t + (6 + idle) * 60 if zombie else None})  # fmt: skip
         self.usage.append({"ts": end, "principal": m.id, "team": m.team, "department": m.dept.name, "workflow": wf,
@@ -431,33 +442,61 @@ class OrgSeeder:
                                 "usd": usd, "severity": "info",
                                 "detail": {"ServiceName": "Amazon EC2", "SubAccountName": team}})  # fmt: skip
 
-    def earlier(self, named_daily: dict[str, tuple[str, float, int]]) -> None:
-        """The window before the seeded one, as one usage row per person and working day (no events): what
-        `usd_prev` and growth compare against. Spend was ~8% lower then."""
+    GROWTH = {"ENG": 0.87, "PLS": 0.93, "DAT": 0.88, "FIN": 1.07, "OPS": 0.95, "SAL": 0.9}  # earlier / now
+
+    def earlier(self) -> None:
+        """The window before the seeded one, so `usd_prev`, `adherence_prev` and growth have something to compare:
+        per person and day, their usage per workflow and source (one row each, the main resource and model) and
+        their checks as rollups. Spend grew by department (finance shrank a little); adherence improved."""
+        rng = self.rng
         today0 = math.floor(self.now / DAY) * DAY
         start = today0 - (self.days - 1) * DAY
-        people = [(m.id, m.team, m.dept.name, m.usd_gw / m.days, m.tok_gw // m.days, m.usd_cc / m.days,
-                   m.tok_cc // m.days) for m in self.members if m.days]  # fmt: skip
-        people += [(pid, team, self.store.department_of(pid, team), usd, tok, 0.0, 0)
-                   for pid, (team, usd, tok) in named_daily.items()]  # fmt: skip
+        members = {m.id: m for m in self.members}
+        mix: dict[str, list[dict[str, Any]]] = {}
+        for r in self.store._q(
+            "SELECT principal, team, department, workflow, source, MAX(resource) resource, MAX(model) model,"
+            " MAX(unit) unit, SUM(usd) usd, SUM(input_tokens) i, SUM(output_tokens) o, SUM(requests) requests,"
+            " SUM(quantity) quantity FROM usage WHERE metered=1 GROUP BY principal, team, department, workflow, source"
+        ):
+            mix.setdefault(r["principal"], []).append(r)
+        checks = {r["principal"]: r for r in self.store._q(
+            "SELECT principal, MAX(workflow) workflow, SUM(COALESCE(n, 1)) n,"
+            " SUM(CASE WHEN decision IN ('warn', 'redact', 'block') THEN 1 ELSE 0 END) iv"
+            " FROM events WHERE kind LIKE 'check.%' GROUP BY principal")}  # fmt: skip
+        present = {pid: max(1, (members[pid].days if pid in members else self.days * 0.75)) for pid in mix}
         for d in range(1, self.days + 1):
             day0 = start - d * DAY
-            if time.gmtime(day0).tm_wday >= 5:
-                continue
-            for pid, team, dept, usd, tok, cc_usd, cc_tok in people:
-                if self.rng.random() > 0.9:
+            weekend = time.gmtime(day0).tm_wday >= 5
+            for pid, rows in mix.items():
+                if rng.random() > (0.35 if weekend else 0.9):
                     continue
-                f = 0.92 * math.exp(self.rng.gauss(0, 0.3))
-                t = day0 + 12 * 3600
-                who = {"ts": t, "principal": pid, "team": team, "department": dept, "unit": "token"}
-                if usd:
-                    self.usage.append({**who, "workflow": "chat_assist", "resource": "gpt-4o", "model": "gpt-4o",
-                                       "requests": 3, "input_tokens": int(tok * f), "usd": usd * f})  # fmt: skip
-                if cc_usd:
-                    self.usage.append({**who, "workflow": "bugfix", "resource": "claude_code", "requests": 20,
-                                       "model": "claude-sonnet-4-5", "input_tokens": int(cc_tok * f),
-                                       "usd": cc_usd * f, "source": "claude_code"})  # fmt: skip
-            if len(self.usage) > 50_000:
+                m = members.get(pid)
+                code = m.dept.code if m else "ENG"
+                f = self.GROWTH.get(code, 0.9) * math.exp(rng.gauss(0, 0.25)) * (0.45 if weekend else 1.0)
+                t = self.when(m, day0) if m else day0 + 13 * 3600
+                for r in rows:
+                    share = f / present[pid]
+                    self.usage.append({"ts": t, "principal": pid, "team": r["team"], "department": r["department"],
+                                       "workflow": r["workflow"], "resource": r["resource"], "model": r["model"],
+                                       "source": r["source"], "unit": r["unit"] or "token",
+                                       "requests": round((r["requests"] or 0) * share),
+                                       "input_tokens": int((r["i"] or 0) * share),
+                                       "output_tokens": int((r["o"] or 0) * share),
+                                       "quantity": (r["quantity"] or 0) * share,
+                                       "usd": (r["usd"] or 0) * share})  # fmt: skip
+                c = checks.get(pid)
+                if not c or not c["n"]:
+                    continue
+                n = max(1, round(c["n"] / present[pid] * f))
+                iv = poisson(rng, c["iv"] / present[pid] * f * 1.25)
+                who = {"ts": t + 600, "principal": pid, "team": rows[0]["team"], "source": "gateway",
+                       "client": "acme-agent/1.4", "kind": "check.input", "workflow": c["workflow"]}  # fmt: skip
+                self.events.append({**who, "decision": "allow", "severity": "info", "n": max(2, n - iv)})
+                if iv:
+                    decision, sev, finding = FINDINGS[pick(rng, m.dept.findings) if m else "email"]
+                    self.events.append({**who, "decision": decision, "severity": sev, "n": max(2, iv),
+                                        "detail": {"findings": [finding]}})  # fmt: skip
+            if len(self.usage) > 50_000 or len(self.events) > 50_000:
                 self.flush()
         self.flush()
 
@@ -487,13 +526,32 @@ class OrgSeeder:
         pool = [m for m in self.members if m.active and (not depts or m.dept.code in depts) and (m.cc_month or not cc)]
         return self.rng.sample(pool, min(n, len(pool)))
 
+    def incident_workflow(self, rule: str, m: Member) -> str | None:
+        """The workflow an incident of this rule would come from, given what the person does."""
+        rng, code = self.rng, m.dept.code
+        dev = code in ("ENG", "PLS")
+        if rule == "unlabeled_resource":
+            return None  # leased outside any workflow, by definition
+        if rule == "zombie_resource":
+            return rng.choice([w for w in ("ui_qa", "bugfix", "load_test") if w in m.workflows] or ["bugfix"])
+        if rule in ("rejected_edit_storm", "unapproved_mcp_server", "permission_bypass"):
+            return pick(rng, {"bugfix": 3, "pr_review": 2}) if dev else "data_analysis"
+        if rule in ("secret_paste", "usage_spike"):
+            return pick(rng, {"bugfix": 3, "pr_review": 1, "chat_assist": 1}) if dev else pick(rng, m.workflows)
+        if rule == "tool_drift":
+            return "data_analysis" if "data_analysis" in m.workflows else "chat_assist"
+        if rule in ("probing", "exfiltration"):
+            return "chat_assist"
+        return pick(rng, {w: r for w, r in m.workflows.items() if w != "unlabeled"} or {"chat_assist": 1})
+
     def incident(self, ts: float, m: Member, rule: str, detail: str, status: str, policy, by: str = "dana",
                  weight: float | None = None, note: str = "", evidence: list[str] | None = None) -> str:  # fmt: skip
         r = policy.detections.rules[rule]
         w = r.weight if weight is None else weight
         iid = self.id()[:12]
         inc = {"id": iid, "ts": ts, "principal": m.id, "rule": rule, "severity": incident_severity(w), "weight": w,
-               "detail": detail, "evidence": evidence or [], "status": "open", "note": ""}  # fmt: skip
+               "detail": detail, "evidence": evidence or [], "status": "open", "note": "",
+               "workflow": self.incident_workflow(rule, m)}  # fmt: skip
         self.store.add_incident(inc)
         if status != "open":
             self.store.set_incident(iid, status, note)
@@ -501,6 +559,7 @@ class OrgSeeder:
             self.store.log_admin(by, f"incident_{status}", iid, note, ts=ts + 5400)
         self.events.append({"ts": ts, "id": "inc-" + iid, "source": "detections", "kind": "incident",
                             "principal": m.id, "team": m.team, "decision": rule, "severity": inc["severity"],
+                            "workflow": inc["workflow"],
                             "request_id": (evidence or [None])[-1],
                             "detail": {"incident": iid, "detail": detail, "weight": w,
                                        "evidence": evidence or []}})  # fmt: skip
@@ -652,7 +711,7 @@ class OrgSeeder:
             if not pending:
                 status = "approved" if rng.random() < 0.78 else "denied"
                 by = rng.choice(("dana", "sam"))
-                self.store.decide_request(rid, status, by, "", ts=ts + rng.uniform(600, 2 * DAY))
+                self.store.decide_request(rid, status, by, "", ts=min(ts + rng.uniform(600, 2 * DAY), now - 60))
                 self.store.log_admin(by, "approve_request" if status == "approved" else "deny_request", m.id,
                                      f"request {rid}: {reason}", ts=ts + 3600)  # fmt: skip
         self.flush()

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import calendar
 import hmac
+import json
 import math
 import time
 from collections.abc import Awaitable, Callable
@@ -29,6 +30,7 @@ from ..controls.budget import Usage
 from ..detections import LEVELS
 from ..engine import ControlLayer
 from ..types import Context, Direction, Principal
+from ..usage import day_window
 from . import catalog as catalog_api
 from . import org as org_api
 
@@ -124,6 +126,7 @@ def register(
             rows.append(
                 {
                     "name": name,
+                    "title": wf.title or name.replace("_", " ").capitalize(),
                     "description": wf.description,
                     "tier": wf.tier,
                     "enabled": wf.enabled,
@@ -231,10 +234,19 @@ def register(
         principal: str | None = None,
         department: str | None = None,
         team: str | None = None,
+        compare: bool = False,
     ):
+        """Usage grouped by any of GROUPS over whole UTC days; `compare=1` adds `usd_prev` (the window before)."""
         try:
-            since = _day_start(time.time()) if days == 1 else time.time() - days * DAY
-            return usage.breakdown(by.split(","), since, principal, department=department, team=team)
+            since = day_window(days)
+            cols = by.split(",")
+            rows = usage.breakdown(cols, since, principal, department=department, team=team)
+            if compare:
+                span = _day_start(time.time()) + DAY - since
+                before = usage.breakdown(cols, since - span, principal, until=since, department=department, team=team)
+                prev = {tuple(r[c] for c in cols if c in r): r["usd"] or 0.0 for r in before}
+                rows = [{**r, "usd_prev": round(prev.get(tuple(r[c] for c in cols if c in r), 0.0), 6)} for r in rows]
+            return rows
         except ValueError as e:
             return err(str(e))
 
@@ -325,7 +337,13 @@ def register(
     # ---- admin: leases ---------------------------------------------------------------
 
     @app.get("/admin/leases")
-    async def admin_leases(limit: int = 100, department: str | None = None, resource: str | None = None):
+    async def admin_leases(
+        limit: int = 100,
+        offset: int = 0,
+        department: str | None = None,
+        resource: str | None = None,
+        zombies: bool = False,
+    ):
         """Open leases (filtered, newest `limit`), the 50 latest closed ones, and a summary of everything open
         by resource and department."""
         p = store.policy
@@ -342,10 +360,11 @@ def register(
             return sorted(out.values(), key=lambda o: (-o["open"], o[key]))
 
         shown = [x for x in leases if (not department or x["department"] == department)
-                 and (not resource or x["resource"] == resource)]  # fmt: skip
+                 and (not resource or x["resource"] == resource) and (not zombies or x["flags"])]  # fmt: skip
         shown.sort(key=lambda x: -x["started"])
+        offset = max(0, offset)
         return {
-            "open": shown[: max(1, min(limit, 1000))],
+            "open": shown[offset : offset + max(1, min(limit, 1000))],
             "open_total": len(shown),
             "recent": closed,
             "summary": {"by_resource": summary("resource"), "by_department": summary("department")},
@@ -385,21 +404,39 @@ def register(
         days: float | None = None,
         since: float | None = None,
         department: str | None = None,
+        team: str | None = None,
         rule: str | None = None,
         principal: str | None = None,
+        workflow: str | None = None,
+        severity: str | None = None,
+        q: str = "",
+        sort: str = "severity",
     ):
-        """Newest first, from the store: older incidents than the risk engine's 7-day window come back with
-        `scored: false` (they no longer count toward a risk score)."""
+        """From the store; older incidents than the risk engine's 7-day window come back with `scored: false`
+        (they no longer count toward a risk score). `status` and `severity` take a comma list, and
+        `status=attention` means open or acknowledged. `sort=severity` (the default): high first, then open
+        before acknowledged, then newest; `sort=newest`: newest first."""
         p = store.policy
         start = since if since is not None else (time.time() - days * DAY if days else 0.0)
+        states = {"open", "acknowledged"} if status == "attention" else set((status or "").split(",")) - {""}
+        sevs = set((severity or "").split(",")) - {""}
+        needle = q.strip().lower()
         rows = [
             i
             for i in all_incidents(start)
-            if (not status or i["status"] == status)
+            if (not states or i["status"] in states)
+            and (not sevs or i["severity"] in sevs)
             and (not department or i["department"] == department)
+            and (not team or i["team"] == team)
             and (not rule or i["rule"] == rule)
             and (not principal or i["principal"] == principal)
+            and (not workflow or i.get("workflow") == workflow)
+            and (not needle or needle in i["principal"].lower() or needle in (i["name"] or "").lower())
         ]
+        if sort == "severity":
+            sev_rank = {"high": 0, "medium": 1, "low": 2}
+            st_rank = {"open": 0, "acknowledged": 1}
+            rows.sort(key=lambda i: (sev_rank.get(i["severity"], 3), st_rank.get(i["status"], 2), -i["ts"]))
         limit, offset = max(1, min(limit, 5000)), max(0, offset)
         return {"incidents": rows[offset : offset + limit], "total": len(rows), "scores": layer.risk.scores(p),
                 "levels": LEVELS}  # fmt: skip
@@ -418,6 +455,27 @@ def register(
             o = by_rule.setdefault(i["rule"], {"rule": i["rule"], **dict.fromkeys(states, 0), "total": 0})
             o[i["status"]] = o.get(i["status"], 0) + 1
             o["total"] += 1
+        by_rule_dept: dict[tuple[str, str], dict[str, Any]] = {}
+        by_wf: dict[str, dict[str, Any]] = {}
+        by_sev = {
+            "window": dict.fromkeys(("high", "medium", "low"), 0),
+            "open": dict.fromkeys(("high", "medium", "low"), 0),
+        }
+        for i in rows:
+            if i["ts"] >= start or i["status"] == "open":
+                o = by_rule_dept.setdefault((i["rule"], i["department"]), {"rule": i["rule"],
+                                            "department": i["department"], "open": 0, "total": 0})  # fmt: skip
+                o["open"] += 1 if i["status"] == "open" else 0
+                o["total"] += 1 if i["ts"] >= start else 0
+            if i["ts"] >= start or i["status"] == "open":
+                w = by_wf.setdefault(i.get("workflow") or "(none)", {"workflow": i.get("workflow") or "(none)",
+                                                                      "open": 0, "total": 0})  # fmt: skip
+                w["open"] += 1 if i["status"] == "open" else 0
+                w["total"] += 1 if i["ts"] >= start else 0
+            if i["ts"] >= start:
+                by_sev["window"][i["severity"]] = by_sev["window"].get(i["severity"], 0) + 1
+            if i["status"] == "open":
+                by_sev["open"][i["severity"]] = by_sev["open"].get(i["severity"], 0) + 1
         _, _, at_risk = view.risk(p)
         by_dept: dict[str, dict[str, Any]] = {}
         for d in p.org.departments:
@@ -448,6 +506,9 @@ def register(
         return {
             "by_rule": sorted(by_rule.values(), key=lambda o: (-o["total"], o["rule"])),
             "by_department": sorted(by_dept.values(), key=lambda o: (-o["open"], -o["total"], o["department"])),
+            "by_rule_department": sorted(by_rule_dept.values(), key=lambda o: (-o["open"], -o["total"], o["rule"])),
+            "by_severity": by_sev,
+            "by_workflow": sorted(by_wf.values(), key=lambda o: (-o["open"], -o["total"], o["workflow"])),
             "trend": {"days": labels, "opened": opened, "closed": closed},
             "auto_actions_24h": auto,
         }
@@ -491,27 +552,49 @@ def register(
         kind: str | None = None,
         limit: int = 200,
         offset: int = 0,
+        order: str = "newest",
+        envelope: bool = False,
     ):
-        """Newest first; each row with the person's department, team and name."""
-        rows = usage.requests(
-            status=status or None,
-            kind=kind or None,
-            principals=usage.in_department(department) if department else None,
-            limit=max(1, min(limit, 1000)),
-            offset=max(0, offset),
-        )
-        return [{**r, **who_fields(r["principal"])} for r in rows]
+        """Newest first (`order=oldest` for a queue); each row with the person's department, team and name.
+        `status=decided` is approved or denied. The total is in `x-total-count`, and with `envelope=1` the
+        response is {total, requests}."""
+        flt = {"status": status or None, "kind": kind or None,
+               "principals": usage.in_department(department) if department else None}  # fmt: skip
+        rows = usage.requests(**flt, limit=max(1, min(limit, 1000)), offset=max(0, offset),
+                              oldest_first=order == "oldest")  # fmt: skip
+        rows = [{**r, **who_fields(r["principal"])} for r in rows]
+        total = usage.count_requests(**flt)
+        if envelope:
+            return {"total": total, "requests": rows}
+        return JSONResponse(rows, headers={"x-total-count": str(total)})
+
+    @app.post("/admin/requests/bulk")
+    async def admin_requests_bulk(request: Request):
+        """Decide many pending requests at once: {ids, decision, note} -> {ok, results: [{id, ok, error?}]}."""
+        body = await json_object(request)
+        ids = body.get("ids")
+        if not isinstance(ids, list) or not ids or not all(isinstance(i, str) for i in ids) or len(ids) > 500:
+            return err("ids must be a list of 1-500 request ids")
+        results = []
+        for rid in dict.fromkeys(ids):
+            out = decide_request(rid, body.get("decision"), str(body.get("note", "")), request)
+            if isinstance(out, JSONResponse):
+                results.append({"id": rid, "ok": False, "error": json.loads(bytes(out.body))["error"]})
+            else:
+                results.append({"id": rid, "ok": True})
+        return {"ok": all(r["ok"] for r in results), "results": results}
 
     @app.post("/admin/requests/{rid}")
     async def admin_request_decide(rid: str, request: Request):
         body = await json_object(request)
-        decision = body.get("decision")
+        return decide_request(rid, body.get("decision"), str(body.get("note", "")), request)
+
+    def decide_request(rid: str, decision: Any, note: str, request: Request) -> dict | JSONResponse:
         if decision not in ("approve", "deny"):
             return err("decision must be approve or deny")
-        pending = [r for r in usage.requests(status="pending", limit=1_000_000) if r["id"] == rid]
-        if not pending:
+        req = usage.request(rid)
+        if req is None or req["status"] != "pending":
             return err("no such pending request", 404)
-        req, note = pending[0], str(body.get("note", ""))
         if decision == "approve":
             pp = store.policy.principal(req["principal"])
             if req["kind"] == "grant":
@@ -615,7 +698,7 @@ def register(
         team: str | None = None,
     ):
         """Share of policy checks that needed no intervention (allow or log), per team, workflow, source..."""
-        since = time.time() - max(1, min(days, 400)) * DAY
+        since = day_window(days)
         unit = {"principal": principal or None, "department": department or None, "team": team or None}
         try:
             rows = usage.adherence(by or None, since, **unit)
@@ -656,7 +739,8 @@ def register(
             "timeline": timeline,
             "principal": {
                 "id": pid,
-                "team": ident.team if ident else None,
+                **who_fields(pid),
+                "team": ident.team if ident else who_fields(pid)["team"],
                 "risk": score,
                 "level": layer.risk.level(score, p),
                 "status": p.principal(pid).status,
@@ -670,15 +754,25 @@ def register(
         """Everything about one person except the content of their events (that needs a stated reason)."""
         p, now = store.policy, time.time()
         known = principals_known(p)
+        person = usage.person(pid)
         if pid not in known:
-            rows = usage.breakdown(["principal", "team"], now - 90 * DAY, pid)
-            if not rows:
-                return err("no such person", 404)
-            known[pid] = Principal(pid, rows[0]["team"], "?")
+            if person:
+                known[pid] = Principal(pid, person["team"], person.get("role") or "?")
+            else:
+                rows = usage.breakdown(["principal", "team"], now - 90 * DAY, pid)
+                if not rows:
+                    return err("no such person", 404)
+                known[pid] = Principal(pid, rows[0]["team"], "?")
         since = now - max(1, min(days, 120)) * DAY
+        ident = p.identity_of(pid)
         return {
             **principal_row(p, known[pid]),
-            "email": ident.email if (ident := p.identity_of(pid)) else None,
+            **who_fields(pid),
+            "team": known[pid].team,
+            "email": (ident.email if ident else None) or (person or {}).get("email"),
+            "title": (person or {}).get("title"),
+            "location": (person or {}).get("location"),
+            "cost_center": (person or {}).get("cost_center"),
             "spend": timeseries("usd", "workflow", days, pid),
             "by_workflow": usage.breakdown(["workflow"], since, pid),
             "by_resource": usage.breakdown(["resource"], since, pid),
@@ -692,7 +786,7 @@ def register(
         }
 
     def value(by: str, days: float, principal: str | None, department: str | None = None, team: str | None = None):
-        since = time.time() - max(1, min(days, 400)) * DAY
+        since = day_window(days)
         try:
             rows = usage.value(by, since, principal, department=department, team=team)
         except ValueError as e:

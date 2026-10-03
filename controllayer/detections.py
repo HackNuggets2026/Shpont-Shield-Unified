@@ -55,6 +55,7 @@ class RiskEngine:
         self._events: dict[str, int] = defaultdict(int)
         self._tool_calls: dict[str, int] = defaultdict(int)
         self.listeners: list[Any] = []  # callables(incident), e.g. to drop cached admin aggregates
+        self._workflow: str | None = None  # of the call or event being observed: the incident's workflow
 
     # ---- scoring -----------------------------------------------------------------
 
@@ -99,10 +100,13 @@ class RiskEngine:
         if not d.enabled or ctx.channel == "dashboard" or not ctx.principal.authenticated:
             return
         pid, now, rules = ctx.principal.id, time.time(), d.rules
+        self._workflow = ctx.workflow
         try:
             self._observe(ctx, v, policy, pid, now, rules)
         except Exception:  # noqa: BLE001 - a detection bug must never fail the request it watches
             log.exception("detection failed")
+        finally:
+            self._workflow = None
         self._events[pid] += 1
 
     def _observe(self, ctx: Context, v: Verdict, policy: Policy, pid: str, now: float, rules) -> None:
@@ -165,10 +169,13 @@ class RiskEngine:
         d = policy.detections
         if not d.enabled or e.get("principal") in (None, "unattributed"):
             return
+        self._workflow = e.get("workflow")
         try:
             self._observe_event(e, d.rules, time.time())
         except Exception:  # noqa: BLE001 - a detection bug must never fail ingest
             log.exception("detection failed")
+        finally:
+            self._workflow = None
 
     def _observe_event(self, e: dict[str, Any], rules: dict[str, DetectionRule], now: float) -> None:
         pid, kind, ref = e["principal"], e.get("kind") or "", [e.get("id") or ""]
@@ -188,9 +195,13 @@ class RiskEngine:
                     ref,
                 )
 
-    def signal(self, rule: str, principal: str, detail: str, evidence: list[str]) -> None:
+    def signal(self, rule: str, principal: str, detail: str, evidence: list[str], workflow: str | None = None) -> None:
         """Findings from elsewhere (resource leases)."""
-        self._fire(rule, principal, detail, evidence)
+        self._workflow = workflow
+        try:
+            self._fire(rule, principal, detail, evidence)
+        finally:
+            self._workflow = None
 
     # ---- helpers -------------------------------------------------------------------
 
@@ -246,6 +257,7 @@ class RiskEngine:
             "evidence": evidence,
             "status": "open",
             "note": "",
+            "workflow": self._workflow,
         }
         self.store.add_incident(inc)
         self.incidents.append(inc)
@@ -258,6 +270,7 @@ class RiskEngine:
                 "source": "detections",
                 "kind": "incident",
                 "principal": pid,
+                "workflow": self._workflow,
                 "decision": rule,
                 "severity": inc["severity"],
                 "request_id": evidence[-1] if evidence else None,
