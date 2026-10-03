@@ -13,6 +13,8 @@ Every interaction becomes a `Context`: principal, direction, text, model or tool
 | Semantic tier 2 | `nimble` re-answers only the questions tier 1 put in `escalate_band` or below `min_confidence` | model | - |
 | Decide | strongest action wins; redact spans or withhold the whole text; audit event | µs | - |
 
+Structured payloads (tool arguments, tool results, non-text message fields) are flattened to raw text for inspection, with JSON-in-strings decoded. Redaction is applied to every key and string in place and then re-checked. If anything is still detected (a card number stored as an integer, a secret split across fields), the payload is refused, never forwarded.
+
 The directions are `input`, `output`, `tool_call`, `tool_result` and `tool_description`. Each control declares which directions it inspects. The chat proxy checks every message in the request on the way in, because the client owns the history and can forge it; repeats are served from a verdict cache. It checks the completion on the way out. The MCP proxy checks arguments, every result and the tool list itself, including names and schema strings, so a poisoned tool is removed before the agent ever sees it.
 
 ## Why decision models

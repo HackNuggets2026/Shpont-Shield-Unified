@@ -22,7 +22,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, Res
 from ..config import PolicyStore
 from ..controls.access import authenticate
 from ..decision import DecisionBackend
-from ..engine import ControlLayer
+from ..engine import ControlLayer, flatten
 from ..types import Action, Context, Direction, Verdict
 from . import mcp_demo
 from .upstream import UpstreamClient
@@ -59,6 +59,21 @@ def _verdict_json(v: Verdict) -> dict[str, Any]:
             for f in v.findings
         ],
     }
+
+
+def _refused(v: Verdict) -> JSONResponse:
+    """A redaction that could not be applied precisely: refuse rather than forward the original."""
+    return JSONResponse(
+        {
+            "error": {
+                "type": "policy_violation",
+                "message": f"cannot redact safely: {v.reason}",
+                "request_id": v.request_id,
+            }
+        },
+        status_code=403,
+        headers={"x-control-request-id": v.request_id, "x-control-action": "block"},
+    )
 
 
 def _policy_error(v: Verdict) -> JSONResponse:
@@ -136,8 +151,8 @@ def create_app(
             raise BadRequest("model must be a string")
         messages = [dict(m) for m in messages]
 
-        # The client owns the history and can forge any of it, so every message (all roles, plus
-        # tool-call arguments) is inspected on every call. Repeats hit the engine's verdict cache;
+        # The client owns the history and can forge any of it, so every message, every field of it,
+        # and the declared tools are inspected on every call. Repeats hit the engine's verdict cache;
         # only the newest message is charged to budgets.
         warnings: list[str] = []
         metered_ctx: Context | None = None
@@ -145,34 +160,47 @@ def create_app(
         for i, m in enumerate(messages):
             direction = Direction.TOOL_RESULT if m.get("role") == "tool" else Direction.INPUT
             metered = i == last and direction is Direction.INPUT
-            ctx = Context(principal, direction, _text(m.get("content")), model=model, channel="chat", metered=metered)
+            content = m.get("content")
+            ctx = Context(principal, direction, _text(content), model=model, channel="chat", metered=metered)
             v = await layer.evaluate(ctx)
             if v.blocked:
                 return _policy_error(v)
-            if v.text != _text(m.get("content")):
+            if v.text != _text(content):
                 m["content"] = v.text
             if v.action is Action.WARN:
                 warnings.append(v.reason)
             if metered:
                 metered_ctx = ctx
-            for call in m.get("tool_calls") or []:
-                fn = call.get("function") if isinstance(call, dict) else None
-                if not isinstance(fn, dict):
-                    continue
-                args = fn.get("arguments")
-                actx = Context(
-                    principal,
-                    Direction.INPUT,
-                    args if isinstance(args, str) else json.dumps(args),
-                    model=model,
-                    channel="chat",
-                    metered=False,
+            # Everything else in the message: tool_calls, function_call, name, refusal, image URLs.
+            rest = {k: val for k, val in m.items() if k not in ("role", "content")}
+            parts = (
+                [p for p in content if not (isinstance(p, dict) and p.get("type") == "text")]
+                if isinstance(content, list)
+                else []
+            )
+            if rest or parts:
+                rctx = Context(principal, direction, flatten([rest, parts]), model=model, channel="chat", metered=False)
+                rv = await layer.evaluate(rctx)
+                if rv.blocked:
+                    return _policy_error(rv)
+                if rv.action is Action.REDACT:
+                    cleaned = (
+                        layer.redact_tree(rest, principal, direction) if layer.spans_only(rv) and not parts else None
+                    )
+                    if cleaned is None:
+                        return _refused(rv)
+                    m.update(cleaned)
+        tools = body.get("tools") or []
+        if not isinstance(tools, list):
+            raise BadRequest("tools must be a list")
+        for tool in tools:
+            tv = await layer.evaluate(
+                Context(
+                    principal, Direction.TOOL_DESCRIPTION, flatten(tool), model=model, channel="chat", metered=False
                 )
-                av = await layer.evaluate(actx)
-                if av.blocked:
-                    return _policy_error(av)
-                if av.text != actx.text:
-                    fn["arguments"] = av.text
+            )
+            if tv.blocked:
+                return _policy_error(tv)
         if metered_ctx is None:  # turn ends in a tool result, already inspected: gates and budgets still apply
             metered_ctx = Context(
                 principal, Direction.INPUT, _text(messages[-1].get("content")), model=model, channel="chat"
@@ -287,17 +315,27 @@ def create_app(
             name, args = params.get("name"), params.get("arguments") or {}
             if not isinstance(name, str) or not isinstance(args, dict):
                 return rpc(rid, -32602, "tools/call needs a string name and object arguments")
-            ctx = Context(principal, Direction.TOOL_CALL, _flatten(args), tool=name, tool_args=args, channel="mcp")
+            ctx = Context(principal, Direction.TOOL_CALL, flatten(args), tool=name, tool_args=args, channel="mcp")
             v = await layer.evaluate(ctx, {"server": server})
             if v.blocked:
                 return blocked(v)
             if v.action is Action.REDACT:
-                if not layer.spans_only(v):
-                    return blocked(v)  # nothing to cut out of the arguments, so the call cannot go ahead
-                req = {
-                    **req,
-                    "params": {**params, "arguments": layer.redact_tree(args, principal, Direction.TOOL_CALL)},
-                }
+                cleaned = layer.redact_tree(args, principal, Direction.TOOL_CALL) if layer.spans_only(v) else None
+                if cleaned is None:
+                    return blocked(v)  # cannot be cut out of the arguments, so the call cannot go ahead
+                req = {**req, "params": {**params, "arguments": cleaned}}
+            request_id = ctx.request_id
+        elif method not in ("initialize", "tools/list"):
+            # resources/read, prompts/get, ...: their params reach the server too (and gates apply).
+            ctx = Context(principal, Direction.TOOL_CALL, flatten(params), channel="mcp")
+            v = await layer.evaluate(ctx, {"server": server, "method": method})
+            if v.blocked:
+                return blocked(v)
+            if v.action is Action.REDACT:
+                cleaned = layer.redact_tree(params, principal, Direction.TOOL_CALL) if layer.spans_only(v) else None
+                if cleaned is None:
+                    return blocked(v)
+                req = {**req, "params": cleaned}
             request_id = ctx.request_id
         elif not principal.authenticated and store.policy.identity.require_auth:
             return blocked(await layer.evaluate(Context(principal, Direction.TOOL_CALL, "", channel="mcp")))
@@ -317,7 +355,7 @@ def create_app(
                     continue
                 # Name, description and every schema string: poisoning hides in parameter descriptions too.
                 tctx = Context(
-                    principal, Direction.TOOL_DESCRIPTION, _flatten(tool), tool=tool.get("name"), channel="mcp"
+                    principal, Direction.TOOL_DESCRIPTION, flatten(tool), tool=tool.get("name"), channel="mcp"
                 )
                 if not (await layer.evaluate(tctx, {"server": server})).blocked:
                     kept.append(tool)
@@ -327,7 +365,7 @@ def create_app(
         rctx = Context(
             principal,
             Direction.TOOL_RESULT,
-            _flatten(result),
+            flatten(result),
             tool=name,
             channel="mcp",
             request_id=request_id or uuid.uuid4().hex[:16],
@@ -336,10 +374,11 @@ def create_app(
         if rv.blocked:
             return blocked(rv)
         if rv.action is Action.REDACT:
-            if layer.spans_only(rv):
-                result = layer.redact_tree(result, principal, Direction.TOOL_RESULT)
+            cleaned = layer.redact_tree(result, principal, Direction.TOOL_RESULT) if layer.spans_only(rv) else None
+            if cleaned is not None:
+                result = cleaned
             elif method == "tools/call":
-                result = {"content": [{"type": "text", "text": rv.text}], "isError": False}
+                result = {"content": [{"type": "text", "text": f"[withheld by policy: {rv.reason}]"}], "isError": True}
             else:
                 return blocked(rv)
         return JSONResponse({**resp, "result": result})
@@ -547,28 +586,8 @@ async def _json_object(request: Request) -> dict[str, Any]:
     return body
 
 
-def _flatten(obj: Any) -> str:
-    """Every key and scalar in a JSON tree, one per line, so detectors see raw text rather than
-    JSON escapes (in `"x\\nAKIA..."` the escaped newline glues an `n` to the secret)."""
-    out: list[str] = []
-
-    def walk(o: Any) -> None:
-        if isinstance(o, dict):
-            for k, v in o.items():
-                out.append(str(k))
-                walk(v)
-        elif isinstance(o, list):
-            for v in o:
-                walk(v)
-        elif o is not None and not isinstance(o, bool):
-            out.append(str(o))
-
-    walk(obj)
-    return "\n".join(out)
-
-
 def _text(content: Any) -> str:
     """OpenAI content is a string or a list of parts; only text parts are inspected."""
     if isinstance(content, list):
-        return "\n".join(p.get("text", "") for p in content if isinstance(p, dict) and p.get("type") == "text")
+        return "\n".join(str(p.get("text", "")) for p in content if isinstance(p, dict) and p.get("type") == "text")
     return "" if content is None else str(content)

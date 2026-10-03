@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import time
 import unicodedata
 from collections import OrderedDict
@@ -77,25 +78,35 @@ class ControlLayer:
         """True when every redaction in the verdict has spans, i.e. can be cut out precisely."""
         return all(f.spans for f in v.findings if f.action is Action.REDACT)
 
-    def redact_tree(self, obj: Any, principal: Principal, direction: Direction) -> Any:
-        """Apply span redactions to every string in a JSON tree, keeping its shape."""
+    def redact_tree(self, obj: Any, principal: Principal, direction: Direction) -> Any | None:
+        """Apply span redactions to every key and string in a JSON tree, keeping its shape.
+
+        Returns None when the result still trips a detector (a secret in a number, split across
+        fields, or inside escaped JSON), so the caller refuses instead of forwarding it.
+        """
         policy = self.policy_for(principal.team)
 
-        def fix(text: str) -> str:
+        def detect(text: str) -> list[Finding]:
             ctx = Context(principal, direction, sanitize(text))
             found = secrets.check(ctx, policy.secrets) + pii.check(ctx, policy.pii)
-            found += signatures.check(ctx, policy.signatures, self.feed)
-            hits = [f for f in found if f.action is Action.REDACT]
-            return redact(ctx.text, [sp for f in hits for sp in f.spans]) if hits else ctx.text
+            return found + signatures.check(ctx, policy.signatures, self.feed)
+
+        def fix(text: str) -> str:
+            text = sanitize(text)
+            hits = [f for f in detect(text) if f.action is Action.REDACT]
+            return redact(text, [sp for f in hits for sp in f.spans]) if hits else text
 
         def walk(o: Any) -> Any:
             if isinstance(o, dict):
-                return {k: walk(v) for k, v in o.items()}
+                return {fix(k) if isinstance(k, str) else k: walk(v) for k, v in o.items()}
             if isinstance(o, list):
                 return [walk(v) for v in o]
             return fix(o) if isinstance(o, str) else o
 
-        return walk(obj)
+        out = walk(obj)
+        if any(f.action.rank >= Action.REDACT.rank for f in detect(flatten(out))):
+            return None
+        return out
 
     async def gate(self, ctx: Context) -> Verdict:
         """Gates and budgets only, for a request whose content is inspected separately."""
@@ -103,13 +114,13 @@ class ControlLayer:
 
     async def evaluate(self, ctx: Context, extra: dict | None = None) -> Verdict:
         ctx.text = sanitize(ctx.text)
-        key = (self.policy.version, ctx.principal.id, ctx.direction, ctx.model, ctx.tool, ctx.text)
+        key = (self.policy.version, self.feed.loaded_at, ctx.principal.id, ctx.direction, ctx.model, ctx.tool, ctx.text)
         if not ctx.metered and key in self._seen:
             self._seen.move_to_end(key)
             return self._seen[key]
         verdict = await self._evaluate(ctx, extra)
-        # Budget outcomes depend on the moment, not the content, so they never enter the cache.
-        if not any(f.control == "budget" for f in verdict.findings):
+        # Budget and engine-failure outcomes depend on the moment, not the content: never cached.
+        if not any(f.control in ("budget", "semantic_engine") for f in verdict.findings):
             self._seen[key] = verdict
             if len(self._seen) > 10_000:
                 self._seen.popitem(last=False)
@@ -170,6 +181,34 @@ def sanitize(text: str) -> str:
     """NFKC plus removal of invisible format characters, so `AKIA\u200b...` or full-width
     lookalikes cannot slip past the detectors. The sanitized text is what gets forwarded."""
     return unicodedata.normalize("NFKC", text).translate(_INVISIBLE)
+
+
+def flatten(obj: Any) -> str:
+    """Every key and scalar in a JSON tree, one per line, so detectors see raw text rather than
+    JSON escapes (in `"x\\nAKIA..."` the escaped newline glues an `n` to the secret). Strings that
+    are themselves JSON (OpenAI tool-call arguments) are decoded and walked too."""
+    out: list[str] = []
+
+    def walk(o: Any, depth: int = 0) -> None:
+        if isinstance(o, dict):
+            for k, v in o.items():
+                out.append(str(k))
+                walk(v, depth)
+        elif isinstance(o, list):
+            for v in o:
+                walk(v, depth)
+        elif isinstance(o, str):
+            out.append(o)
+            if depth < 3 and o.lstrip()[:1] in ("{", "["):
+                try:
+                    walk(json.loads(o), depth + 1)
+                except ValueError:
+                    pass
+        elif o is not None and not isinstance(o, bool):
+            out.append(str(o))
+
+    walk(obj)
+    return "\n".join(out)
 
 
 def _blocked(findings: list[Finding]) -> bool:
