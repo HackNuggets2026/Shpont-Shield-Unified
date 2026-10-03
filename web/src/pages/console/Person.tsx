@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { useState, type ReactNode } from "react";
+import { useParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { admin, type Breakdown } from "../../api";
 import { ActivityFeed } from "../../components/ActivityFeed";
@@ -11,7 +11,9 @@ import { LeasesTable } from "../../components/Leases";
 import { LevelPill, PersonStatusPill, RequestStatusPill, sourceLabel } from "../../components/pills";
 import { RestrictActions, ViewEventsButton } from "../../components/RestrictActions";
 import { Button, Card, Empty, ErrorBox, Kpi, Loading, PageHeader, TableWrap } from "../../components/ui";
-import { IconArrowLeft, IconKey } from "../../components/icons";
+import { IconKey } from "../../components/icons";
+import { Breadcrumbs } from "../../components/org";
+import { org, orgPath } from "../../orgApi";
 import { ago, dateTime, num, pct, tokens, usd } from "../../lib/format";
 import { RiskBar } from "./People";
 
@@ -52,11 +54,20 @@ export function PersonPage() {
   const q = useQuery({ queryKey: ["admin", "person", id], queryFn: () => admin.person(id), refetchInterval: 10_000 });
   const [granting, setGranting] = useState(false);
 
-  const back = (
-    <Link to="/console/people" className="inline-flex items-center gap-1 hover:text-ink">
-      <IconArrowLeft size={12} /> People
-    </Link>
-  );
+  // The person endpoint has no department; one exact-match search row supplies it (and the display name).
+  const dir = useQuery({
+    queryKey: ["admin", "people-search", "exact", id],
+    queryFn: () => org.people({ q: id, limit: 10 }),
+    staleTime: 60_000,
+    select: (d) => d.rows.find((r) => r.principal === id) ?? null,
+  });
+  const team = q.data?.team ?? dir.data?.team;
+  const dept = (q.data as { department?: string } | undefined)?.department ?? dir.data?.department;
+  const crumbs: { label: ReactNode; to?: string }[] = [{ label: "Organization", to: orgPath.root }];
+  if (dept) crumbs.push({ label: dept, to: orgPath.department(dept) });
+  if (team) crumbs.push({ label: team, to: orgPath.team(team) });
+  crumbs.push({ label: dir.data?.name || id });
+  const back = <Breadcrumbs items={crumbs} />;
   if (q.isPending)
     return (
       <div>
@@ -81,12 +92,18 @@ export function PersonPage() {
         back={back}
         title={
           <span className="flex flex-wrap items-center gap-2">
-            {p.principal}
+            {dir.data?.name && dir.data.name !== p.principal ? (
+              <>
+                {dir.data.name} <span className="font-mono text-sm font-normal text-muted">{p.principal}</span>
+              </>
+            ) : (
+              p.principal
+            )}
             <PersonStatusPill status={p.status} scale={p.budget_scale} />
             <LevelPill level={p.level} />
           </span>
         }
-        subtitle={[p.team, p.role, p.email].filter(Boolean).join(" · ")}
+        subtitle={[p.role, p.email, dept ? `${p.team} · ${dept}` : p.team].filter(Boolean).join(" · ")}
         actions={
           <>
             <ViewEventsButton pid={p.principal} />

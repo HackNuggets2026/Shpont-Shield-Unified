@@ -1,7 +1,7 @@
 // Typed client for the enterprise-scale endpoints (docs/scale-contract.md): the org model, org units,
 // paginated people search, outliers, and the department/team filters added to existing endpoints.
 // Kept beside api.ts so the shared client only grows by addition.
-import { get, type ActivityEvent, type Adherence, type Breakdown, type PrincipalRow, type Timeseries } from "./api";
+import { get, type ActivityEvent, type Adherence, type Breakdown, type Incident, type PrincipalRow, type Timeseries } from "./api";
 
 function qs(params: Record<string, string | number | boolean | undefined | null>): string {
   const u = new URLSearchParams();
@@ -153,6 +153,13 @@ export interface ValueRow {
   lines_per_usd: number | null;
 }
 
+/** Incidents gain who/where at scale. */
+export interface OrgIncident extends Incident {
+  department?: string;
+  team?: string;
+  name?: string;
+}
+
 export interface UnitFilter {
   department?: string;
   team?: string;
@@ -167,6 +174,8 @@ export const org = {
   unit: (kind: "department" | "team", name: string, days = 30) => get<OrgUnit>(`${A}/org/unit${qs({ kind, name, days })}`),
   people: (p: PeopleQuery) => get<Page<PersonRow>>(`${A}/people${qs({ limit: 50, days: 30, ...p })}`),
   outliers: (p: { days?: number; limit?: number } & UnitFilter = {}) => get<Outliers>(`${A}/outliers${qs({ days: 7, limit: 10, ...p })}`),
+  incidents: (p: { status?: string; limit?: number; offset?: number; department?: string; team?: string; rule?: string } = {}) =>
+    get<{ incidents: OrgIncident[]; total?: number; scores: Record<string, number> }>(`${A}/incidents${qs(p)}`),
   /** Existing endpoints with the scale filters (department=, team=) and by=department. */
   timeseries: (by: string, days = 30, f: UnitFilter = {}, metric = "usd") =>
     get<Timeseries>(`${A}/timeseries${qs({ metric, by, days, ...f })}`),

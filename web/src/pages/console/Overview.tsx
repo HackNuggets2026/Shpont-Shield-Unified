@@ -1,284 +1,292 @@
-import { useState } from "react";
+import { useMemo, useState, type ReactNode } from "react";
+import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { admin } from "../../api";
-import { ActivityFeed } from "../../components/ActivityFeed";
-import { AdherenceBars, BarList, Sparkline, StackedChart } from "../../components/charts";
-import { IconAlert, IconBox, IconGauge, IconShield, IconTerminal, IconUsers } from "../../components/icons";
-import { Card, ErrorBox, Kpi, Meter, PageHeader, Q, Segmented, Skeleton } from "../../components/ui";
-import { num, pct, tokens, usd } from "../../lib/format";
-import { useCcProductivity } from "../../lib/productivity";
+import { org, orgPath, type CostOutlier, type OrgIncident } from "../../orgApi";
+import { StackedChart } from "../../components/charts";
+import { Delta, UnitTable, useDeptColors, useOrg } from "../../components/org";
+import { SeverityPill } from "../../components/pills";
+import { Card, Empty, ErrorBox, Meter, PageHeader, Q, Segmented, Skeleton, cx } from "../../components/ui";
+import { ago, count, money, pctAuto, times, unitMoney } from "../../lib/format";
 
-type SpendBy = "workflow" | "team" | "source" | "principal" | "model";
-type AdhBy = "team" | "workflow" | "source";
+export const WINDOWS: { value: string; label: string }[] = [
+  { value: "7", label: "7d" },
+  { value: "30", label: "30d" },
+  { value: "90", label: "90d" },
+];
+
+const DAYS = 30;
 
 function daysInMonth(d = new Date()) {
   return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0)).getUTCDate();
 }
 
-function Kpis() {
+/** Claude Code spend per commit, from the server-side value rollup (by department, summed). */
+export function useCcValue(days: number, f: { department?: string; team?: string } = {}) {
+  return useQuery({
+    queryKey: ["admin", "value", "department", days, f],
+    queryFn: () => org.value("department", days, f),
+    staleTime: 60_000,
+    refetchInterval: 60_000,
+    select: (d) => {
+      const s = d.rows.reduce(
+        (a, r) => ({ cc: a.cc + r.claude_code_usd, usd: a.usd + r.usd, commits: a.commits + r.commits, prs: a.prs + r.pull_requests }),
+        { cc: 0, usd: 0, commits: 0, prs: 0 },
+      );
+      return { ...s, perCommit: s.commits ? s.cc / s.commits : null, rows: d.rows };
+    },
+  });
+}
+
+/** A big number with one line of context. Four of these are the whole story. */
+function Tile({ label, value, children, to, tone }: { label: string; value: ReactNode; children?: ReactNode; to?: string; tone?: "bad" | "warn" }) {
+  const body = (
+    <div className={cx("h-full rounded-xl border border-line bg-panel p-5 shadow-sm", to && "transition-colors hover:border-accent/40")}>
+      <div className="text-xs font-medium text-muted">{label}</div>
+      <div className={cx("tnum mt-2 text-3xl font-semibold tracking-tight", tone === "bad" ? "text-bad" : tone === "warn" ? "text-warn" : "text-ink")}>{value}</div>
+      {children && <div className="mt-2 space-y-1.5 text-xs text-muted">{children}</div>}
+    </div>
+  );
+  return to ? (
+    <Link to={to} className="block rounded-xl focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/50">
+      {body}
+    </Link>
+  ) : (
+    body
+  );
+}
+
+function Tiles() {
   const ov = useQuery({ queryKey: ["admin", "overview"], queryFn: admin.overview, refetchInterval: 10_000 });
-  const adh = useQuery({ queryKey: ["admin", "adherence", "team", 30], queryFn: () => admin.adherence("team", 30), refetchInterval: 30_000 });
-  const adhDaily = useQuery({ queryKey: ["admin", "adherence", "day", 30], queryFn: () => admin.adherence("day", 30), refetchInterval: 60_000 });
-  if (ov.isError) return <ErrorBox error={ov.error} retry={() => ov.refetch()} />;
-  if (!ov.data)
+  const o = useOrg(DAYS);
+  if (o.isError) return <ErrorBox error={o.error} retry={() => o.refetch()} />;
+  if (!o.data || !ov.data)
     return (
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
-        {Array.from({ length: 6 }, (_, i) => (
-          <Skeleton key={i} className="h-[104px] rounded-xl" />
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        {Array.from({ length: 4 }, (_, i) => (
+          <Skeleton key={i} className="h-[136px] rounded-xl" />
         ))}
       </div>
     );
-  const o = ov.data;
-  const daily = o.global_usd_per_day;
-  const monthly = daily ? daily * daysInMonth() : null;
-  const overall = adh.data?.overall;
-  const forecastRatio = monthly ? o.spend.month_forecast / monthly : 0;
+  const t = o.data.totals;
+  const v = ov.data;
+  const budget = v.global_usd_per_day ? v.global_usd_per_day * daysInMonth() : null;
+  const over = budget ? v.spend.month_forecast > budget : false;
   return (
-    <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
-      <Kpi
-        label="Spend today"
-        icon={<IconGauge />}
-        value={usd(o.spend.today)}
-        sub={
-          daily ? (
-            <div className="space-y-1.5">
-              <Meter value={o.spend.today} max={daily} />
-              <span>
-                of {usd(daily)}/day global budget · {pct(o.spend.today / daily, 0)}
-              </span>
-            </div>
-          ) : (
-            "no global daily budget"
-          )
-        }
-      />
-      <Kpi
-        label="Month to date"
-        value={usd(o.spend.month_to_date)}
-        sub={
-          <div className="space-y-1.5">
-            {monthly ? <Meter value={o.spend.month_forecast} max={monthly} /> : null}
-            <span>
-              forecast <span className={forecastRatio > 1 ? "font-semibold text-bad" : "text-ink2"}>{usd(o.spend.month_forecast)}</span>
-              {monthly ? ` of ${usd(monthly, { compact: true })} cap` : ""}
-            </span>
-          </div>
-        }
-        tone={forecastRatio > 1 ? "bad" : undefined}
-      />
-      <Kpi
-        label="Policy adherence"
-        icon={<IconShield />}
-        tone={overall && (overall.adherence ?? 1) < 0.95 ? "warn" : "good"}
-        value={overall ? pct(overall.adherence) : adh.isPending ? "…" : "—"}
-        sub={
-          overall ? (
-            <div>
-              {adhDaily.data && adhDaily.data.rows.length > 1 && (
-                <div className="-mx-1 mb-1" title="Daily adherence, last 30 days">
-                  <Sparkline values={adhDaily.data.rows.map((r) => (r.total ? (r.adherence ?? 1) : 1))} color="var(--s3)" height={20} min={0.9} />
-                </div>
-              )}
-              {num(overall.total)} checks · {num(overall.block)} blocked (30d)
-            </div>
-          ) : (
-            "no policy checks yet"
-          )
-        }
-      />
-      <Kpi
+    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+      <Tile label="AI spend, month to date" value={money(v.spend.month_to_date)}>
+        {budget ? <Meter value={v.spend.month_forecast} max={budget} /> : null}
+        <div>
+          Forecast <span className={over ? "font-semibold text-bad" : "font-medium text-ink2"}>{money(v.spend.month_forecast)}</span>
+          {budget ? ` of ${money(budget)} budget` : ""}
+        </div>
+        <div>
+          Last {DAYS} days {money(t.usd)} <Delta cur={t.usd} prev={t.usd_prev} />
+        </div>
+      </Tile>
+      <Tile label="Policy adherence" value={pctAuto(t.adherence)} tone={(t.adherence ?? 1) < 0.95 ? "warn" : undefined} to="/console/security">
+        <div>
+          {count(t.interventions)} interventions in {count(t.checks)} checks
+        </div>
+      </Tile>
+      <Tile
         label="People at risk"
-        icon={<IconUsers />}
-        tone={o.at_risk ? "warn" : undefined}
-        value={o.at_risk}
-        sub={o.at_risk ? "risk score past the alert line" : "nobody past the alert line"}
-        to="/console/people"
-      />
-      <Kpi
-        label="Open incidents"
-        icon={<IconAlert />}
-        tone={o.incidents_open ? "bad" : undefined}
-        value={o.incidents_open}
-        sub={`${o.requests_pending} request${o.requests_pending === 1 ? "" : "s"} awaiting approval`}
-        to="/console/security"
-      />
-      <Kpi
-        label="Running resources"
-        icon={<IconBox />}
-        tone={o.zombies ? "warn" : undefined}
-        value={
-          <span>
-            {o.leases_open}
-            {o.zombies > 0 && <span className="ml-2 text-sm font-medium text-warn">{o.zombies} zombie</span>}
-          </span>
-        }
-        sub={`${usd(o.leases_running_usd)} accrued · ${tokens(o.guard_tokens_today)} guard tokens today`}
-        to="/console/resources"
-      />
+        value={count(t.people_at_risk)}
+        tone={t.people_at_risk ? "warn" : undefined}
+        to={orgPath.people({ sort: "risk" })}
+      >
+        <div className={t.incidents_open ? "font-medium text-bad" : undefined}>
+          {count(t.incidents_open)} open incident{t.incidents_open === 1 ? "" : "s"}
+        </div>
+      </Tile>
+      <Tile label="Spend per active person" value={unitMoney(t.usd_per_active)} to={orgPath.root}>
+        <div>
+          {count(o.data.active)} of {count(o.data.headcount)} people used AI ({pctAuto(o.data.active / Math.max(o.data.headcount, 1))})
+        </div>
+      </Tile>
     </div>
   );
 }
 
 function SpendCard() {
-  const [by, setBy] = useState<SpendBy>("workflow");
-  const [kind, setKind] = useState<"bar" | "area">("bar");
-  const ts = useQuery({ queryKey: ["admin", "timeseries", by, 30], queryFn: () => admin.timeseries(by, 30), refetchInterval: 30_000 });
+  const [by, setBy] = useState<"department" | "workflow">("department");
+  const colors = useDeptColors();
+  const ts = useQuery({ queryKey: ["admin", "timeseries", by, DAYS], queryFn: () => org.timeseries(by, DAYS), refetchInterval: 60_000 });
   const total = ts.data?.totals.reduce((a, b) => a + b, 0);
   return (
     <Card
-      title="Spend, last 30 days"
-      subtitle={total !== undefined ? `${usd(total)} total across every source` : "Daily cost, stacked"}
+      title={`Spend by ${by}, last ${DAYS} days`}
+      subtitle={total !== undefined ? `${money(total)} in total` : undefined}
       actions={
-        <>
-          <Segmented<SpendBy>
-            value={by}
-            onChange={setBy}
-            options={[
-              { value: "workflow", label: "Workflow" },
-              { value: "team", label: "Team" },
-              { value: "source", label: "Source" },
-              { value: "model", label: "Model" },
-            ]}
-          />
-          <Segmented
-            value={kind}
-            onChange={setKind}
-            options={[
-              { value: "bar", label: "Bars" },
-              { value: "area", label: "Area" },
-            ]}
-          />
-        </>
-      }
-      className="xl:col-span-2"
-    >
-      <Q q={ts} rows={8}>
-        {(d) => <StackedChart ts={d} kind={kind} />}
-      </Q>
-    </Card>
-  );
-}
-
-function AdherenceCard() {
-  const [by, setBy] = useState<AdhBy>("team");
-  const q = useQuery({ queryKey: ["admin", "adherence", by, 30], queryFn: () => admin.adherence(by, 30), refetchInterval: 30_000 });
-  return (
-    <Card
-      title="Policy adherence"
-      subtitle="Share of checks that needed no intervention, worst first"
-      actions={
-        <Segmented<AdhBy>
+        <Segmented
           value={by}
           onChange={setBy}
           options={[
-            { value: "team", label: "Team" },
+            { value: "department", label: "Department" },
             { value: "workflow", label: "Workflow" },
-            { value: "source", label: "Source" },
           ]}
         />
       }
     >
-      <Q q={q} rows={6}>
-        {(d) => (
-          <div className="max-h-[330px] overflow-y-auto pr-1">
-            <AdherenceBars rows={d.rows} />
-          </div>
-        )}
+      <Q q={ts} rows={8}>
+        {(d) => <StackedChart ts={d} kind="bar" compact height={280} colors={by === "department" ? colors : undefined} />}
       </Q>
     </Card>
   );
 }
 
-function TeamSpendCard() {
+const SEV: Record<string, number> = { high: 3, medium: 2, low: 1, info: 0 };
+
+type Item = { kind: "incident"; i: OrgIncident } | { kind: "cost"; c: CostOutlier };
+
+/** Five things a person should look at: the worst open incidents, then the biggest cost outliers. */
+function NeedsAttention() {
+  const inc = useQuery({ queryKey: ["admin", "incidents", "open", "top"], queryFn: () => org.incidents({ status: "open", limit: 50 }), refetchInterval: 30_000 });
+  const out = useQuery({ queryKey: ["admin", "outliers", 7, 5], queryFn: () => org.outliers({ days: 7, limit: 5 }), refetchInterval: 60_000 });
+  const items = useMemo<Item[]>(() => {
+    const incidents = [...(inc.data?.incidents ?? [])]
+      .filter((i) => i.status === "open")
+      .sort((a, b) => (SEV[b.severity] ?? 0) - (SEV[a.severity] ?? 0) || b.ts - a.ts)
+      .slice(0, 3)
+      .map((i) => ({ kind: "incident" as const, i }));
+    const cost = (out.data?.cost ?? []).map((c) => ({ kind: "cost" as const, c }));
+    return [...incidents, ...cost].slice(0, 5);
+  }, [inc.data, out.data]);
+  const openTotal = inc.data?.total ?? inc.data?.incidents.filter((i) => i.status === "open").length;
+  return (
+    <Card title="Needs attention" subtitle="Worst open incidents, then biggest cost outliers (7 days)" flush className="h-full">
+      {inc.isPending && out.isPending ? (
+        <div className="p-4">
+          <Skeleton className="h-48" />
+        </div>
+      ) : inc.isError && out.isError ? (
+        <div className="p-4">
+          <ErrorBox error={inc.error} retry={() => inc.refetch()} />
+        </div>
+      ) : items.length === 0 ? (
+        <Empty title="Nothing needs attention" hint="No open incidents and nobody far above their team's spend." />
+      ) : (
+        <ul className="divide-y divide-line/60">
+          {items.map((it) =>
+            it.kind === "incident" ? (
+              <li key={it.i.id}>
+                <Link to={`/console/incidents/${encodeURIComponent(it.i.id)}`} className="flex items-start gap-3 px-4 py-3 hover:bg-raised/60">
+                  <SeverityPill severity={it.i.severity} />
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate text-sm font-medium text-ink">{it.i.rule.replace(/_/g, " ")}</div>
+                    <div className="truncate text-xs text-muted">
+                      {it.i.name || it.i.principal}
+                      {it.i.team ? ` · ${it.i.team}` : ""}
+                      {it.i.department ? ` · ${it.i.department}` : ""} · {ago(it.i.ts)}
+                    </div>
+                  </div>
+                </Link>
+              </li>
+            ) : (
+              <li key={`c:${it.c.principal}`}>
+                <Link to={orgPath.person(it.c.principal)} className="flex items-start gap-3 px-4 py-3 hover:bg-raised/60">
+                  <span className="tnum inline-flex shrink-0 items-center rounded-full bg-serious/10 px-2 py-0.5 text-[11px] font-medium text-serious ring-1 ring-inset ring-serious/30">
+                    {times(it.c.ratio)} cost
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate text-sm font-medium text-ink">
+                      {it.c.name || it.c.principal} <span className="tnum font-normal text-ink2">{money(it.c.usd)}</span>
+                    </div>
+                    <div className="truncate text-xs text-muted">
+                      {it.c.team} · {it.c.department} · team median {money(it.c.team_median)}
+                    </div>
+                  </div>
+                </Link>
+              </li>
+            ),
+          )}
+        </ul>
+      )}
+      <div className="flex flex-wrap justify-between gap-2 border-t border-line px-4 py-2.5 text-xs">
+        <Link to="/console/security" className="font-medium text-accent hover:underline">
+          {openTotal ? `All ${count(openTotal)} open incidents` : "Security"} →
+        </Link>
+        <Link to={`${orgPath.root}#outliers`} className="font-medium text-accent hover:underline">
+          All outliers →
+        </Link>
+      </div>
+    </Card>
+  );
+}
+
+/** One quiet line for the numbers that live on other pages. */
+function SecondaryLine() {
   const ov = useQuery({ queryKey: ["admin", "overview"], queryFn: admin.overview, refetchInterval: 10_000 });
+  const o = useOrg(DAYS);
+  const cc = useCcValue(DAYS);
+  if (!o.data || !ov.data) return null;
+  const t = o.data.totals;
   return (
-    <Card title="Spend by team" subtitle="Month to date, with the month's forecast">
-      <Q q={ov} rows={4}>
-        {(o) => (
-          <BarList
-            rows={Object.entries(o.teams)
-              .map(([k, v]) => ({ key: k, value: v.month_to_date, sub: `today ${usd(v.today)} · forecast ${usd(v.month_forecast)}` }))
-              .sort((a, b) => b.value - a.value)}
-            fmt={(v) => usd(v)}
-            empty="No teams configured"
-          />
+    <div className="flex flex-wrap gap-x-5 gap-y-1 text-xs text-muted">
+      <Link to="/console/workflows" className="hover:text-ink">
+        Claude Code: <span className="tnum text-ink2">{pctAuto(t.claude_code_users / Math.max(o.data.active, 1))}</span> of active people ·{" "}
+        <span className="tnum text-ink2">{money(t.claude_code_usd)}</span>
+        {cc.data?.perCommit != null && (
+          <>
+            {" "}
+            · <span className="tnum text-ink2">{unitMoney(cc.data.perCommit)}</span>/commit
+          </>
         )}
-      </Q>
-    </Card>
-  );
-}
-
-function ClaudeCodeCard() {
-  const q = useCcProductivity(30);
-  return (
-    <Card
-      title={
-        <span className="flex items-center gap-1.5">
-          <span className="text-cc">
-            <IconTerminal size={15} />
-          </span>
-          Claude Code: cost per unit of work
-        </span>
-      }
-      subtitle="Telemetry spend set against commits, PRs and lines (30 days)"
-    >
-      <Q q={q} rows={3}>
-        {(d) =>
-          d.usd === 0 && d.commits === 0 ? (
-            <div className="py-4 text-center text-sm text-muted">No Claude Code telemetry yet.</div>
-          ) : (
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <div className="text-[11px] uppercase tracking-wide text-muted">Cost per commit</div>
-                <div className="mt-0.5 text-xl font-semibold text-ink">{d.costPerCommit !== null ? usd(d.costPerCommit) : "—"}</div>
-                <div className="text-[11px] text-muted">{num(d.commits)} commits</div>
-              </div>
-              <div>
-                <div className="text-[11px] uppercase tracking-wide text-muted">Cost per PR</div>
-                <div className="mt-0.5 text-xl font-semibold text-ink">{d.costPerPr !== null ? usd(d.costPerPr) : "—"}</div>
-                <div className="text-[11px] text-muted">{num(d.prs)} pull requests</div>
-              </div>
-              <div>
-                <div className="text-[11px] uppercase tracking-wide text-muted">Lines per $1</div>
-                <div className="mt-0.5 text-xl font-semibold text-ink">{d.linesPerUsd !== null ? num(d.linesPerUsd) : "—"}</div>
-                <div className="text-[11px] text-muted">{num(d.linesAdded)} lines added</div>
-              </div>
-              <div>
-                <div className="text-[11px] uppercase tracking-wide text-muted">Claude Code spend</div>
-                <div className="mt-0.5 text-xl font-semibold text-ink">{usd(d.usd)}</div>
-                <div className="text-[11px] text-muted">from OTLP telemetry</div>
-              </div>
-            </div>
-          )
-        }
-      </Q>
-    </Card>
+      </Link>
+      <Link to="/console/resources" className="hover:text-ink">
+        <span className="tnum text-ink2">{count(ov.data.leases_open)}</span> running resources
+        {ov.data.zombies > 0 && <span className="text-warn"> · {ov.data.zombies} zombie</span>}
+      </Link>
+      <Link to="/console/requests" className="hover:text-ink">
+        <span className="tnum text-ink2">{count(ov.data.requests_pending)}</span> requests pending
+      </Link>
+      <Link to="/console/activity" className="hover:text-ink">
+        Live activity →
+      </Link>
+    </div>
   );
 }
 
 export function Overview() {
+  const o = useOrg(DAYS);
+  const colors = useDeptColors();
+  const d = o.data;
   return (
-    <div>
+    <div className="space-y-6">
       <PageHeader
-        title="Overview"
-        subtitle="What every person and agent does with AI, what it costs, and whether it stays inside policy."
+        title={d?.name ?? "Overview"}
+        subtitle={
+          d ? (
+            <span className="tnum">
+              {count(d.headcount)} people · {count(d.active)} active · {count(d.teams)} teams · {count(d.departments_count)} departments · last {DAYS} days
+            </span>
+          ) : (
+            "AI usage, cost and policy across the company"
+          )
+        }
       />
-      <div className="space-y-4">
-        <Kpis />
-        <div className="grid gap-4 xl:grid-cols-3">
+      <Tiles />
+      <div className="grid gap-4 xl:grid-cols-3">
+        <div className="xl:col-span-2">
           <SpendCard />
-          <AdherenceCard />
         </div>
-        <div className="grid gap-4 xl:grid-cols-3">
-          <Card title="Live activity" subtitle="Every check, lease, meter report and detection, newest first" className="xl:col-span-2" flush>
-            <ActivityFeed load={admin.activity} queryKey={["admin", "activity"]} linkPeople maxH="520px" />
-          </Card>
-          <div className="space-y-4">
-            <TeamSpendCard />
-            <ClaudeCodeCard />
-          </div>
-        </div>
+        <NeedsAttention />
       </div>
+      <Card
+        title="Departments"
+        subtitle="Open one for its teams, workflows and outliers"
+        actions={
+          <Link to={orgPath.root} className="text-xs font-medium text-accent hover:underline">
+            All teams →
+          </Link>
+        }
+        flush
+      >
+        <Q q={o} rows={6}>
+          {(x) => <UnitTable rows={x.departments} kind="department" colors={colors} compact empty="No departments yet" />}
+        </Q>
+      </Card>
+      <SecondaryLine />
     </div>
   );
 }

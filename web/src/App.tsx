@@ -6,6 +6,9 @@ import { Overview } from "./pages/console/Overview";
 import { Workflows } from "./pages/console/Workflows";
 import { People } from "./pages/console/People";
 import { PersonPage } from "./pages/console/Person";
+import { Organization } from "./pages/console/Organization";
+import { OrgUnitPage } from "./pages/console/OrgUnit";
+import { ActivityPage } from "./pages/console/Activity";
 import { Security } from "./pages/console/Security";
 import { IncidentPage } from "./pages/console/Incident";
 import { Resources } from "./pages/console/Resources";
@@ -47,6 +50,10 @@ export function App() {
       >
         <Route index element={<Overview />} />
         <Route path="workflows" element={<Workflows />} />
+        <Route path="org" element={<Organization />} />
+        <Route path="org/department/:name" element={<OrgUnitPage key="department" kind="department" />} />
+        <Route path="org/team/:name" element={<OrgUnitPage key="team" kind="team" />} />
+        <Route path="activity" element={<ActivityPage />} />
         <Route path="people" element={<People />} />
         <Route path="people/:id" element={<PersonPage />} />
         <Route path="security" element={<Security />} />

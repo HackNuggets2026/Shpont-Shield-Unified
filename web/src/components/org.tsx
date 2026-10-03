@@ -62,8 +62,7 @@ export function Delta({
 }
 
 export function DeltaText({ dir, text, good, className, title }: { dir: DeltaDir; text: string; good?: "up" | "down"; className?: string; title?: string }) {
-  const tone =
-    !good || dir === "flat" || dir === "new" ? "text-muted" : (dir === "up") === (good === "up") ? "text-good" : dir === "up" ? "text-serious" : "text-serious";
+  const tone = !good || dir === "flat" || dir === "new" ? "text-muted" : (dir === "up") === (good === "up") ? "text-good" : "text-serious";
   return (
     <span className={cx("tnum whitespace-nowrap text-xs font-medium", tone, className)} title={title}>
       {text}
@@ -230,8 +229,11 @@ export function UnitTable({
   onSort,
   sortable,
   totalUsd,
+  compact,
   empty = "No units",
 }: {
+  /** Six columns only: name, people, spend + Δ, $/active, adherence, risk. */
+  compact?: boolean;
   rows: UnitRow[];
   kind: "department" | "team";
   colors?: Record<string, string>;
@@ -262,6 +264,7 @@ export function UnitTable({
   const maxUsd = Math.max(...rows.map((r) => r.usd), 0);
   if (!rows.length) return <Empty title={empty} />;
   const color = (r: UnitRow) => colors?.[kind === "department" ? r.name : (r.department ?? "")];
+  if (compact) return <CompactUnitTable rows={shown} kind={kind} color={color} sort={sort} order={order} can={can} maxUsd={maxUsd} />;
   return (
     <TableWrap>
       <table className="tbl min-w-[980px]">
@@ -342,6 +345,88 @@ export function UnitTable({
               </td>
               <td className="text-right">
                 <AlertCount n={r.people_at_risk} tone="warn" />
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </TableWrap>
+  );
+}
+
+function CompactUnitTable({
+  rows,
+  kind,
+  color,
+  sort,
+  order,
+  can,
+  maxUsd,
+}: {
+  rows: UnitRow[];
+  kind: "department" | "team";
+  color: (r: UnitRow) => string | undefined;
+  sort: UnitSortKey | null;
+  order: "asc" | "desc";
+  can: (k: UnitSortKey) => ((k: UnitSortKey) => void) | undefined;
+  maxUsd: number;
+}) {
+  const nav = useNavigate();
+  return (
+    <TableWrap>
+      <table className="tbl min-w-[640px]">
+        <thead>
+          <tr>
+            <SortTh k="name" sort={sort} order={order} onSort={can("name")}>
+              {kind === "department" ? "Department" : "Team"}
+            </SortTh>
+            <SortTh k="headcount" sort={sort} order={order} onSort={can("headcount")} right>
+              People
+            </SortTh>
+            <SortTh k="usd" sort={sort} order={order} onSort={can("usd")} right>
+              Spend
+            </SortTh>
+            <SortTh k="usd_per_active" sort={sort} order={order} onSort={can("usd_per_active")} right>
+              $ / active
+            </SortTh>
+            <SortTh k="adherence" sort={sort} order={order} onSort={can("adherence")} right>
+              Adherence
+            </SortTh>
+            <SortTh k="risk" sort={sort} order={order} onSort={can("risk")} right title="People past the risk alert line · open incidents">
+              Risk
+            </SortTh>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r) => (
+            <tr key={`${r.department ?? ""}/${r.name}`} className="row-link" onClick={() => nav(kind === "department" ? orgPath.department(r.name) : orgPath.team(r.name))}>
+              <td className="py-3">
+                <div className="flex min-w-0 items-center gap-2">
+                  {color(r) && <DeptDot color={color(r)} />}
+                  <span className="truncate font-medium text-ink">{r.name}</span>
+                </div>
+              </td>
+              <td className="tnum text-right">
+                {count(r.headcount)}
+                <div className="text-[11px] text-muted">{pctAuto(r.headcount ? r.active / r.headcount : null)} active</div>
+              </td>
+              <td className="tnum min-w-[140px] text-right">
+                <span className="font-semibold text-ink">{money(r.usd)}</span> <Delta cur={r.usd} prev={r.usd_prev} />
+                <ShareBar value={r.usd} max={maxUsd} color={color(r)} />
+              </td>
+              <td className="tnum text-right">{unitMoney(r.usd_per_active)}</td>
+              <td className="text-right">
+                <AdherenceValue v={r.adherence} />
+              </td>
+              <td className="text-right">
+                {r.people_at_risk || r.incidents_open ? (
+                  <span className="inline-flex items-center gap-2">
+                    <AlertCount n={r.people_at_risk} tone="warn" suffix=" at risk" />
+                    {r.incidents_open > 0 && <AlertCount n={r.incidents_open} suffix=" open" />}
+                  </span>
+                ) : (
+                  <span className="text-muted">—</span>
+                )}
               </td>
             </tr>
           ))}
