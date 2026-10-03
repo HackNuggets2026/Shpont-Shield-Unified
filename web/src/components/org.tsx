@@ -5,7 +5,7 @@ import { Link, useNavigate } from "react-router-dom";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { ResponsiveContainer, Tooltip, Treemap } from "recharts";
 import { org, orgPath, type CostOutlier, type GrowthOutlier, type RiskOutlier, type UnitRow } from "../orgApi";
-import { count, delta, money, pctAuto, times, unitMoney, type DeltaDir } from "../lib/format";
+import { count, delta, money, pctAuto, share, times, unitMoney, type DeltaDir } from "../lib/format";
 import { LevelPill } from "./pills";
 import { IconChevronRight, IconSearch } from "./icons";
 import { Button, Empty, Segmented, TableWrap, cx } from "./ui";
@@ -324,13 +324,13 @@ export function UnitTable({
               </td>
               <td className="tnum text-right">{count(r.headcount)}</td>
               <td className="tnum text-right">
-                <div>{pctAuto(r.headcount ? r.active / r.headcount : null)}</div>
+                <div>{share(r.headcount ? r.active / r.headcount : null)}</div>
                 <div className="text-[11px] text-muted">{count(r.active)}</div>
               </td>
               <td className="tnum min-w-[110px] text-right">
                 <div className="font-medium text-ink">{money(r.usd)}</div>
                 <ShareBar value={r.usd} max={maxUsd} color={color(r)} />
-                {totalUsd ? <div className="text-[10.5px] text-muted">{pctAuto(r.usd / totalUsd)} of org</div> : null}
+                {totalUsd ? <div className="text-[10.5px] text-muted">{share(r.usd / totalUsd)} of org</div> : null}
               </td>
               <td className="text-right">
                 <Delta cur={r.usd} prev={r.usd_prev} />
@@ -409,7 +409,7 @@ function CompactUnitTable({
               </td>
               <td className="tnum text-right">
                 {count(r.headcount)}
-                <div className="text-[11px] text-muted">{pctAuto(r.headcount ? r.active / r.headcount : null)} active</div>
+                <div className="text-[11px] text-muted">{share(r.headcount ? r.active / r.headcount : null)} active</div>
               </td>
               <td className="tnum min-w-[140px] text-right">
                 <span className="font-semibold text-ink">{money(r.usd)}</span> <Delta cur={r.usd} prev={r.usd_prev} />

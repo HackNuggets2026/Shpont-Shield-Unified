@@ -6,7 +6,7 @@ import { BarList, Sparkline, StackedChart } from "../../components/charts";
 import { useWorkflowColors, WfName, wfLabel } from "../../lib/workflows";
 import { Breadcrumbs, DeptDot, Delta, OutliersList, Pager, UnitTable, useDeptColors } from "../../components/org";
 import { Card, ErrorBox, Loading, Meter, PageHeader, Pill, Q, Segmented, TableWrap, cx } from "../../components/ui";
-import { count, money, pctAuto, unitMoney, usd } from "../../lib/format";
+import { count, money, pctAuto, share, unitMoney, usd } from "../../lib/format";
 import { PEOPLE_PAGE, PeopleTable, usePeoplePage } from "./People";
 import { WINDOWS } from "./Overview";
 
@@ -28,7 +28,7 @@ function Tiles({ m, trend, orgUsd }: { m: UnitRow; trend: (number | null)[]; org
         <div>
           <Delta cur={m.usd} prev={m.usd_prev} /> vs previous period ({money(m.usd_prev)})
         </div>
-        {orgUsd ? <div>{pctAuto(m.usd / orgUsd)} of the organization</div> : null}
+        {orgUsd ? <div>{share(m.usd / orgUsd)} of the organization</div> : null}
       </Tile>
       <Tile label="Policy adherence" value={pctAuto(m.adherence)} tone={(m.adherence ?? 1) < 0.95 ? "warn" : undefined}>
         {t.length > 1 && (
@@ -46,7 +46,7 @@ function Tiles({ m, trend, orgUsd }: { m: UnitRow; trend: (number | null)[]; org
       <Tile label="Spend per active person" value={unitMoney(m.usd_per_active)}>
         <Meter value={m.active} max={m.headcount || 1} tone="accent" />
         <div>
-          {count(m.active)} of {count(m.headcount)} active ({pctAuto(m.headcount ? m.active / m.headcount : null)}) · Claude Code {count(m.claude_code_users)}
+          {count(m.active)} of {count(m.headcount)} active ({share(m.headcount ? m.active / m.headcount : null)}) · Claude Code {count(m.claude_code_users)}
         </div>
       </Tile>
     </div>

@@ -4,9 +4,9 @@ import { admin, type Workflow } from "../../api";
 import { ReasonDialog } from "../../components/Dialog";
 import { TierPill } from "../../components/pills";
 import { Card, Empty, PageHeader, Pill, Q, Stat, TableWrap, Toggle } from "../../components/ui";
-import { count, money, pctAuto, tokens, unitMoney, usd } from "../../lib/format";
+import { count, money, share, tokens, unitMoney, usd } from "../../lib/format";
 import { org } from "../../orgApi";
-import { DeptDot, Delta, useDeptColors } from "../../components/org";
+import { DeptDot, useDeptColors } from "../../components/org";
 import { useWorkflowColors, WfName } from "../../lib/workflows";
 
 interface Pending {
@@ -67,7 +67,7 @@ function DeptSplit({ rows: all, colors }: { rows: { department: string; usd: num
   const rest = all.slice(3).reduce((a, r) => a + r.usd, 0);
   const rows = rest > 0 ? [...all.slice(0, 3), { department: "Other", usd: rest }] : all.slice(0, 3);
   return (
-    <div title={all.map((r) => `${r.department}: ${money(r.usd)} (${pctAuto(r.usd / total)})`).join("\n")}>
+    <div title={all.map((r) => `${r.department}: ${money(r.usd)} (${share(r.usd / total)})`).join("\n")}>
       <div className="flex h-2 w-full overflow-hidden rounded-full bg-ink/[0.07]">
         {rows.map((r) => (
           <span key={r.department} className="h-full border-r border-panel last:border-r-0" style={{ width: `${(r.usd / total) * 100}%`, background: colors[r.department] ?? "var(--s-other)" }}
@@ -77,7 +77,7 @@ function DeptSplit({ rows: all, colors }: { rows: { department: string; usd: num
       <div className="mt-1 truncate text-[11px] text-muted">
         {rows
           .filter((r) => r.department !== "Other")
-          .map((r) => `${r.department} ${pctAuto(r.usd / total)}`)
+          .map((r) => `${r.department} ${share(r.usd / total)}`)
           .join(" · ")}
       </div>
     </div>
@@ -88,7 +88,6 @@ export function Workflows() {
   const qc = useQueryClient();
   const menu = useQuery({ queryKey: ["admin", "menu"], queryFn: admin.menu, refetchInterval: 30_000 });
   const spend = useQuery({ queryKey: ["admin", "usage", "workflow", 30], queryFn: () => org.usage("workflow", 30) });
-  const spendPrev = useQuery({ queryKey: ["admin", "usage", "workflow", 60], queryFn: () => org.usage("workflow", 60) });
   const byDept = useQuery({ queryKey: ["admin", "usage", "workflow,department", 30], queryFn: () => org.usage("workflow,department", 30), retry: 1 });
   const value = useQuery({ queryKey: ["admin", "value", "workflow", 30], queryFn: () => org.value("workflow", 30) });
   const colors = useDeptColors();
@@ -100,11 +99,6 @@ export function Workflows() {
   });
 
   const spend30 = useMemo(() => Object.fromEntries((spend.data ?? []).map((r) => [String(r.workflow ?? "(none)"), r.usd])), [spend.data]);
-  // The previous 30 days = the last 60 minus the last 30.
-  const prev30 = useMemo(
-    () => Object.fromEntries((spendPrev.data ?? []).map((r) => [String(r.workflow ?? "(none)"), r.usd - (spend30[String(r.workflow ?? "(none)")] ?? 0)])),
-    [spendPrev.data, spend30],
-  );
   const output = useMemo(() => Object.fromEntries((value.data?.rows ?? []).map((r) => [r.key, r])), [value.data]);
   const depts = useMemo(() => {
     const out: Record<string, { department: string; usd: number }[]> = {};
@@ -116,6 +110,10 @@ export function Workflows() {
   const totalRuns = (menu.data?.workflows ?? []).reduce((a, w) => a + w.measured.runs, 0);
   const totalCommits = (value.data?.rows ?? []).reduce((a, r) => a + r.commits, 0);
   const totalCc = (value.data?.rows ?? []).reduce((a, r) => a + r.claude_code_usd, 0);
+  // Commits Claude Code reports without a workflow label cannot be priced per workflow; below half coverage a
+  // per-workflow $/commit would divide a whole workflow's spend by a sliver of its commits.
+  const labelledCommits = (value.data?.rows ?? []).filter((r) => r.key !== "(none)" && r.key !== "unlabeled").reduce((a, r) => a + r.commits, 0);
+  const commitCoverage = totalCommits ? labelledCommits / totalCommits : 0;
 
   return (
     <div>
@@ -140,7 +138,7 @@ export function Workflows() {
             <Card
               flush
               title="Menu"
-              subtitle="Last 30 days · cost per run p50 – p90 · spend split by department"
+              subtitle={`Last 30 days · cost per run p50 – p90 · top departments by spend${totalCommits && commitCoverage < 0.5 ? ` · ${share(1 - commitCoverage)} of Claude Code commits carry no workflow label` : ""}`}
               actions={
                 <div className="flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-muted">
                   {Object.entries(colors)
@@ -194,7 +192,7 @@ export function Workflows() {
                           <td className="tnum text-right">{count(w.measured.runs)}</td>
                           <td className="tnum whitespace-nowrap text-right">
                             <div className="font-medium text-ink">{money(spend30[w.name] ?? 0)}</div>
-                            {spendPrev.data && <Delta cur={spend30[w.name] ?? 0} prev={prev30[w.name] ?? 0} className="text-[11px]" />}
+                            <div className="text-[11px] text-muted">{share(totalSpend ? (spend30[w.name] ?? 0) / totalSpend : 0)} of all</div>
                           </td>
                           <td className="min-w-[150px]">
                             <DeptSplit rows={depts[w.name] ?? []} colors={colors} />
@@ -203,6 +201,12 @@ export function Workflows() {
                             {(() => {
                               const o = output[w.name];
                               if (!o?.commits) return <span className="text-muted">—</span>;
+                              if (commitCoverage < 0.5)
+                                return (
+                                  <span className="text-muted" title={`Only ${share(commitCoverage)} of commits carry a workflow label; see the org-wide figure above.`}>
+                                    {count(o.commits)} labelled
+                                  </span>
+                                );
                               return (
                                 <span title={`${count(o.commits)} commits · ${count(o.pull_requests)} PRs · ${count(o.lines_added)} lines added`}>
                                   {unitMoney(o.claude_code_usd / o.commits)}

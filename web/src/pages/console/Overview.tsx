@@ -8,7 +8,7 @@ import { Delta, UnitTable, useDeptColors, useOrg } from "../../components/org";
 import { SeverityPill } from "../../components/pills";
 import { Card, Empty, ErrorBox, Meter, PageHeader, Q, Segmented, Skeleton, cx } from "../../components/ui";
 import { useWorkflowColors, wfLabel } from "../../lib/workflows";
-import { ago, count, money, pctAuto, times, unitMoney } from "../../lib/format";
+import { ago, count, money, pctAuto, share, times, unitMoney } from "../../lib/format";
 
 export const WINDOWS: { value: string; label: string }[] = [
   { value: "7", label: "7d" },
@@ -102,7 +102,7 @@ function Tiles() {
       </Tile>
       <Tile label="Spend per active person" value={unitMoney(t.usd_per_active)} to={orgPath.root}>
         <div>
-          {count(o.data.active)} of {count(o.data.headcount)} people used AI ({pctAuto(o.data.active / Math.max(o.data.headcount, 1))})
+          {count(o.data.active)} of {count(o.data.headcount)} people used AI ({share(o.data.active / Math.max(o.data.headcount, 1))})
         </div>
       </Tile>
     </div>
@@ -235,7 +235,7 @@ function SecondaryLine() {
   return (
     <div className="flex flex-wrap gap-x-5 gap-y-1 text-xs text-muted">
       <Link to="/console/workflows" className="hover:text-ink">
-        Claude Code: <span className="tnum text-ink2">{pctAuto(t.claude_code_users / Math.max(o.data.active, 1))}</span> of active people ·{" "}
+        Claude Code: <span className="tnum text-ink2">{share(t.claude_code_users / Math.max(o.data.active, 1))}</span> of active people ·{" "}
         <span className="tnum text-ink2">{money(t.claude_code_usd)}</span>
         {cc.data?.perCommit != null && (
           <>

@@ -13,6 +13,7 @@ import { RestrictActions, ViewEventsButton } from "../../components/RestrictActi
 import { Button, Card, Empty, ErrorBox, Kpi, Loading, PageHeader, TableWrap } from "../../components/ui";
 import { IconKey } from "../../components/icons";
 import { Breadcrumbs } from "../../components/org";
+import { useWorkflowColors, wfLabel } from "../../lib/workflows";
 import { org, orgPath } from "../../orgApi";
 import { ago, dateTime, num, pct, tokens, usd } from "../../lib/format";
 import { RiskBar } from "./People";
@@ -53,6 +54,7 @@ export function PersonPage() {
   const qc = useQueryClient();
   const q = useQuery({ queryKey: ["admin", "person", id], queryFn: () => admin.person(id), refetchInterval: 10_000 });
   const [granting, setGranting] = useState(false);
+  const wfColors = useWorkflowColors();
 
   // The person endpoint has no department; one exact-match search row supplies it (and the display name).
   const dir = useQuery({
@@ -144,7 +146,7 @@ export function PersonPage() {
 
       <div className="grid gap-4 xl:grid-cols-3">
         <Card title="Spend by workflow, 30 days" className="xl:col-span-2">
-          <StackedChart ts={p.spend} height={220} />
+          <StackedChart ts={p.spend} height={220} colors={wfColors} labelOf={wfLabel} />
         </Card>
         <Card title="By source and resource" subtitle="30 days">
           <div className="space-y-5">

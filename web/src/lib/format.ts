@@ -171,7 +171,7 @@ export function pctAuto(v: number | null | undefined): string {
   if (a === 0) return "0%";
   if (a < 0.1) return p < 0 ? ">-0.1%" : "<0.1%";
   if (a >= 99.995 && a < 100) return "99.99%";
-  if (a >= 99 && a < 100) return p.toFixed(2) + "%";
+  if (a >= 99 && a < 100) return p.toFixed(2).replace(/0$/, "") + "%";
   if (a >= 90 && a < 100) return p.toFixed(1) + "%";
   if (a >= 10) return p.toFixed(0) + "%";
   return p.toFixed(1) + "%";
@@ -210,4 +210,15 @@ export function countTick(v: number): string {
   if (a < 1000) return String(Math.round(v * 100) / 100);
   const [n, suf] = compactParts(a);
   return (v < 0 ? "-" : "") + (n >= 10 ? Math.round(n) : Math.round(n * 10) / 10) + suf;
+}
+
+/** A share of a whole, rounded for reading: 42%, 7.5%, ">99%" (never a rounded-up 100%). */
+export function share(v: number | null | undefined): string {
+  if (v === null || v === undefined || Number.isNaN(v)) return "—";
+  const p = v * 100;
+  if (p <= 0) return "0%";
+  if (p >= 100) return "100%";
+  if (p >= 99.5) return ">99%";
+  if (p < 0.1) return "<0.1%";
+  return (p < 10 ? p.toFixed(1) : p.toFixed(0)) + "%";
 }
