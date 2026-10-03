@@ -385,3 +385,12 @@ def test_a_failed_reclaim_is_retried_a_minute_later_not_every_sweep(client):
     assert layer.leases.sweep(layer.policy, now=t + 181) == [lease]
     assert layer.leases.sweep(layer.policy, now=t + 191) == []  # still open (reclaim failed): wait
     assert layer.leases.sweep(layer.policy, now=t + 242) == [lease]
+
+
+def test_catalog_lists_workflows_that_use_a_resource_by_models_or_tools(client):
+    rows = {r["name"]: r for c in client.get("/admin/catalog").json()["classes"].values() for r in c}
+    assert rows["vm"]["workflows_via"] == {"bugfix": "resources", "load_test": "resources"}
+    assert rows["gpt-4o-mini"]["workflows_via"].get("chat_assist") == "models"
+    assert "pr_review" not in rows["gpt-4o-mini"]["workflows"]  # no model limit is not "uses every model"
+    assert rows["simulator"]["workflows_via"]["ui_qa"] == "resources"
+    assert set(rows["vm"]["workflows"]) == set(rows["vm"]["workflows_via"])

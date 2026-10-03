@@ -19,6 +19,7 @@ import math
 import time
 import uuid
 from collections.abc import Awaitable, Callable
+from fnmatch import fnmatch
 from typing import Any
 
 import yaml
@@ -113,6 +114,26 @@ def register(
         keep = [x for x in policy.principal(pid).grants if x.live(now - 7 * DAY)]
         return [x.model_dump() for x in [*keep, g]]
 
+    def workflows_using(policy: Policy, name: str, r: Any) -> dict[str, str]:
+        """Workflows that use a resource, and how: they list it, their model globs cover it, or their tool
+        globs cover its tools. A workflow with no model or tool limit is not counted as using everything."""
+
+        def overlap(mine: list[str], theirs: list[str]) -> bool:
+            return any(fnmatch(a, b) or fnmatch(b, a) for a in mine for b in theirs)
+
+        tools = list(r.tools)
+        if r.lease:  # a workflow that can only keep someone else's lease busy does not use the resource
+            tools += r.lease.start_tools
+        out: dict[str, str] = {}
+        for w, wf in policy.menu.workflows.items():
+            if name in wf.resources:
+                out[w] = "resources"
+            elif r.models and wf.models and overlap(r.models, wf.models):
+                out[w] = "models"
+            elif tools and wf.tools and overlap(tools, wf.tools):
+                out[w] = "tools"
+        return out
+
     def write(request: Request, patch: dict, action: str, target: str, reason: str, by: str | None = None):
         try:
             p = store.write_overlay(patch)
@@ -135,6 +156,7 @@ def register(
         rows = []
         for name, r in p.catalog.items():
             u = used.get(name, {})
+            via = workflows_using(p, name, r)
             rows.append(
                 {
                     "name": name,
@@ -148,7 +170,8 @@ def register(
                     },
                     "live_leases": sum(1 for x in leases if x["resource"] == name),
                     "live_grants": sum(1 for g in grants if g["resource"] == name and g["live"]),
-                    "workflows": [w for w, wf in p.menu.workflows.items() if name in wf.resources],
+                    "workflows": list(via),
+                    "workflows_via": via,
                 }
             )
         return {
