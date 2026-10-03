@@ -1,33 +1,86 @@
-import { useState } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { Link, useParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { admin } from "../../api";
-import { AdminLog } from "../../components/AdminLog";
-import { FeedRow } from "../../components/ActivityFeed";
+import { admin, type AdminAction } from "../../api";
 import { ReasonDialog } from "../../components/Dialog";
 import { IncidentStatusPill, LevelPill, PersonStatusPill, SeverityPill } from "../../components/pills";
 import { RestrictActions } from "../../components/RestrictActions";
-import { Button, Card, Empty, ErrorBox, Loading, PageHeader, Segmented, Stat } from "../../components/ui";
-import { IconArrowLeft } from "../../components/icons";
-import { ago, dateTime, titleCase } from "../../lib/format";
-import { RiskBar } from "./People";
+import { Button, Card, Empty, ErrorBox, Loading, PageHeader, Segmented, Stat, cx } from "../../components/ui";
+import { IconArrowLeft, IconTerminal } from "../../components/icons";
+import { EvidenceTimeline, buildTimeline, isEvidence } from "../../components/security/EvidenceTimeline";
+import { RiskMeter } from "../../components/security/RiskMeter";
+import { ViewContentButton } from "../../components/security/ViewContent";
+import { ago, dateTime, pct } from "../../lib/format";
+import { RULES, detectionPolicy, isAuto, responseLabel, ruleLabel, ruleWhat, triageOrder } from "../../lib/security";
 
 type Next = "acknowledged" | "resolved" | "dismissed" | "open";
 
 const NEXT_COPY: Record<Next, { label: string; body: string; tone: "primary" | "good" | "danger" }> = {
-  acknowledged: { label: "Acknowledge", body: "Mark that someone is looking at this. The risk score still counts it.", tone: "primary" },
-  resolved: { label: "Resolve", body: "The issue was real and has been dealt with.", tone: "good" },
-  dismissed: { label: "Dismiss", body: "A false positive. Its weight stops counting toward the person's risk.", tone: "primary" },
-  open: { label: "Reopen", body: "Put the incident back in the open queue.", tone: "primary" },
+  acknowledged: { label: "Acknowledge", body: "Someone is looking at this. It keeps counting toward the person's risk score.", tone: "primary" },
+  resolved: { label: "Resolve", body: "The issue was real and has been dealt with. Its weight stops counting toward the risk score.", tone: "good" },
+  dismissed: { label: "Dismiss", body: "A false positive. Its weight stops counting toward the risk score.", tone: "primary" },
+  open: { label: "Reopen", body: "Put the incident back in the open queue. Its weight counts again.", tone: "primary" },
 };
+
+function fmtGap(s: number): string {
+  const a = Math.abs(Math.round(s));
+  if (a < 60) return `${a}s`;
+  if (a < 3600) return `${Math.round(a / 60)} min`;
+  if (a < 86400) return `${(a / 3600).toFixed(1)} h`;
+  return `${(a / 86400).toFixed(1)} days`;
+}
+
+const titleStatus = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+
+function Step({ n, title, tone, children }: { n: number; title: string; tone: "bad" | "serious" | "neutral" | "good"; children: ReactNode }) {
+  const dot = { bad: "bg-bad text-white", serious: "bg-serious text-white", neutral: "bg-ink/15 text-ink2", good: "bg-good text-white" }[tone];
+  return (
+    <div className="min-w-0 flex-1 p-4">
+      <div className="mb-2 flex items-center gap-2">
+        <span className={cx("grid h-5 w-5 shrink-0 place-items-center rounded-full text-[11px] font-semibold", dot)}>{n}</span>
+        <span className="text-[11px] font-semibold uppercase tracking-wide text-muted">{title}</span>
+      </div>
+      <div className="space-y-1.5 text-sm text-ink">{children}</div>
+    </div>
+  );
+}
+
+function Legend({ cls, children }: { cls: string; children: ReactNode }) {
+  return (
+    <span className="inline-flex items-center gap-1.5">
+      <span className={cx("h-2.5 w-[3px] rounded-full", cls)} />
+      {children}
+    </span>
+  );
+}
 
 export function IncidentPage() {
   const { id = "" } = useParams();
   const qc = useQueryClient();
-  const q = useQuery({ queryKey: ["admin", "incident", id], queryFn: () => admin.incident(id), refetchInterval: 10_000 });
-  const people = useQuery({ queryKey: ["admin", "principals"], queryFn: admin.principals });
+  const q = useQuery({ queryKey: ["admin", "incident", id], queryFn: () => admin.incident(id), refetchInterval: 5_000 });
+  const people = useQuery({ queryKey: ["admin", "principals"], queryFn: admin.principals, refetchInterval: 10_000 });
+  // Status changes are logged against the incident id, not the person, so the detail endpoint misses them.
+  const own = useQuery({ queryKey: ["admin", "actions", id], queryFn: () => admin.actions(id), refetchInterval: 10_000 });
+  const pol = useQuery({ queryKey: ["admin", "policy", "detections"], queryFn: detectionPolicy, staleTime: 60_000 });
+  const pid = q.data?.principal.id;
+  const person = useQuery({
+    queryKey: ["admin", "person", pid, 30],
+    queryFn: () => admin.person(pid!, 30),
+    enabled: !!pid,
+    refetchInterval: 15_000,
+  });
   const [next, setNext] = useState<Next | null>(null);
-  const [only, setOnly] = useState<"all" | "evidence">("all");
+  const [only, setOnly] = useState<"all" | "key">("all");
+
+  const actions = useMemo<AdminAction[]>(() => {
+    const seen = new Set<string>();
+    return [...(q.data?.actions ?? []), ...(own.data ?? [])].filter((a) => {
+      const k = `${a.ts}|${a.actor}|${a.action}|${a.target}`;
+      if (seen.has(k)) return false;
+      seen.add(k);
+      return true;
+    });
+  }, [q.data, own.data]);
 
   const back = (
     <Link to="/console/security" className="inline-flex items-center gap-1 hover:text-ink">
@@ -44,17 +97,33 @@ export function IncidentPage() {
   if (q.isError)
     return (
       <div>
-        <PageHeader title="Incident" back={back} />
+        <PageHeader title="Incident" back={back} subtitle={<span className="font-mono">{id}</span>} />
         <ErrorBox error={q.error} retry={() => q.refetch()} />
       </div>
     );
 
-  const { incident: inc, timeline, principal, actions } = q.data;
+  const { incident: inc, timeline, principal } = q.data;
   const row = people.data?.find((r) => r.principal === principal.id);
-  const evidenceCount = timeline.filter((e) => e.evidence).length;
-  const rows = only === "evidence" ? timeline.filter((e) => e.evidence) : timeline;
+  const th = pol.data?.response ?? null;
+  const halfLife = pol.data?.half_life_minutes ?? null;
+  const live = inc.status === "open" || inc.status === "acknowledged";
+  const nowWeight = live && halfLife ? inc.weight * 0.5 ** ((Date.now() / 1000 - inc.ts) / (halfLife * 60)) : 0;
+
+  const evidence = timeline.filter(isEvidence);
+  const items = buildTimeline(timeline, actions);
+  const keyItems = items.filter((it) => (it.t === "event" ? isEvidence(it.e) || it.e.source === "detections" : true));
+  const shown = only === "key" ? keyItems : items;
+  const ccCount = evidence.filter((e) => e.source === "claude_code").length;
+
+  const autos = actions.filter(isAuto).sort((a, b) => a.ts - b.ts);
+  const humans = actions.filter((a) => !isAuto(a));
+  const others = (person.data?.incidents ?? []).filter((i) => i.id !== inc.id).sort(triageOrder);
+  const scale = row?.budget_scale ?? 1;
+  const restricted = principal.status !== "active" || scale < 1;
+
   const transitions: Next[] =
-    inc.status === "open" ? ["acknowledged", "resolved", "dismissed"] : inc.status === "acknowledged" ? ["resolved", "dismissed"] : ["open"];
+    inc.status === "open" ? ["acknowledged", "resolved", "dismissed"] : inc.status === "acknowledged" ? ["resolved", "dismissed", "open"] : ["open"];
+  const window: [number, number] = [inc.ts - 3600, inc.ts + 900];
 
   return (
     <div className="space-y-4">
@@ -62,104 +131,234 @@ export function IncidentPage() {
         back={back}
         title={
           <span className="flex flex-wrap items-center gap-2">
-            {titleCase(inc.rule)}
+            {RULES[inc.rule]?.cc && <IconTerminal size={18} className="text-cc" />}
+            <span className="truncate">{ruleLabel(inc.rule)}</span>
             <SeverityPill severity={inc.severity} />
             <IncidentStatusPill status={inc.status} />
           </span>
         }
         subtitle={
-          <span>
-            <span className="font-mono">{inc.id}</span> · {dateTime(inc.ts)} ({ago(inc.ts)})
+          <span className="flex flex-wrap items-center gap-x-1.5">
+            <Link to={`/console/people/${encodeURIComponent(principal.id)}`} className="font-medium text-ink hover:text-accent">
+              {principal.id}
+            </Link>
+            {row && <span>· {row.team}</span>}
+            <span title={dateTime(inc.ts)}>
+              · {dateTime(inc.ts)} ({ago(inc.ts)})
+            </span>
+            <span className="font-mono text-[11px]">· {inc.id}</span>
           </span>
         }
         actions={transitions.map((t) => (
-          <Button key={t} variant={t === "resolved" ? "good" : "secondary"} onClick={() => setNext(t)}>
+          <Button key={t} variant={t === "resolved" ? "good" : t === "acknowledged" ? "primary" : "secondary"} onClick={() => setNext(t)}>
             {NEXT_COPY[t].label}
           </Button>
         ))}
       />
 
-      <div className="grid gap-4 xl:grid-cols-3">
-        <Card title="What was detected" className="xl:col-span-2">
-          <p className="text-sm text-ink">{inc.detail}</p>
-          <div className="mt-4 grid grid-cols-2 gap-4 sm:grid-cols-4">
-            <Stat label="Rule" value={inc.rule} />
-            <Stat label="Weight" value={Math.round(inc.weight)} />
-            <Stat label="Evidence events" value={`${inc.evidence.length} named · ${evidenceCount} found`} />
-            <Stat label="Status" value={inc.status} />
-          </div>
-          {inc.note && (
-            <div className="mt-4 rounded-lg bg-raised px-3 py-2 text-xs text-ink2">
-              <span className="font-medium text-ink">Note:</span> {inc.note}
+      {/* The story at a glance: detected, what the system did, where it stands now. */}
+      <section className="overflow-hidden rounded-xl border border-line bg-panel shadow-sm">
+        <div className={cx("border-b border-line px-4 py-3", inc.severity === "high" && live ? "bg-bad/[0.06]" : "bg-raised/40")}>
+          <p className="break-words text-[15px] font-medium leading-snug text-ink">{inc.detail}</p>
+          {ruleWhat(inc.rule) && <p className="mt-0.5 text-xs text-muted">{ruleLabel(inc.rule)}: {ruleWhat(inc.rule)}.</p>}
+        </div>
+        <div className="flex flex-col divide-y divide-line md:flex-row md:divide-x md:divide-y-0">
+          <Step n={1} title="Detected" tone="bad">
+            <div>
+              <b>{evidence.length}</b> evidence event{evidence.length === 1 ? "" : "s"}
+              {inc.evidence.length !== evidence.length && <span className="text-muted"> ({inc.evidence.length} named)</span>}
+              {ccCount > 0 && <span className="text-cc"> · {ccCount} from Claude Code</span>}
             </div>
-          )}
-        </Card>
-        <Card
-          title="Person"
-          actions={
-            <Link to={`/console/people/${encodeURIComponent(principal.id)}`} className="text-xs font-medium text-accent hover:underline">
-              Open profile →
-            </Link>
-          }
-        >
-          <div className="mb-3 flex flex-wrap items-center gap-2">
-            <span className="text-base font-semibold text-ink">{principal.id}</span>
-            <PersonStatusPill status={principal.status} scale={row?.budget_scale} />
-            <LevelPill level={principal.level} />
-          </div>
-          <div className="mb-4">
-            <div className="mb-1 text-[11px] uppercase tracking-wide text-muted">Risk score</div>
-            <RiskBar score={principal.risk} />
-          </div>
-          <RestrictActions pid={principal.id} status={principal.status} scale={row?.budget_scale ?? 1} compact />
-        </Card>
+            <div>
+              Weight <b className="tnum">+{Math.round(inc.weight)}</b> on {principal.id}'s risk
+              {live && halfLife ? <span className="text-muted"> (worth {Math.round(nowWeight)} now; halves every {fmtGap(halfLife * 60)})</span> : null}
+            </div>
+          </Step>
+          <Step n={2} title="System responded" tone={autos.length ? "serious" : "neutral"}>
+            {autos.length === 0 ? (
+              <div className="text-ink2">No automatic action{th ? `: the score stayed below the alert level (${th.alert})` : ""}.</div>
+            ) : (
+              <ul className="space-y-1">
+                {autos.map((a, i) => (
+                  <li key={i} className="flex flex-wrap items-baseline gap-x-1.5">
+                    <b>{responseLabel(a)}</b>
+                    <span className="text-xs text-muted" title={dateTime(a.ts)}>
+                      {a.ts >= inc.ts ? `${fmtGap(a.ts - inc.ts)} after detection` : `${fmtGap(inc.ts - a.ts)} before`}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
+            {autos.length > 0 && <div className="text-xs text-muted">by {[...new Set(autos.map((a) => a.actor))].join(", ")}, no human in the loop</div>}
+          </Step>
+          <Step n={3} title="Now" tone={live ? (principal.status === "active" && scale >= 1 ? "bad" : "serious") : "good"}>
+            <div className="flex flex-wrap items-center gap-1.5">
+              <PersonStatusPill status={principal.status} scale={row?.budget_scale} />
+              <LevelPill level={principal.level} />
+              <span className="text-xs text-muted">risk {Math.round(principal.risk)}</span>
+            </div>
+            <div className="text-ink2">
+              Incident <b>{inc.status}</b>
+              {live
+                ? humans.length
+                  ? `; ${humans.length} admin action${humans.length === 1 ? "" : "s"} so far.`
+                  : "; waiting for a human."
+                : inc.note
+                  ? `: “${inc.note}”`
+                  : "."}
+            </div>
+          </Step>
+        </div>
+      </section>
+
+      <div className="grid gap-4 xl:grid-cols-3">
+        <div className="min-w-0 xl:col-span-2">
+          <Card
+            flush
+            title="Evidence timeline"
+            subtitle="An hour before to 15 minutes after, with every response. T is the moment of detection."
+            actions={
+              <Segmented
+                value={only}
+                onChange={setOnly}
+                options={[
+                  { value: "all", label: `All (${items.length})` },
+                  { value: "key", label: `Key moments (${keyItems.length})` },
+                ]}
+              />
+            }
+          >
+            <div className="flex flex-wrap gap-x-4 gap-y-1 border-b border-line px-4 py-2 text-[11px] text-muted">
+              <Legend cls="bg-bad">evidence</Legend>
+              <Legend cls="bg-accent">this detection</Legend>
+              <Legend cls="bg-serious">auto response</Legend>
+              <Legend cls="bg-info">admin</Legend>
+              <Legend cls="bg-cc">Claude Code</Legend>
+            </div>
+            {shown.length === 0 ? (
+              <Empty title="No events in the window" hint="The evidence may have aged out of the activity store." />
+            ) : (
+              <div className="max-h-[680px] overflow-y-auto">
+                <EvidenceTimeline items={shown} incidentId={inc.id} origin={inc.ts} />
+              </div>
+            )}
+          </Card>
+        </div>
+
+        <div className="min-w-0 space-y-4">
+          <Card
+            title="Person"
+            actions={
+              <Link to={`/console/people/${encodeURIComponent(principal.id)}`} className="text-xs font-medium text-accent hover:underline">
+                Open profile →
+              </Link>
+            }
+          >
+            <div className="mb-1 flex flex-wrap items-center gap-2">
+              <span className="text-base font-semibold text-ink">{principal.id}</span>
+              <PersonStatusPill status={principal.status} scale={row?.budget_scale} />
+              <LevelPill level={principal.level} />
+            </div>
+            {row && (
+              <div className="mb-3 text-xs text-muted">
+                {row.team} · {row.role} · {row.open_incidents} open incident{row.open_incidents === 1 ? "" : "s"}
+              </div>
+            )}
+            <div className="mb-1 text-[11px] font-medium uppercase tracking-wide text-muted">Risk score</div>
+            <RiskMeter score={principal.risk} thresholds={th} />
+            {restricted && row?.reason && (
+              <div className="mt-3 rounded-lg bg-bad/[0.07] px-3 py-2 text-xs text-ink2 ring-1 ring-inset ring-bad/20">
+                <span className="font-medium text-ink">{principal.status === "active" ? `Budget at ${pct(scale, 0)}` : titleStatus(principal.status)}</span> by{" "}
+                {row.by || "?"}
+                {row.since ? ` ${ago(row.since)}` : ""}: “{row.reason}”
+              </div>
+            )}
+            <div className="mt-4 space-y-2">
+              <RestrictActions pid={principal.id} status={principal.status} scale={scale} compact />
+              <ViewContentButton
+                pid={principal.id}
+                incidentId={inc.id}
+                evidence={inc.evidence}
+                window={window}
+                suggestion={`Investigating incident ${inc.id} (${ruleLabel(inc.rule).toLowerCase()})`}
+              />
+            </div>
+            {restricted && (
+              <p className="mt-3 text-[11px] text-muted">Closing incidents lowers the score but never lifts a restriction. Restore lifts it and resolves the open incidents.</p>
+            )}
+          </Card>
+
+          <Card title="Detection">
+            <div className="grid grid-cols-2 gap-3">
+              <Stat label="Rule" value={<span className="font-mono text-xs">{inc.rule}</span>} />
+              <Stat label="Severity" value={inc.severity} />
+              <Stat label="Weight" value={Math.round(inc.weight)} />
+              <Stat label="Counts now" value={live ? (halfLife ? Math.round(nowWeight) : "yes") : "no, closed"} />
+            </div>
+            {inc.note && (
+              <div className="mt-3 rounded-lg bg-raised px-3 py-2 text-xs text-ink2">
+                <span className="font-medium text-ink">Note:</span> {inc.note}
+              </div>
+            )}
+          </Card>
+
+          <Card title={`Other incidents for ${principal.id}`} flush>
+            {person.isPending ? (
+              <div className="p-4">
+                <Loading rows={3} />
+              </div>
+            ) : person.isError ? (
+              <div className="p-4">
+                <ErrorBox error={person.error} compact retry={() => person.refetch()} />
+              </div>
+            ) : others.length === 0 ? (
+              <Empty title="None in the last 7 days" />
+            ) : (
+              <ul className="divide-y divide-line/60">
+                {others.slice(0, 8).map((o) => (
+                  <li key={o.id}>
+                    <Link to={`/console/incidents/${encodeURIComponent(o.id)}`} className="flex items-center justify-between gap-2 px-4 py-2 hover:bg-raised/60">
+                      <div className="min-w-0">
+                        <div className="truncate text-sm font-medium text-ink">{ruleLabel(o.rule)}</div>
+                        <div className="text-[11px] text-muted" title={dateTime(o.ts)}>
+                          {ago(o.ts)} · weight {Math.round(o.weight)}
+                        </div>
+                      </div>
+                      <div className="flex shrink-0 items-center gap-1">
+                        <SeverityPill severity={o.severity} />
+                        <IncidentStatusPill status={o.status} />
+                      </div>
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </Card>
+        </div>
       </div>
-
-      <Card
-        flush
-        title="Evidence timeline"
-        subtitle="The events the detection names (highlighted) and what the person did from an hour before to 15 minutes after"
-        actions={
-          <Segmented
-            value={only}
-            onChange={setOnly}
-            options={[
-              { value: "all", label: `All (${timeline.length})` },
-              { value: "evidence", label: `Evidence (${evidenceCount})` },
-            ]}
-          />
-        }
-      >
-        {rows.length === 0 ? (
-          <Empty title="No events in the window" hint="The evidence may have aged out of the activity store." />
-        ) : (
-          <ul className="max-h-[560px] overflow-y-auto">
-            {rows.map((e) => (
-              <FeedRow key={e.id} e={e} />
-            ))}
-          </ul>
-        )}
-      </Card>
-
-      <Card title="Admin actions since the incident" flush>
-        <AdminLog actions={actions} showTarget={false} empty="Nobody has acted on this person since the incident" />
-      </Card>
 
       <ReasonDialog
         open={!!next}
         onClose={() => setNext(null)}
-        title={next ? `${NEXT_COPY[next].label} incident` : ""}
+        title={next ? `${NEXT_COPY[next].label} · ${ruleLabel(inc.rule)} (${principal.id})` : ""}
         description={next ? NEXT_COPY[next].body : ""}
         reasonLabel="Note"
         reasonHint="Kept on the incident and in the admin log."
         reasonRequired={next === "resolved" || next === "dismissed"}
+        placeholder={next === "dismissed" ? "e.g. Confirmed with the manager: approved data migration." : `e.g. Spoke with ${principal.id}; export deleted.`}
         confirmLabel={next ? NEXT_COPY[next].label : ""}
         tone={next ? NEXT_COPY[next].tone : "primary"}
         onConfirm={async (note) => {
           await admin.setIncident(inc.id, next!, note);
           await qc.invalidateQueries({ queryKey: ["admin"] });
         }}
-      />
+      >
+        {(next === "resolved" || next === "dismissed") && restricted && (
+          <div className="rounded-lg bg-warn/10 px-3 py-2 text-xs text-ink2 ring-1 ring-inset ring-warn/30">
+            {principal.id} stays <b>{principal.status === "active" ? "limited" : principal.status}</b> after this. Use Restore on the person to lift it.
+          </div>
+        )}
+      </ReasonDialog>
     </div>
   );
 }
