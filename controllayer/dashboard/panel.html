@@ -1,24 +1,14 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-color-mode="auto" data-light-theme="light" data-dark-theme="dark_dimmed">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>AI Control Layer</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@primer/css@21.5.1/dist/primer.css">
 <link rel="stylesheet" href="/ui/core.css">
 </head>
-<body>
+<body class="color-bg-default color-fg-default">
 <div id="acl-root"></div>
 <script src="/ui/core.js"></script>
-<script>
-  // Theme files register window.ACL_THEME and load their component library's stylesheet.
-  (function () {
-    var name = new URLSearchParams(location.search).get("theme");
-    if (ACL.THEMES.indexOf(name) < 0) name = "blueprint";
-    var s = document.createElement("script");
-    s.src = "/ui/themes/" + name + ".js";
-    s.onload = function () { ACL.start(); };
-    document.body.appendChild(s);
-  })();
-</script>
 </body>
 </html>
