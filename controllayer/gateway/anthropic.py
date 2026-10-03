@@ -411,12 +411,16 @@ def mount(app: FastAPI, layer: ControlLayer, store: PolicyStore, http: httpx.Asy
                 parts = [_rest(b, assistant=role == "assistant") for b in content]
             else:
                 raise _Refused(error(400, f"messages[{i}].content must be a string or a list of blocks"))
-            # Everything else: tool_use, images, documents, unknown block types and keys.
+            # Everything else: tool_use, images, documents, unknown block types and keys. Of a returned
+            # reply only its own blocks are the model's; keys and `cache_control` added to it are the caller's.
             fields = {k: x for k, x in m.items() if k not in ("role", "content")}
-            if fields or any(parts):
-                _, rv = await check(flatten([fields, parts]), Direction.INPUT, resent, fetched=ours)
-                if rv.action is Action.REDACT:
-                    fields, content = tree([fields, content], rv, Direction.INPUT)
+            model_parts = [{k: x for k, x in p.items() if k != "cache_control"} for p in parts] if ours else []
+            caller_parts = [fields, [p.get("cache_control") for p in parts] if ours else parts]
+            for part, fetched in ((model_parts, True), (caller_parts, False)):
+                if text := flatten(part):
+                    _, rv = await check(text, Direction.INPUT, resent, fetched=fetched)
+                    if rv.action is Action.REDACT:
+                        fields, content = tree([fields, content], rv, Direction.INPUT)
             out_messages.append({"role": role, "content": content, **fields})
 
         out = {**body, "messages": out_messages}
