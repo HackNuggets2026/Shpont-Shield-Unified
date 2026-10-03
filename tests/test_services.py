@@ -439,6 +439,11 @@ def test_an_entitled_scope_lets_a_harmless_file_out_but_never_a_confidential_one
         assert "180k" not in json.dumps(r)
 
 
+def test_a_shared_file_is_vetted_by_its_text_not_its_owner_metadata(client):
+    client.post("/admin/risk/alice", json={"level": "watch"})  # watched: emails are redacted too
+    assert json.loads(text(share(client, HANDBOOK, "bob@acme.io")))["file_id"] == HANDBOOK
+
+
 def test_an_agent_shares_outside_only_with_external_share_in_its_grant(client):
     grant(client, "google-drive", scopes=("read", "admin"))
     assert "external_recipient" in share(client, HANDBOOK, "me@gmail.com", CODER)["error"]["message"]

@@ -1052,7 +1052,10 @@ GOOGLE_DRIVE = Service(
                 "role": a["role"],
             },
             ("file_id", "email", "role"),
-            egress=Egress(lambda a: _find(DATA["gdrive"], "id", a["file_id"], "file"), lambda a: [a["email"]]),
+            egress=Egress(
+                lambda a: _pick([_find(DATA["gdrive"], "id", a["file_id"], "file")], "name", "content"),
+                lambda a: [a["email"]],
+            ),
         ),
     ),
 )
