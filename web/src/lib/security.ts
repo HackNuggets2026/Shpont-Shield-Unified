@@ -36,6 +36,11 @@ export function triageOrder(a: Incident, b: Incident): number {
   return (STATUS_RANK[a.status] ?? 9) - (STATUS_RANK[b.status] ?? 9) || b.ts - a.ts;
 }
 
+/** Security's default order: high severity first, then open before acknowledged before closed, then newest. */
+export function severityFirst(a: Incident, b: Incident): number {
+  return (SEVERITY_RANK[a.severity] ?? 9) - (SEVERITY_RANK[b.severity] ?? 9) || (STATUS_RANK[a.status] ?? 9) - (STATUS_RANK[b.status] ?? 9) || b.ts - a.ts;
+}
+
 // ---- detection policy ----------------------------------------------------------------------------
 
 export interface DetectionPolicy {

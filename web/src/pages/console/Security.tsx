@@ -1,16 +1,22 @@
-import { useMemo } from "react";
-import { Link, useSearchParams } from "react-router-dom";
-import { useQuery } from "@tanstack/react-query";
-import { admin, type PrincipalRow } from "../../api";
+import { useMemo, useRef, useState } from "react";
+import { Link } from "react-router-dom";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
+import { admin } from "../../api";
+import { ops, type IncidentFilters } from "../../opsApi";
 import { ActivityFeed } from "../../components/ActivityFeed";
 import { AdminLog } from "../../components/AdminLog";
+import { Sparkline } from "../../components/charts";
 import { LevelPill, PersonStatusPill } from "../../components/pills";
 import { Card, Empty, ErrorBox, Kpi, Loading, PageHeader, Pill, Q, Segmented, Select, cx } from "../../components/ui";
-import { IconAlert, IconLock, IconRadar, IconUsers } from "../../components/icons";
+import { IconAlert, IconRadar, IconShield, IconUsers } from "../../components/icons";
+import { DepartmentSelect, OrgLine, Pager, SearchBox, TeamSelect, useDepartments, useUrlFilters } from "../../components/opsKit";
 import { IncidentsTable } from "../../components/security/IncidentsTable";
+import { OpenedClosedChart } from "../../components/security/OpenedClosedChart";
 import { RiskMeter } from "../../components/security/RiskMeter";
-import { ago } from "../../lib/format";
-import { detectionPolicy, incidentsWithHistory, isAuto, ruleLabel, triageOrder, type SecIncident } from "../../lib/security";
+import { RuleDeptHeatmap, type Cell } from "../../components/security/RuleDeptHeatmap";
+import { countC } from "../../lib/compact";
+import { pct } from "../../lib/format";
+import { detectionPolicy, isAuto, ruleLabel, RULES } from "../../lib/security";
 
 type StatusFilter = "active" | "open" | "acknowledged" | "resolved" | "dismissed" | "all";
 const STATUS_FILTERS: StatusFilter[] = ["active", "open", "acknowledged", "resolved", "dismissed", "all"];
@@ -23,248 +29,471 @@ const STATUS_LABEL: Record<StatusFilter, string> = {
   all: "All",
 };
 const SEVERITIES = ["high", "medium", "low"] as const;
+const PAGE = 25;
+const KEYS = ["status", "severity", "rule", "department", "team", "q", "person"] as const;
 
-const matchStatus = (f: StatusFilter, s: string) =>
-  f === "all" || (f === "active" ? s === "open" || s === "acknowledged" : s === f);
+/** Open incidents per severity: from the summary when the server gives it, else one count query each. */
+function useOpenBySeverity(fromSummary: Record<string, number> | undefined) {
+  const q = useQuery({
+    queryKey: ["admin", "incidents", "open-by-severity"],
+    queryFn: async () => {
+      const n = await Promise.all(SEVERITIES.map((s) => ops.incidentCount({ status: "open", severity: s })));
+      return Object.fromEntries(SEVERITIES.map((s, i) => [s, n[i] ?? 0])) as Record<string, number>;
+    },
+    enabled: fromSummary === undefined,
+    refetchInterval: 10_000,
+  });
+  return fromSummary ?? q.data;
+}
 
-const isRestricted = (p: PrincipalRow) => p.status !== "active" || p.budget_scale < 1;
-const atRisk = (p: PrincipalRow) => p.level !== "none" || isRestricted(p) || p.risk > 0;
+/** Rule × department counts: from the summary when the server gives it, else aggregated from the 30-day list. */
+function useMatrix(fromSummary: Cell[] | undefined, ready: boolean) {
+  const q = useQuery({
+    queryKey: ["admin", "incidents", "matrix-30d"],
+    queryFn: async () => {
+      const r = await ops.incidents({ days: 30, limit: 5000 });
+      const m = new Map<string, Cell>();
+      for (const i of r.rows) {
+        const d = i.department || "Unassigned";
+        const k = `${i.rule}|${d}`;
+        const c = m.get(k) ?? { rule: i.rule, department: d, open: 0, total: 0 };
+        c.total++;
+        if (i.status === "open" || i.status === "acknowledged") c.open++;
+        m.set(k, c);
+      }
+      return [...m.values()];
+    },
+    enabled: ready && !fromSummary,
+    refetchInterval: 15_000,
+  });
+  return { cells: fromSummary ?? q.data, q };
+}
 
 export function Security() {
-  const q = useQuery({ queryKey: ["admin", "incidents", "with-history"], queryFn: incidentsWithHistory, refetchInterval: 5_000 });
-  const people = useQuery({ queryKey: ["admin", "principals"], queryFn: admin.principals, refetchInterval: 5_000 });
+  const f = useUrlFilters(KEYS, { status: "active" });
+  const v = f.values;
+  const status = (STATUS_FILTERS.includes(v.status as StatusFilter) ? v.status : "active") as StatusFilter;
+  const tableRef = useRef<HTMLDivElement>(null);
+  const [mode, setMode] = useState<"open" | "total">("open");
+
+  const summary = useQuery({ queryKey: ["admin", "incidents", "summary", 30], queryFn: () => ops.incidentSummary(30), refetchInterval: 10_000 });
+  const openBySev = useOpenBySeverity(summary.data?.by_severity);
+  const matrix = useMatrix(summary.data?.by_rule_department, summary.isSuccess || summary.isError);
+  const outliers = useQuery({
+    queryKey: ["admin", "outliers", "risk", 20],
+    queryFn: async () => (await ops.riskOutliers(20)).filter((p) => p.risk >= 0.5 || p.status !== "active"),
+    refetchInterval: 10_000,
+  });
+  const { q: org } = useDepartments();
+  const restricted = useQuery({
+    queryKey: ["admin", "people", "restricted-counts"],
+    queryFn: async () => {
+      const st = ["quarantined", "revoked", "limited"] as const;
+      const n = await Promise.all(
+        st.map((s) =>
+          ops
+            .people({ status: s, limit: 1 })
+            .then((r) => r.total)
+            .catch(() => null),
+        ),
+      );
+      return Object.fromEntries(st.map((s, i) => [s, n[i]])) as Record<(typeof st)[number], number | null>;
+    },
+    refetchInterval: 15_000,
+  });
+  const adherence = useQuery({ queryKey: ["admin", "adherence", "day", 30], queryFn: () => ops.adherenceByDay(30), refetchInterval: 30_000 });
   const acts = useQuery({ queryKey: ["admin", "actions", "all"], queryFn: () => admin.actions(), refetchInterval: 10_000 });
   const pol = useQuery({ queryKey: ["admin", "policy", "detections"], queryFn: detectionPolicy, staleTime: 60_000 });
 
-  // Filters live in the URL so a filtered list can be linked to (e.g. ?person=frank from a profile).
-  const [sp, setSp] = useSearchParams();
-  const status = (STATUS_FILTERS.includes(sp.get("status") as StatusFilter) ? sp.get("status") : "active") as StatusFilter;
-  const sev = sp.get("severity") ?? "";
-  const rule = sp.get("rule") ?? "";
-  const who = sp.get("person") ?? "";
-  const set = (k: string, v: string, dflt = "") =>
-    setSp(
-      (prev) => {
-        const n = new URLSearchParams(prev);
-        if (v === dflt) n.delete(k);
-        else n.set(k, v);
-        return n;
-      },
-      { replace: true },
-    );
-  const filtered = status !== "active" || !!sev || !!rule || !!who;
+  const filters: IncidentFilters = {
+    status: status === "all" ? "" : status,
+    severity: v.severity,
+    rule: v.rule,
+    department: v.department,
+    team: v.team,
+    principal: v.person,
+    q: v.q,
+  };
+  const list = useQuery({
+    queryKey: ["admin", "incidents", "page", filters, f.page],
+    queryFn: () => ops.incidents({ ...filters, limit: PAGE, offset: f.page * PAGE }),
+    placeholderData: keepPreviousData,
+    refetchInterval: 5_000,
+  });
 
-  const all: SecIncident[] = useMemo(() => [...(q.data?.incidents ?? [])].sort(triageOrder), [q.data]);
-  const rules = useMemo(() => [...new Set(all.map((i) => i.rule))].sort((a, b) => ruleLabel(a).localeCompare(ruleLabel(b))), [all]);
-  const persons = useMemo(() => [...new Set(all.map((i) => i.principal))].sort(), [all]);
-  const rows = all.filter((i) => matchStatus(status, i.status) && (!sev || i.severity === sev) && (!rule || i.rule === rule) && (!who || i.principal === who));
-
-  const open = all.filter((i) => i.status === "open");
-  const acked = all.filter((i) => i.status === "acknowledged").length;
-  const bySev = Object.fromEntries(SEVERITIES.map((s) => [s, open.filter((i) => i.severity === s).length]));
-  const risky = (people.data ?? []).filter(atRisk);
-  const leveled = risky.filter((p) => p.level !== "none");
-  const restricted = (people.data ?? []).filter(isRestricted);
+  const s = summary.data;
+  const statusCounts = useMemo(() => {
+    if (!s) return null;
+    const sum = (k: "open" | "acknowledged" | "resolved" | "dismissed" | "total") => s.by_rule.reduce((a, r) => a + (r[k] ?? 0), 0);
+    const c = { open: sum("open"), acknowledged: sum("acknowledged"), resolved: sum("resolved"), dismissed: sum("dismissed"), all: sum("total") };
+    return { ...c, active: c.open + c.acknowledged } as Record<StatusFilter, number>;
+  }, [s]);
+  const openTotal = statusCounts?.open ?? (openBySev ? SEVERITIES.reduce((a, k) => a + (openBySev[k] ?? 0), 0) : undefined);
+  const atRisk = s ? s.by_department.reduce((a, d) => a + (d.people_at_risk ?? 0), 0) : (org.data?.totals.people_at_risk ?? undefined);
+  const rules = useMemo(() => {
+    const known = new Set([...(s?.by_rule.map((r) => r.rule) ?? []), ...Object.keys(RULES)]);
+    return [...known].sort((a, b) => ruleLabel(a).localeCompare(ruleLabel(b)));
+  }, [s]);
+  const th = pol.data?.response ?? null;
   const now = Date.now() / 1000;
   const autos24 = (acts.data ?? []).filter((a) => isAuto(a) && now - a.ts < 86400);
-  const autoKinds = Object.entries(autos24.reduce<Record<string, number>>((m, a) => ({ ...m, [a.action]: (m[a.action] ?? 0) + 1 }), {}));
-  const th = pol.data?.response ?? null;
-  const countFor = (f: StatusFilter) => all.filter((i) => matchStatus(f, i.status)).length;
+  const autoKinds = Object.entries(autos24.reduce<Record<string, number>>((m, a) => ({ ...m, [a.action]: (m[a.action] ?? 0) + 1 }), {})).sort(
+    (a, b) => b[1] - a[1],
+  );
+  const adh = adherence.data;
+  const adhTrend = (adh?.rows ?? []).filter((r) => r.total > 0).sort((a, b) => a.key.localeCompare(b.key));
+  const rs = restricted.data;
+  const restrictedTotal = rs ? (rs.quarantined ?? 0) + (rs.revoked ?? 0) + (rs.limited ?? 0) : null;
+
+  const toTable = () => requestAnimationFrame(() => tableRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }));
+  const pickCell = (rule: string, department: string) => {
+    f.set({ rule, department, team: "", severity: "", q: "", person: "", status: mode === "open" ? "active" : "all" });
+    toTable();
+  };
+  const pickDept = (department: string) => {
+    f.set({ department, team: "" });
+    toTable();
+  };
+  const unfiltered = status === "active" && !v.severity && !v.rule && !v.department && !v.team && !v.q && !v.person;
 
   return (
     <div className="space-y-4">
       <PageHeader
         title="Security"
-        subtitle="AI usage that looks like an attack: exfiltration, probing, stolen keys, tool drift, spend spikes. The system responds on its own; you confirm."
+        subtitle="AI usage that looks like an attack, across the whole organization: by rule and department first, then the incidents that need a human."
       />
 
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <Kpi
           label="Open incidents"
           icon={<IconAlert />}
-          tone={bySev.high ? "bad" : open.length ? "warn" : undefined}
-          value={q.isPending ? "…" : open.length}
+          tone={openBySev?.high ? "bad" : openTotal ? "warn" : undefined}
+          value={openTotal === undefined ? "…" : countC(openTotal)}
           sub={
             <span className="flex flex-wrap items-center gap-1">
-              {SEVERITIES.map((s) => (
-                <button key={s} type="button" onClick={() => setSp({ status: "open", severity: s }, { replace: true })} className="hover:opacity-80">
-                  <Pill tone={bySev[s] ? (s === "high" ? "bad" : s === "medium" ? "serious" : "warn") : "neutral"}>
-                    {bySev[s] ?? 0} {s}
+              {SEVERITIES.map((sv) => (
+                <button
+                  key={sv}
+                  type="button"
+                  onClick={() => {
+                    f.set({ status: "open", severity: sv, rule: "", department: "", team: "", q: "", person: "" });
+                    toTable();
+                  }}
+                  className="hover:opacity-80"
+                >
+                  <Pill tone={openBySev?.[sv] ? (sv === "high" ? "bad" : sv === "medium" ? "serious" : "warn") : "neutral"}>
+                    {openBySev ? countC(openBySev[sv] ?? 0) : "…"} {sv}
                   </Pill>
                 </button>
               ))}
-              {acked > 0 && <span className="text-[11px]">+{acked} acknowledged</span>}
+              {statusCounts && statusCounts.acknowledged > 0 && <span className="text-[11px]">+{countC(statusCounts.acknowledged)} acknowledged</span>}
             </span>
           }
         />
         <Kpi
           label="People at risk"
           icon={<IconUsers />}
-          tone={leveled.some((p) => p.level === "quarantine") ? "bad" : leveled.length ? "warn" : undefined}
-          value={people.isPending ? "…" : leveled.length}
+          tone={rs?.quarantined ? "bad" : atRisk ? "warn" : undefined}
+          value={atRisk === undefined ? "…" : countC(atRisk)}
           sub={
-            leveled.length ? (
-              <span className="flex flex-wrap items-center gap-1">
-                {leveled.slice(0, 3).map((p) => (
-                  <Link key={p.principal} to={`/console/people/${encodeURIComponent(p.principal)}`} className="inline-flex items-center gap-1 hover:opacity-80">
-                    <span className="font-medium text-ink2">{p.principal}</span>
-                    <LevelPill level={p.level} />
-                  </Link>
-                ))}
-                {leveled.length > 3 && <span>+{leveled.length - 3}</span>}
-              </span>
+            restrictedTotal === null ? (
+              "past the alert level"
+            ) : restrictedTotal === 0 ? (
+              "past the alert level · nobody restricted"
             ) : (
-              "Nobody past the alert level"
+              <span>
+                restricted now:{" "}
+                {[
+                  rs!.quarantined && `${countC(rs!.quarantined)} quarantined`,
+                  rs!.revoked && `${countC(rs!.revoked)} revoked`,
+                  rs!.limited && `${countC(rs!.limited)} limited`,
+                ]
+                  .filter(Boolean)
+                  .join(" · ")}
+              </span>
             )
           }
         />
         <Kpi
-          label="Auto actions, 24h"
+          label="Auto-responses, 24h"
           icon={<IconRadar />}
-          tone={autos24.length ? "serious" : undefined}
-          value={acts.isPending ? "…" : autos24.length}
-          sub={autoKinds.length ? autoKinds.map(([k, n]) => `${n} ${k.replace(/_/g, " ")}`).join(" · ") : "Nothing needed doing"}
+          tone={s?.auto_actions_24h ? "serious" : undefined}
+          value={s ? countC(s.auto_actions_24h) : "…"}
+          sub={
+            autoKinds.length
+              ? autoKinds
+                  .slice(0, 3)
+                  .map(([k, n]) => `${n} ${k.replace(/_/g, " ")}`)
+                  .join(" · ")
+              : "Nothing needed doing"
+          }
         />
         <Kpi
-          label="Restricted now"
-          icon={<IconLock />}
-          tone={restricted.some((p) => p.status !== "active") ? "bad" : restricted.length ? "warn" : undefined}
-          value={people.isPending ? "…" : restricted.length}
-          sub={restricted.length ? restricted.map((p) => `${p.principal} (${p.status === "active" ? `${Math.round(p.budget_scale * 100)}% budget` : p.status})`).join(", ") : "Everyone has normal access"}
-          to="/console/people"
+          label="Policy adherence, 30d"
+          icon={<IconShield />}
+          tone={adh?.overall?.adherence != null && adh.overall.adherence < 0.95 ? "warn" : undefined}
+          value={adh ? pct(adh.overall?.adherence ?? null) : "…"}
+          sub={
+            adhTrend.length > 1 ? (
+              <span className="block">
+                <Sparkline values={adhTrend.map((r) => r.adherence ?? 1)} height={22} color="var(--s3)" />
+                <span>of {countC(adh?.overall?.total ?? 0)} checks needed no intervention</span>
+              </span>
+            ) : (
+              "checks that needed no intervention"
+            )
+          }
         />
       </div>
 
       <div className="grid gap-4 xl:grid-cols-3">
         <Card
-          flush
           className="xl:col-span-2"
-          title={
-            <span>
-              Incidents <span className="font-normal text-muted">· {rows.length}</span>
-            </span>
-          }
-          subtitle="Open first, newest first. Click one for its evidence and actions."
+          title="Where incidents happen"
+          subtitle="Rule × department. Click a cell to list its incidents below."
           actions={
-            <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto">
-              <Select label="Severity" value={sev} onChange={(v) => set("severity", v)} options={[{ value: "", label: "Any" }, ...SEVERITIES.map((s) => ({ value: s, label: s }))]} />
-              <Select label="Rule" value={rule} onChange={(v) => set("rule", v)} options={[{ value: "", label: "Any rule" }, ...rules.map((r) => ({ value: r, label: ruleLabel(r) }))]} />
-              <Select label="Person" value={who} onChange={(v) => set("person", v)} options={[{ value: "", label: "Anyone" }, ...persons.map((r) => ({ value: r, label: r }))]} />
-              {filtered && (
-                <button type="button" onClick={() => setSp({}, { replace: true })} className="text-xs font-medium text-accent hover:underline">
-                  Reset
-                </button>
-              )}
-            </div>
+            <Segmented
+              value={mode}
+              onChange={setMode}
+              options={[
+                { value: "open", label: "Needs attention" },
+                { value: "total", label: "Last 30 days" },
+              ]}
+            />
           }
         >
-          <div className="overflow-x-auto border-b border-line px-4 py-2">
-            <Segmented<StatusFilter>
-              value={status}
-              onChange={(v) => set("status", v, "active")}
-              options={STATUS_FILTERS.map((f) => ({
-                value: f,
-                label: (
-                  <span className="whitespace-nowrap">
-                    {STATUS_LABEL[f]} <span className="tnum text-muted">{q.data ? countFor(f) : ""}</span>
-                  </span>
-                ),
-              }))}
+          {matrix.cells ? (
+            <RuleDeptHeatmap
+              cells={matrix.cells}
+              mode={mode}
+              onPick={pickCell}
+              selected={v.rule && v.department ? { rule: v.rule, department: v.department } : undefined}
             />
-          </div>
-          <Q q={q} rows={6}>
-            {(d) => (
-              <IncidentsTable
-                incidents={rows}
-                empty={d.incidents.length === 0 ? "No incidents. All quiet." : status === "active" && !sev && !rule && !who ? "Nothing needs attention" : "No incidents match the filters"}
-                hint={d.incidents.length === 0 ? "Detections raise incidents when usage looks like an attack." : status === "active" ? "Every incident is resolved or dismissed." : undefined}
-              />
-            )}
-          </Q>
+          ) : matrix.q.isError ? (
+            <ErrorBox error={matrix.q.error} retry={() => matrix.q.refetch()} />
+          ) : (
+            <Loading rows={6} />
+          )}
         </Card>
 
         <div className="min-w-0 space-y-4">
-          <Card
-            title="People at risk"
-            subtitle={pol.data ? `Decaying sum of open incident weights; halves every ${Math.round(pol.data.half_life_minutes)} min` : "Decaying sum of open incident weights"}
-            actions={
-              <Link to="/console/people" className="text-xs font-medium text-accent hover:underline">
-                All people →
-              </Link>
-            }
-            flush
-          >
-            {people.isPending ? (
-              <div className="p-4">
-                <Loading rows={4} />
-              </div>
-            ) : people.isError ? (
-              <div className="p-4">
-                <ErrorBox error={people.error} retry={() => people.refetch()} />
-              </div>
-            ) : risky.length === 0 ? (
-              <Empty title="Nobody carries risk right now" hint="Scores rise with incidents and decay on their own." />
-            ) : (
-              <ul className="divide-y divide-line/60">
-                {risky.map((p) => (
-                  <li key={p.principal}>
-                    <Link
-                      to={`/console/people/${encodeURIComponent(p.principal)}`}
-                      className={cx("flex items-center justify-between gap-3 px-4 py-2.5 hover:bg-raised/60", p.level === "quarantine" && "bg-bad/[0.04]")}
-                    >
-                      <div className="min-w-0">
-                        <div className="flex flex-wrap items-center gap-1.5">
-                          <span className="font-medium text-ink">{p.principal}</span>
-                          <LevelPill level={p.level} />
-                          {isRestricted(p) && <PersonStatusPill status={p.status} scale={p.budget_scale} />}
-                        </div>
-                        <div className="mt-0.5 truncate text-[11px] text-muted" title={p.reason || undefined}>
-                          {p.team} · {p.open_incidents} open
-                          {isRestricted(p) && p.by ? ` · by ${p.by}${p.since ? ` ${ago(p.since)}` : ""}` : ""}
-                        </div>
-                      </div>
-                      <RiskMeter score={p.risk} thresholds={th} compact />
-                    </Link>
-                  </li>
-                ))}
-              </ul>
-            )}
-            {th && (
-              <div className="flex flex-wrap gap-x-3 gap-y-1 border-t border-line px-4 py-2 text-[11px] text-muted">
-                <span>
-                  alert ≥ <b className="text-ink2">{th.alert}</b>
-                </span>
-                <span>
-                  tighten ≥ <b className="text-ink2">{th.tighten}</b> (budget to {Math.round(th.tighten_budget_scale * 100)}%)
-                </span>
-                <span>
-                  quarantine ≥ <b className="text-ink2">{th.quarantine}</b>
-                </span>
-                {!th.auto && <span className="text-warn">automatic responses off</span>}
-              </div>
-            )}
+          <Card title="Opened vs. closed" subtitle="Incidents per day, last 30 days">
+            <Q q={summary} rows={5}>
+              {(d) => <OpenedClosedChart trend={d.trend} height={170} />}
+            </Q>
           </Card>
-
-          <Card title="What the system did on its own" subtitle="Automatic responses, newest first" flush>
-            <Q q={acts} rows={3}>
-              {(d) => (
-                <div className="max-h-[300px] overflow-y-auto">
-                  <AdminLog actions={d.filter(isAuto).slice(0, 20)} empty="No automatic responses yet" />
-                </div>
-              )}
+          <Card title="By department" subtitle="Open incidents and people past the alert level. Click to filter." flush>
+            <Q q={summary} rows={4}>
+              {(d) =>
+                d.by_department.length === 0 ? (
+                  <Empty title="No incidents" />
+                ) : (
+                  <ul className="divide-y divide-line/60">
+                    {[...d.by_department]
+                      .sort((a, b) => b.open - a.open || b.total - a.total)
+                      .map((r) => (
+                        <li key={r.department}>
+                          <button
+                            type="button"
+                            onClick={() => pickDept(r.department)}
+                            className={cx(
+                              "flex w-full items-center justify-between gap-3 px-4 py-2 text-left text-xs hover:bg-raised/60",
+                              v.department === r.department && "bg-accent/[0.06]",
+                            )}
+                          >
+                            <span className="min-w-0 truncate font-medium text-ink">{r.department}</span>
+                            <span className="tnum flex shrink-0 items-center gap-3 text-muted">
+                              <span className={r.open ? "font-semibold text-bad" : ""}>{countC(r.open)} open</span>
+                              <span>{countC(r.people_at_risk)} at risk</span>
+                              <span className="hidden sm:inline">{countC(r.total)} in 30d</span>
+                            </span>
+                          </button>
+                        </li>
+                      ))}
+                  </ul>
+                )
+              }
             </Q>
           </Card>
         </div>
       </div>
 
-      <Card title="Detections and high-severity events" subtitle="Live: blocked attacks, exfiltration attempts and the incidents they raise" flush>
+      <div ref={tableRef} className="min-w-0 scroll-mt-4">
+        <Card
+          flush
+          title={
+            <span>
+              Incidents{" "}
+              <span className="font-normal text-muted">
+                · {list.data ? (list.data.total !== null ? countC(list.data.total) : `${list.data.rows.length}${list.data.hasMore ? "+" : ""}`) : "…"}
+              </span>
+            </span>
+          }
+          subtitle="High severity first, then open before acknowledged, then newest. Click one for its evidence."
+        >
+          <div className="flex flex-wrap items-center gap-2 border-b border-line px-4 py-2">
+            <Select
+              label="Severity"
+              value={v.severity}
+              onChange={(x) => f.set({ severity: x })}
+              options={[{ value: "", label: "Any severity" }, ...SEVERITIES.map((x) => ({ value: x, label: x }))]}
+            />
+            <Select
+              label="Rule"
+              value={v.rule}
+              onChange={(x) => f.set({ rule: x })}
+              options={[{ value: "", label: "Any rule" }, ...rules.map((r) => ({ value: r, label: ruleLabel(r) }))]}
+            />
+            <DepartmentSelect value={v.department} onChange={(x) => f.set({ department: x, team: "" })} />
+            <TeamSelect department={v.department} value={v.team} onChange={(x) => f.set({ team: x })} />
+            <SearchBox value={v.q} onChange={(x) => f.set({ q: x })} placeholder="Person: name, email, id" />
+            {v.person && (
+              <Pill tone="accent">
+                person {v.person}{" "}
+                <button type="button" className="ml-1" onClick={() => f.set({ person: "" })} aria-label="Clear person">
+                  ×
+                </button>
+              </Pill>
+            )}
+            {f.dirty && (
+              <button type="button" onClick={f.reset} className="text-xs font-medium text-accent hover:underline">
+                Reset
+              </button>
+            )}
+          </div>
+          <div className="overflow-x-auto border-b border-line px-4 py-2">
+            <Segmented<StatusFilter>
+              value={status}
+              onChange={(x) => f.set({ status: x })}
+              options={STATUS_FILTERS.map((x) => ({
+                value: x,
+                label: (
+                  <span className="whitespace-nowrap">
+                    {STATUS_LABEL[x]}{" "}
+                    {statusCounts && !v.severity && !v.rule && !v.department && !v.team && !v.q && !v.person && x !== "all" && (
+                      <span className="tnum text-muted" title="last 30 days">
+                        {countC(statusCounts[x])}
+                      </span>
+                    )}
+                  </span>
+                ),
+              }))}
+            />
+          </div>
+          <Q q={list} rows={8}>
+            {(d) => (
+              <>
+                <IncidentsTable
+                  incidents={d.rows}
+                  empty={unfiltered ? "Nothing needs attention" : "No incidents match the filters"}
+                  hint={unfiltered ? "Every incident is resolved or dismissed." : undefined}
+                />
+                <Pager
+                  page={f.page}
+                  size={PAGE}
+                  shown={d.rows.length}
+                  total={d.total}
+                  hasMore={d.hasMore}
+                  onPage={f.setPage}
+                  fetching={list.isPlaceholderData}
+                  className="border-t border-line"
+                />
+              </>
+            )}
+          </Q>
+        </Card>
+      </div>
+
+      <div className="grid gap-4 lg:grid-cols-2">
+        <Card
+          title="People at risk"
+          subtitle={
+            atRisk !== undefined && atRisk > 20
+              ? `Top 20 of ${countC(atRisk)}, highest risk score first`
+              : pol.data
+                ? `Decaying sum of open incident weights; halves every ${Math.round(pol.data.half_life_minutes)} min`
+                : "Highest risk score first"
+          }
+          actions={
+            <Link to="/console/people?sort=risk" className="text-xs font-medium text-accent hover:underline">
+              All people →
+            </Link>
+          }
+          flush
+        >
+          {outliers.isPending ? (
+            <div className="p-4">
+              <Loading rows={5} />
+            </div>
+          ) : outliers.isError ? (
+            <div className="p-4">
+              <ErrorBox error={outliers.error} retry={() => outliers.refetch()} />
+            </div>
+          ) : outliers.data.length === 0 ? (
+            <Empty title="Nobody carries risk right now" hint="Scores rise with incidents and decay on their own." />
+          ) : (
+            <ul className="max-h-[480px] divide-y divide-line/60 overflow-y-auto">
+              {outliers.data.map((p) => (
+                <li key={p.principal}>
+                  <Link
+                    to={`/console/people/${encodeURIComponent(p.principal)}`}
+                    className={cx("flex items-center justify-between gap-3 px-4 py-2.5 hover:bg-raised/60", p.level === "quarantine" && "bg-bad/[0.04]")}
+                  >
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <span className="font-medium text-ink">{p.name || p.principal}</span>
+                        {p.level && p.level !== "none" && <LevelPill level={p.level} />}
+                        {p.status && p.status !== "active" && <PersonStatusPill status={p.status} />}
+                      </div>
+                      <OrgLine team={p.team} department={p.department} className="mt-0.5" />
+                      <div className="text-[11px] text-muted">
+                        {p.open_incidents} open incident{p.open_incidents === 1 ? "" : "s"}
+                      </div>
+                    </div>
+                    <RiskMeter score={p.risk} thresholds={th} compact />
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          )}
+          {th && (
+            <div className="flex flex-wrap gap-x-3 gap-y-1 border-t border-line px-4 py-2 text-[11px] text-muted">
+              <span>
+                alert ≥ <b className="text-ink2">{th.alert}</b>
+              </span>
+              <span>
+                tighten ≥ <b className="text-ink2">{th.tighten}</b> (budget to {Math.round(th.tighten_budget_scale * 100)}%)
+              </span>
+              <span>
+                quarantine ≥ <b className="text-ink2">{th.quarantine}</b>
+              </span>
+              {!th.auto && <span className="text-warn">automatic responses off</span>}
+            </div>
+          )}
+        </Card>
+
+        <Card title="What the system did on its own" subtitle="Latest automatic responses" flush>
+          <Q q={acts} rows={3}>
+            {(d) => (
+              <div className="max-h-[520px] overflow-y-auto">
+                <AdminLog actions={d.filter(isAuto).slice(0, 15)} empty="No automatic responses yet" />
+              </div>
+            )}
+          </Q>
+        </Card>
+      </div>
+
+      <Card
+        title="Security signal"
+        subtitle="Live: blocks, redactions, incidents, grants, zombie flags and Claude Code rejections. Allowed checks are left out."
+        flush
+      >
         <ActivityFeed
-          load={admin.activity}
-          queryKey={["admin", "activity", "security"]}
-          fixed={{ severity: "high" }}
+          load={(p) => ops.activity({ ...p, interesting: true })}
+          queryKey={["admin", "activity", "security", "interesting"]}
           linkPeople
           maxH="420px"
-          emptyHint="High-severity events (blocked attacks, exfiltration) show up here."
+          emptyHint="Blocked attacks, exfiltration attempts and the incidents they raise show up here."
         />
       </Card>
     </div>
