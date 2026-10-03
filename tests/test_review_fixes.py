@@ -194,3 +194,13 @@ def test_incident_events_stay_private_when_the_policy_hides_risk(make_client):
     c2 = make_client(mutate=lambda d: d["privacy"].update(show_risk_to_employee=True))
     _incident_on_carol(c2)
     assert any(e["kind"] == "incident" for e in c2.get("/me/activity", headers=KEYS["carol"]).json())
+
+
+def test_clearing_restrictions_keeps_live_grants_and_approvals(client):
+    client.post("/admin/principals/carol/grants", json={"resource": "prod_db", "reason": "on call"})
+    client.post("/admin/principals/carol", json={"approved_workflows": ["load_test"], "reason": "ok"})
+    client.post("/admin/principals/carol", json={"status": "quarantined", "budget_scale": 0.5, "reason": "x"})
+    assert client.post("/admin/principals/carol", json={"clear": True, "reason": "false alarm"}).status_code == 200
+    pp = client.app.state.store.policy.principal("carol")
+    assert (pp.status, pp.budget_scale, pp.reason) == ("active", 1.0, "")
+    assert [g.resource for g in pp.grants] == ["prod_db"] and pp.approved_workflows == ["load_test"]

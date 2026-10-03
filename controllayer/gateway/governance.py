@@ -202,7 +202,9 @@ def register(
         if not reason:
             return err("a reason is required; it is shown to the employee")
         if body.get("clear"):
-            resp = _write(request, {"principals": {pid: None}}, "clear_restrictions", pid, reason)
+            # Restrictions go; what was approved for them (grants, workflows) stays: revoking is its own action.
+            reset = dict.fromkeys(("status", "budget_scale", "reason", "by", "since"))
+            resp = _write(request, {"principals": {pid: reset}}, "clear_restrictions", pid, reason)
         else:
             patch: dict[str, Any] = {k: body[k] for k in ("status", "budget_scale", "approved_workflows") if k in body}
             if not patch:
