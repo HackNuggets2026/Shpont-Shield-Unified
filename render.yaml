@@ -1,0 +1,16 @@
+# Render Blueprint: the demo gateway on a free web service (512 MB, sleeps after 15 min idle).
+# Dashboard > New > Blueprint > this repo. Demo mode: no credentials, mock LLM and mock services.
+services:
+  - type: web
+    name: shpont-shield
+    runtime: docker
+    plan: free
+    branch: main
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    dockerCommand: sh deploy/start.sh
+    healthCheckPath: /admin/summary
+    autoDeployTrigger: commit
+    envVars:
+      - key: ACL_DEMO_MODE
+        value: "true"
