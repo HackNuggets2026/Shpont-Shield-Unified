@@ -170,6 +170,8 @@ def create_app(
         override = request.headers.get("x-pii-override")
         for i, m in enumerate(messages):
             direction = Direction.TOOL_RESULT if m.get("role") == "tool" else Direction.INPUT
+            # A reply this gateway returned, re-sent as history, is the model's text, not the employee's.
+            ours = m.get("role") == "assistant" and layer.is_our_reply(principal, _reply_signature(m))
             metered = i == last and direction is Direction.INPUT
             content = m.get("content")
             text = _text(content)
@@ -181,6 +183,7 @@ def create_app(
                 channel="chat",
                 metered=metered,
                 resent=i != last,
+                fetched=ours,
                 pii_override=override,
                 mask_map=mask_map,
             )
@@ -219,6 +222,7 @@ def create_app(
                     channel="chat",
                     metered=False,
                     resent=i != last,
+                    fetched=ours,
                 )
                 rv = await layer.evaluate(rctx)
                 if rv.blocked:
@@ -314,19 +318,50 @@ def create_app(
         )
         content, finish = (ov.text if ov.action is Action.REDACT else completion.content), "stop"
         if ov.blocked:
-            content, finish = f"[Response withheld by policy: {ov.reason}]", "content_filter"
+            # The reason goes in `control`, not the text: clients re-send this text as history.
+            content, finish = f"[Response withheld by policy, request {metered_ctx.request_id}]", "content_filter"
         else:
             for placeholder, original in mask_map.items():  # the employee sees their own data again
                 content = content.replace(placeholder, original)
         if ov.action is Action.WARN:
             warnings.append(ov.reason)
 
+        # Function calls the model wants the agent to make are model output too.
+        tool_calls = None
+        if not ov.blocked and completion.raw:
+            tool_calls = ((completion.raw.get("choices") or [{}])[0].get("message") or {}).get("tool_calls")
+        if tool_calls:
+            tv = await layer.evaluate(
+                Context(
+                    principal,
+                    Direction.OUTPUT,
+                    flatten(tool_calls),
+                    model=model,
+                    channel="chat",
+                    request_id=metered_ctx.request_id,
+                    fetched=True,
+                    known_pii=frozenset(known_pii),
+                )
+            )
+            if tv.action is Action.REDACT:
+                tool_calls = (
+                    layer.redact_tree(tool_calls, principal, Direction.OUTPUT) if layer.spans_only(tv) else None
+                )
+            if tv.blocked or tool_calls is None:
+                tool_calls, finish = None, "content_filter"
+                warnings.append(f"tool calls withheld: {tv.reason}")
+            elif finish == "stop":
+                finish = "tool_calls"
+        message: dict[str, Any] = {"role": "assistant", "content": content}
+        if tool_calls:
+            message["tool_calls"] = tool_calls
+
         resp = {
             "id": f"chatcmpl-{metered_ctx.request_id}",
             "object": "chat.completion",
             "created": int(time.time()),
             "model": model,
-            "choices": [{"index": 0, "message": {"role": "assistant", "content": content}, "finish_reason": finish}],
+            "choices": [{"index": 0, "message": message, "finish_reason": finish}],
             "usage": {
                 "prompt_tokens": completion.input_tokens,
                 "completion_tokens": completion.output_tokens,
@@ -335,16 +370,18 @@ def create_app(
             "control": {
                 "input_request_id": metered_ctx.request_id,
                 "output_action": ov.action.value,
+                "output_reason": ov.reason,
                 "warnings": warnings,
             },
         }
+        layer.remember_reply(principal, _reply_signature(message))
         headers = {"x-control-request-id": metered_ctx.request_id, "x-control-action": ov.action.value}
         if body.get("stream"):
             # The full reply must be inspected before release, so it is sent as a single chunk.
             chunk = {
                 **resp,
                 "object": "chat.completion.chunk",
-                "choices": [{"index": 0, "delta": {"role": "assistant", "content": content}, "finish_reason": finish}],
+                "choices": [{"index": 0, "delta": _stream_delta(message), "finish_reason": finish}],
             }
             payload = f"data: {json.dumps(chunk)}\n\ndata: [DONE]\n\n"
             return StreamingResponse(iter([payload]), media_type="text/event-stream", headers=headers)
@@ -905,6 +942,18 @@ async def _json_object(request: Request) -> dict[str, Any]:
     if not isinstance(body, dict):
         raise BadRequest("body must be a JSON object")
     return body
+
+
+def _reply_signature(m: dict[str, Any]) -> str:
+    """What identifies an assistant message the gateway returned when the client re-sends it."""
+    return flatten({"content": _text(m.get("content")), "tool_calls": m.get("tool_calls")})
+
+
+def _stream_delta(message: dict[str, Any]) -> dict[str, Any]:
+    delta = dict(message)
+    if "tool_calls" in delta:  # streamed tool calls carry their position
+        delta["tool_calls"] = [{"index": i, **tc} for i, tc in enumerate(delta["tool_calls"])]
+    return delta
 
 
 def _is_text_part(p: Any) -> bool:

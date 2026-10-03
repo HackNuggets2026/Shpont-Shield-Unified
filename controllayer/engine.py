@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import time
 import unicodedata
@@ -50,6 +51,7 @@ class ControlLayer:
         self._team_cache: dict[tuple[str, str], Policy] = {}
         # Verdicts for unmetered history re-checks, so a long conversation costs one model call per message.
         self._seen: OrderedDict[tuple, Verdict] = OrderedDict()
+        self._replies: OrderedDict[tuple[str, str], None] = OrderedDict()  # chat replies returned
         store.listeners.append(self._on_reload)
 
     @property
@@ -96,6 +98,16 @@ class ControlLayer:
             self._backend_key = key
         assert self._backend is not None
         return self._backend
+
+    def remember_reply(self, principal: Principal, text: str) -> None:
+        key = (principal.id, hashlib.sha256(text.encode()).hexdigest())
+        self._replies[key] = None
+        self._replies.move_to_end(key)
+        if len(self._replies) > 100_000:
+            self._replies.popitem(last=False)
+
+    def is_our_reply(self, principal: Principal, text: str) -> bool:
+        return (principal.id, hashlib.sha256(text.encode()).hexdigest()) in self._replies
 
     @staticmethod
     def spans_only(v: Verdict) -> bool:
