@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import calendar
 import hmac
+import math
 import time
 from collections.abc import Awaitable, Callable
 from fnmatch import fnmatch
@@ -579,6 +580,8 @@ def register(
                 minutes = float(body.get("minutes") or (r.grant.max_minutes if r.grant else 60))
             except (TypeError, ValueError):
                 return err("minutes must be a number")
+            if not math.isfinite(minutes) or minutes <= 0:
+                return err("minutes must be a positive number")
             detail = {"resource": body["resource"], "minutes": minutes}
             if isinstance(body.get("actions"), list):
                 detail["actions"] = [a for a in body["actions"] if isinstance(a, str)]

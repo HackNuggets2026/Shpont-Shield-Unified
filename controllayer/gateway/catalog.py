@@ -15,6 +15,7 @@ FinOps FOCUS / Backstage exports.
 from __future__ import annotations
 
 import hmac
+import math
 import time
 import uuid
 from collections.abc import Awaitable, Callable
@@ -84,10 +85,13 @@ def register(
             minutes = float(body.get("minutes") or r.grant.max_minutes)
         except (TypeError, ValueError):
             return "minutes must be a number"
-        if minutes <= 0:
-            return "minutes must be positive"
+        if not math.isfinite(minutes) or minutes <= 0:
+            return "minutes must be a positive number"
         minutes = min(minutes, r.grant.max_minutes)
-        actions = [a for a in body.get("actions") or [] if isinstance(a, str)]
+        raw = body.get("actions") or []
+        actions = (
+            [raw] if isinstance(raw, str) else [a for a in raw if isinstance(a, str)] if isinstance(raw, list) else []
+        )
         if r.actions and set(actions) - set(r.actions):
             return f"{name} supports actions {r.actions}"
         wf = body.get("workflow") or None

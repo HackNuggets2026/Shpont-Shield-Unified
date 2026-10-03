@@ -128,3 +128,18 @@ def test_one_employee_cannot_shift_another_employees_cumulative_baseline(client)
     client.post("/v1/metrics", json=_active_time(10_000), headers=KEYS["carol"])  # same session id, her key
     client.post("/v1/metrics", json=_active_time(80), headers=KEYS["alice"])
     assert _active(client, "alice") == [30, 50]
+
+
+@pytest.mark.parametrize("minutes", ["nan", "inf", -5])
+def test_grant_minutes_must_be_a_positive_finite_number(client, minutes):
+    body = {"kind": "grant", "resource": "prod_db", "minutes": minutes, "reason": "incident"}
+    assert client.post("/me/requests", json=body, headers=KEYS["carol"]).status_code == 400
+    r = client.post("/admin/principals/carol/grants", json={"resource": "prod_db", "minutes": minutes, "reason": "x"})
+    assert r.status_code == 400
+    # A NaN expiry used to make every grant listing (and the catalog) a 500.
+    assert client.get("/admin/grants").status_code == 200 and client.get("/admin/catalog").status_code == 200
+
+
+def test_grant_actions_may_be_a_single_string(client):
+    r = client.post("/admin/principals/carol/grants", json={"resource": "prod_db", "actions": "read", "reason": "x"})
+    assert r.status_code == 200 and r.json()["grant"]["actions"] == ["read"]
