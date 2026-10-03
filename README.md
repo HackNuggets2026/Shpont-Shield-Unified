@@ -35,8 +35,10 @@ python -m venv .venv && .venv/bin/pip install -e '.[dev]'
 .venv/bin/python -m pytest              # full self-test suite, ~5 s
 .venv/bin/python -m controllayer        # gateway on http://127.0.0.1:8787
 .venv/bin/python demo/agent.py          # scripted agent: benign steps + attacks
-open 'http://127.0.0.1:8787/?token=demo-admin-token'   # dashboard
+open 'http://127.0.0.1:8787/'          # security console
 ```
+
+The shipped policy runs in **demo mode** (`identity.demo_mode: true`), so nothing asks for a credential: the console, `/admin/*` and `/metrics` skip the admin token, a caller without a known API key acts as `identity.demo_principal` (alice), `/me` offers a "viewing as" switch, and risk signals name their integration in the body. A supplied API key still identifies its owner, which is how the demo agent acts as different people. **Demo mode must be off in production** (`ACL_DEMO_MODE=false`, or `demo_mode: false` in the policy); while it is on, the gateway logs a warning at startup and `/admin/summary` reports `"demo_mode": true`.
 
 By default the policy uses the `mock` upstream and the `heuristic` semantic backend. The heuristic backend is a keyword stand-in for the decision model, so everything runs on a laptop with no GPU.
 
@@ -53,8 +55,8 @@ Without Docker, set `ACL_SEMANTIC=ollama ACL_UPSTREAM=ollama` before starting th
 
 | URL | Who | What |
 |---|---|---|
-| `/me` | Employees (their own key; with `identity.panel_demo: true` a "viewing as" switch instead) | Usage, a monitoring notice, recent activity of themselves and their agents, and **company resources**: grant or revoke each of their agents' access to company services and MCP servers, with scopes and expiry (a scope click keeps the expiry; an expired grant is renewed explicitly) |
-| `/security` (also `/`) | Security staff (`?token=`) | Posture, threats, controls, budgets, latency, audit trail, **insider risk** (scores; per person AUTO or an override to normal/watch/restricted), **silent alerts**, all agent grants (revoke), resource catalog (suspend) |
+| `/me` | Employees (their own key; in demo mode a "viewing as" switch instead) | Usage, a monitoring notice, recent activity of themselves and their agents, and **company resources**: grant or revoke each of their agents' access to company services and MCP servers, with scopes and expiry (a scope click keeps the expiry; an expired grant is renewed explicitly) |
+| `/security` (also `/`) | Security staff (`?token=`, none in demo mode) | Posture, threats, controls, budgets, latency, audit trail, **insider risk** (scores; per person AUTO or an override to normal/watch/restricted), **silent alerts**, all agent grants (revoke), resource catalog (suspend) |
 
 Both panels are plain HTML on [Primer CSS](https://primer.style/css) (loaded from jsDelivr): `panel.html` loads `core.js`, which fetches the data, composes the page and handles every action. Most actions are a single click: risk levels and filters are segmented controls, suspension is a toggle, and an agent's grant is edited by clicking its scopes.
 
@@ -89,7 +91,7 @@ A person's level, strongest rule first:
 2. **Auto.** Otherwise the higher of the score-based level and the strongest active external signal.
 3. **Owner.** An agent's level is the higher of its own and its owner's.
 
-An integration listed in `identity.integrations` (`{name: {token_env, max_level, max_ttl_hours, max_sources}}`) sends `POST /admin/risk/{pid}/signal` with `Authorization: Bearer <its token>` and `{"level"` or `"score", "ttl_seconds", "source", "reason"}`. A score maps through `insider_risk.levels`. The level is capped at `max_level`. Each source (`<integration>` or `<integration>/<source>`) holds one signal, which its next signal replaces; `normal` withdraws it. An integration can only write its own sources, and at most `max_sources` (default 8) live ones per person: past that, a new source displaces the weakest, soonest-expiring one (named in the reply as `evicted`), or is refused with 429 if every live one is stronger. Stored signals count only under the current policy: removing an integration (say its token leaked) voids its signals at once, and lowering its `max_level` or `max_ttl_hours` caps them. Signals persist in `data/state.json`, are audited, show in `/admin/risk` and the security panel (where one click dismisses them), and raise a silent alert when they lift a level. The admin token is not accepted on this endpoint, and an integration token works nowhere else.
+An integration listed in `identity.integrations` (`{name: {token_env, max_level, max_ttl_hours, max_sources}}`) sends `POST /admin/risk/{pid}/signal` with `Authorization: Bearer <its token>` and `{"level"` or `"score", "ttl_seconds", "source", "reason"}`. A score maps through `insider_risk.levels`. The level is capped at `max_level`. Each source (`<integration>` or `<integration>/<source>`) holds one signal, which its next signal replaces; `normal` withdraws it. An integration can only write its own sources, and at most `max_sources` (default 8) live ones per person: past that, a new source displaces the weakest, soonest-expiring one (named in the reply as `evicted`), or is refused with 429 if every live one is stronger. Stored signals count only under the current policy: removing an integration (say its token leaked) voids its signals at once, and lowering its `max_level` or `max_ttl_hours` caps them. Signals persist in `data/state.json`, are audited, show in `/admin/risk` and the security panel (where one click dismisses them), and raise a silent alert when they lift a level. The admin token is not accepted on this endpoint, and an integration token works nowhere else. In demo mode a call without an integration token names its integration in the body (`"integration": "wazuh"`), whose caps still apply.
 
 ## Contextual PII (OpenAI Privacy Filter)
 
@@ -103,7 +105,7 @@ Both are audited, and neither can lift a `block`. The default `stub` backend is 
 
 | Traffic | How |
 |---|---|
-| App/agent → model | Point any OpenAI client at `http://gateway:8787/v1`, using a control-layer API key as the bearer token |
+| App/agent → model | Point any OpenAI client at `http://gateway:8787/v1`, using a control-layer API key as the bearer token (optional in demo mode) |
 | Claude Code, Anthropic SDKs → model | `ANTHROPIC_BASE_URL=http://gateway:8787` with a control-layer key, or a claude.ai seat plus `x-acl-key`: [`integrations/claude-code`](integrations/claude-code) |
 | OpenCode, Continue, Cline / Roo, Aider | [`integrations/coding-agents.md`](integrations/coding-agents.md) |
 | Agent → MCP tools | Point the MCP client at `http://gateway:8787/mcp/<server>` (servers are configured in `upstream.mcp_servers`) |
@@ -143,7 +145,7 @@ All controls, thresholds, allowed models, budgets and team overrides live in [`p
 | `/admin/summary`, `/admin/events` | JSON for other tools |
 | `/metrics` | Prometheus: decisions, findings, latency per stage, spend |
 
-Admin endpoints need `x-admin-token` (or `?token=`), set with `identity.admin_token` / `ACL_ADMIN_TOKEN`.
+Outside demo mode, admin endpoints need `x-admin-token` (or `?token=`), set with `identity.admin_token` / `ACL_ADMIN_TOKEN`.
 
 ## Performance
 

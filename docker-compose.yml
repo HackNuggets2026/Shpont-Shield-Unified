@@ -29,6 +29,7 @@ services:
       PRIVACY_FILTER_URL: http://privacy-filter:8790
       OLLAMA_URL: http://ollama:11434
       ACL_ADMIN_TOKEN: ${ACL_ADMIN_TOKEN:-demo-admin-token}
+      ACL_DEMO_MODE: ${ACL_DEMO_MODE:-true}
     # The whole directory, not the file: editors replace policy.yaml with a new inode,
     # which a single-file bind mount would never see.
     volumes: ["./:/srv"]
