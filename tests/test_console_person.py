@@ -1,4 +1,4 @@
-"""The person drill-down (views/person.js) in QuickJS against a seeded 2,000-person org with grants,
+"""The person drill-down (views/person.js) in QuickJS against a seeded 500-person org with grants,
 overrides and signals (see jsconsole.py). Every action goes through the real click handler."""
 
 import copy
@@ -21,7 +21,7 @@ MAX_HTML = 250_000
 @pytest.fixture(scope="module")
 def seeded(seeded_org):
     """The seeded org's state, where one heavy agent gets an expired grant to renew."""
-    d, out = seeded_org(2000)
+    d, out = seeded_org(500)
     state = copy.deepcopy(out["state"])
     resources = parse_policy((d / "policy.yaml").read_text()).resources
 

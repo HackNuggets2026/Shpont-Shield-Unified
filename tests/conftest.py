@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import fcntl
 import json
+import os
 import pickle
 import shutil
 import time
@@ -141,21 +143,29 @@ def mcp(client: TestClient, method: str, params: dict | None = None, who: str = 
 @pytest.fixture(scope="session")
 def seeded_org(tmp_path_factory):
     """`seeded_org(people, rng=1)` -> (dir, seed.build output): an org under the shipped policy, built
-    once per session per size and seed (2,000 people take seconds). Both are shared: read only, and
-    give each app its own directory with org_copy."""
-    built = {}
+    once per run per size and seed (2,000 people take seconds), shared by xdist workers through the
+    run's temp dir. Both are shared: read only, and give each app its own directory with org_copy."""
+    root = tmp_path_factory.getbasetemp()
+    if os.environ.get("PYTEST_XDIST_WORKER"):
+        root = root.parent  # the workers' basetemps sit side by side in the run's own directory
+    files = {"directory": "org.json", "history": "history.json", "state": "seed-state.json"}
+    loaded = {}
 
     def get(people: int, rng: int = 1) -> tuple[Path, dict]:
-        if (people, rng) not in built:
-            d = tmp_path_factory.mktemp(f"seed{people}x{rng}")
-            text = (ROOT / "policy.yaml").read_text()
-            (d / "policy.yaml").write_text(text)
-            out = seed.build(config.parse_policy(text), people, 30, rng, time.time())
-            (d / "data").mkdir()
-            (d / "data" / "org.json").write_text(json.dumps(out["directory"]))
-            (d / "data" / "history.json").write_text(json.dumps(out["history"]))
-            built[people, rng] = d, out
-        return built[people, rng]
+        d = root / f"seed{people}x{rng}"
+        if d not in loaded:
+            with open(root / f"{d.name}.lock", "w") as lock:
+                fcntl.flock(lock, fcntl.LOCK_EX)
+                if not (d / "built").exists():
+                    text = (ROOT / "policy.yaml").read_text()
+                    out = seed.build(config.parse_policy(text), people, 30, rng, time.time())
+                    (d / "data").mkdir(parents=True, exist_ok=True)
+                    (d / "policy.yaml").write_text(text)
+                    for key, name in files.items():
+                        (d / "data" / name).write_text(json.dumps(out[key]))
+                    (d / "built").touch()
+            loaded[d] = d, {key: json.loads((d / "data" / name).read_text()) for key, name in files.items()}
+        return loaded[d]
 
     return get
 
