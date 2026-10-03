@@ -165,6 +165,11 @@ def register(
             "leases": len(layer.leases.held(p.id)),
         }
 
+    def person_actions(pid: str, limit: int = 100) -> list[dict]:
+        """Admin actions about a person: on them, and on their incidents (status changes target the incident)."""
+        incidents = [i["id"] for i in usage.incidents(principal=pid, limit=5000)]
+        return usage.admin_actions([pid, *incidents], limit)
+
     def events_of(pid: str, limit: int = 100, interesting: bool = False) -> list[dict]:
         """One person's policy checks, newest first: the audit ring (with masked text) merged with the
         persisted event stream, which survives restarts and holds seeded history (no text there)."""
@@ -459,18 +464,25 @@ def register(
             if e["id"] in seen:
                 continue
             seen.add(e["id"])
-            timeline.append({**e, "evidence": e.get("request_id") in ids or e["id"] in ids})
+            # The detection's own `incident` event names the last evidence id but is not evidence itself.
+            hit = e.get("kind") != "incident" and (e.get("request_id") in ids or e["id"] in ids)
+            timeline.append({**e, "evidence": hit})
         p = store.policy
-        score = layer.risk.score(inc["principal"], p)
-        actions = [a for a in usage.admin_actions(inc["principal"]) if a["ts"] >= inc["ts"] - 60]
+        pid = inc["principal"]
+        score = layer.risk.score(pid, p)
+        about = usage.admin_actions([pid, iid], limit=200)
+        actions = sorted((a for a in about if a["ts"] >= inc["ts"] - 60), key=lambda a: a["ts"])
+        ident = p.identity_of(pid)
         return {
             "incident": inc,
             "timeline": timeline,
             "principal": {
-                "id": inc["principal"],
+                "id": pid,
+                "team": ident.team if ident else None,
                 "risk": score,
                 "level": layer.risk.level(score, p),
-                "status": p.principal(inc["principal"]).status,
+                "status": p.principal(pid).status,
+                "budget_scale": p.budget_scale(pid),
             },  # fmt: skip
             "actions": actions,
         }
@@ -498,7 +510,7 @@ def register(
             "grants": [{**g.model_dump(), "live": g.live(now)} for g in p.principal(pid).grants],
             "leases": layer.leases.snapshot(p, pid),
             "requests": usage.requests(principal=pid),
-            "admin_actions": usage.admin_actions(pid),
+            "admin_actions": person_actions(pid),
         }
 
     def value(by: str, days: float, principal: str | None):
@@ -580,7 +592,10 @@ def register(
             "menu": menu_view(p, who),
             "events": events_of(who.id, 50, interesting=True),
             "requests": usage.requests(principal=who.id),
-            "admin_activity": usage.admin_actions(who.id),
+            # Status changes of their incidents too, unless the policy keeps risk from employees.
+            "admin_activity": person_actions(who.id)
+            if p.privacy.show_risk_to_employee
+            else usage.admin_actions(who.id),
             "tips": tips(p, who, leases, by_workflow, now),
             "collected": [
                 "who, team, role; model and tool used; workflow and task labels",

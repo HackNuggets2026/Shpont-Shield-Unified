@@ -574,8 +574,16 @@ class UsageStore:
             (ts or time.time(), actor, action, target, reason, json.dumps(detail) if detail is not None else None),
         )
 
-    def admin_actions(self, target: str | None = None, limit: int = 100) -> list[dict]:
-        if target:
+    def admin_actions(self, target: str | list[str] | None = None, limit: int = 100) -> list[dict]:
+        """Newest first; `target` may be a list (a person and their incident ids)."""
+        if isinstance(target, list):
+            if not target:
+                return []
+            marks = ", ".join("?" * len(target))
+            rows = self._q(
+                f"SELECT * FROM admin_actions WHERE target IN ({marks}) ORDER BY ts DESC LIMIT ?", (*target, limit)
+            )
+        elif target:
             rows = self._q("SELECT * FROM admin_actions WHERE target=? ORDER BY ts DESC LIMIT ?", (target, limit))
         else:
             rows = self._q("SELECT * FROM admin_actions ORDER BY ts DESC LIMIT ?", (limit,))
