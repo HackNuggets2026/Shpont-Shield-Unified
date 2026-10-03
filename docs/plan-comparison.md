@@ -37,9 +37,9 @@ Everything is configured in one hot-reloaded `policy.yaml`. An ethics rule is on
 
 Decision models say *whether* text contains client data, not *where*, so semantic redaction has to withhold the whole message. Privacy Filter (1.5B parameters, 50M active, Apache 2.0) tags the spans. It complements the regexes, which stay better for checksum-validated cards, IBANs and keys.
 
-- **Minimally invasive:** reversible masking. The model sees `<PERSON_1>`; the gateway puts the real name back into the reply.
+- **Minimally invasive:** reversible masking. The model sees `<PRIVATE_PERSON_1>`; the gateway puts the real name back into the reply.
 - **User override:** an `x-pii-override: <reason>` header, honoured only for permitted roles and always audited.
-- **Model override:** nimble is asked "is this PII necessary for the task?" If it is (e.g. support replying to a client), the PII is allowed and logged.
+- **Model override:** the fast decision model (tev1) is asked "is this PII necessary for the task?" If it is (e.g. support replying to a client), the PII is allowed and logged.
 
 ## Only in the build, and required by the brief
 
