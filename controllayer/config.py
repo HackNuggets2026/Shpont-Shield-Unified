@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import logging
 from pathlib import Path
@@ -204,7 +203,7 @@ def parse_policy(text: str) -> Policy:
 
 
 class PolicyStore:
-    """Holds the live policy; `watch()` swaps it when the file changes.
+    """Holds the live policy; `poll()` swaps it when the file changes.
 
     An invalid edit keeps the previous policy and records the error, so a typo
     never drops enforcement.
@@ -237,13 +236,12 @@ class PolicyStore:
                 cb(old, new)
         return True
 
-    async def watch(self, interval: float = 1.0) -> None:
-        while True:
-            await asyncio.sleep(interval)
-            try:
-                mtime = self.path.stat().st_mtime_ns
-            except FileNotFoundError:
-                continue
-            if mtime != self._mtime:
-                self._mtime = mtime
-                self.reload()
+    def poll(self) -> None:
+        """Reload if the file changed since the last look."""
+        try:
+            mtime = self.path.stat().st_mtime_ns
+        except FileNotFoundError:
+            return
+        if mtime != self._mtime:
+            self._mtime = mtime
+            self.reload()

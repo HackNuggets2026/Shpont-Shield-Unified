@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
-import logging
 import re
 import time
 from dataclasses import dataclass, field
@@ -15,8 +13,6 @@ import httpx
 from ..config import SignatureControl
 from ..types import Action, Context, Direction, Finding, Span
 from .base import applies, finding
-
-log = logging.getLogger(__name__)
 
 
 @dataclass
@@ -76,15 +72,6 @@ class SignatureFeed:
         self.errors = errors
         self.feed_version = str(data.get("feed_version", "unknown"))
         self.loaded_at = time.time()
-
-    async def watch(self, base_dir: Path, interval: float) -> None:
-        while True:
-            await asyncio.sleep(interval)
-            try:
-                await self.aload(base_dir)
-            except Exception as e:  # noqa: BLE001 - keep the last good feed on any fetch/parse error
-                self.errors = [f"refresh failed: {e}"]
-                log.warning("signature feed refresh failed: %s", e)
 
 
 def check(ctx: Context, cfg: SignatureControl, feed: SignatureFeed) -> list[Finding]:
