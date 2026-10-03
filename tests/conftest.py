@@ -11,6 +11,7 @@ from controllayer.decision import ScriptedBackend
 from controllayer.gateway.app import create_app
 
 ROOT = Path(__file__).resolve().parent.parent
+ADMIN = "demo-admin-token"
 
 KEYS = {
     "alice": {"Authorization": "Bearer dev-alice-key"},  # engineering / developer
@@ -39,7 +40,9 @@ def make_client(policy_dir: Path):
     def make(backend=None, mutate=None) -> TestClient:
         if mutate:
             edit_policy(policy_dir, mutate)
-        return TestClient(create_app(policy_dir / "policy.yaml", backend=backend, watch=False))
+        return TestClient(
+            create_app(policy_dir / "policy.yaml", backend=backend, watch=False), headers={"x-admin-token": ADMIN}
+        )
 
     return make
 

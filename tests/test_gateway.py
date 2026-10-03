@@ -107,3 +107,21 @@ def test_audit_file_written(client, policy_dir):
 def test_dashboard_served(client):
     r = client.get("/")
     assert r.status_code == 200 and "<html" in r.text.lower()
+
+
+def test_admin_endpoints_require_token(client):
+    for path in ("/admin/summary", "/admin/events", "/admin/audit/export", "/admin/policy", "/metrics"):
+        assert client.get(path, headers={"x-admin-token": "wrong"}).status_code == 401, path
+    assert client.get("/admin/summary", headers={"x-admin-token": ""}, params={"token": "demo-admin-token"}).status_code == 200
+
+
+def test_policy_view_never_exposes_keys(client):
+    body = json.dumps(client.get("/admin/policy").json())
+    assert "dev-alice-key" not in body and "demo-admin-token" not in body
+
+
+def test_dashboard_playground_evaluates_as_principal(client):
+    r = client.post("/admin/try", json={"principal": "bob", "text": "card 4111 1111 1111 1111"})
+    assert r.status_code == 403  # finance blocks cards
+    r = client.post("/admin/try", json={"principal": "alice", "text": "card 4111 1111 1111 1111"})
+    assert r.json()["action"] == "redact"

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import csv
+import hmac
 import io
 import json
 import os
@@ -90,6 +91,15 @@ def create_app(
     app = FastAPI(title="AI Control Layer", lifespan=lifespan)
     app.state.layer = layer
     app.state.store = store
+
+    @app.middleware("http")
+    async def admin_guard(request: Request, call_next):
+        token = store.policy.identity.admin_token
+        if token and (request.url.path.startswith("/admin") or request.url.path == "/metrics"):
+            given = request.headers.get("x-admin-token") or request.query_params.get("token") or ""
+            if not hmac.compare_digest(given, token):
+                return JSONResponse({"error": "admin token required"}, status_code=401)
+        return await call_next(request)
 
     def upstream() -> UpstreamClient:
         return UpstreamClient(store.policy.upstream, http)
@@ -304,8 +314,23 @@ def create_app(
     @app.get("/admin/policy")
     async def policy_view():
         p = store.policy
-        return {"version": p.version, "reloads": store.reloads, "last_error": store.last_error,
-                "policy": p.model_dump(mode="json", by_alias=True)}
+        data = p.model_dump(mode="json", by_alias=True)
+        data["identity"]["api_keys"] = {k[:4] + "…": v for k, v in data["identity"]["api_keys"].items()}
+        data["identity"]["admin_token"] = "set" if p.identity.admin_token else None
+        return {"version": p.version, "reloads": store.reloads, "last_error": store.last_error, "policy": data}
+
+    @app.post("/admin/try")
+    async def try_as(request: Request):
+        """Dashboard playground: evaluate text as a named principal without handing out their key."""
+        body = await request.json()
+        key = next((k for k, v in store.policy.identity.api_keys.items() if v.principal == body.get("principal")), None)
+        principal = authenticate(store.policy, key)
+        try:
+            direction = Direction(body.get("direction", "input"))
+        except ValueError:
+            return JSONResponse({"error": "bad direction"}, status_code=400)
+        v = await layer.evaluate(Context(principal, direction, _text(body.get("text", "")), channel="dashboard"))
+        return JSONResponse(_verdict_json(v), status_code=v.status_code if v.blocked else 200)
 
     @app.post("/admin/policy/reload")
     async def policy_reload():

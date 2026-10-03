@@ -29,6 +29,8 @@ class ApiKey(_Strict):
 class Identity(_Strict):
     require_auth: bool = True
     api_keys: dict[str, ApiKey] = Field(default_factory=dict)
+    # Guards /admin/* and /metrics (header x-admin-token or ?token=). Unset = open, for local demos only.
+    admin_token: str | None = None
 
 
 class ControlBase(_Strict):

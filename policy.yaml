@@ -12,6 +12,7 @@ name: acme-corp-default
 
 identity:
   require_auth: true
+  admin_token: demo-admin-token   # dashboard: http://127.0.0.1:8787/?token=demo-admin-token
   api_keys:
     dev-alice-key: { principal: alice, team: engineering, role: developer }
     fin-bob-key: { principal: bob, team: finance, role: analyst }
