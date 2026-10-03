@@ -118,3 +118,49 @@ def test_resent_history_is_scored_once(client):
         hist += [{"role": "assistant", "content": "ok"}]
     # 6 turns x one masked name (redact = 3 points); the echoed reply is the caller's own data
     assert round(score(client, "alice")["score"]) == 18
+
+
+def test_message_order_does_not_dodge_scoring(client):
+    hist = [{"role": "user", "content": "card 4111 1111 1111 1111"}, {"role": "user", "content": "thanks"}]
+    client.post("/v1/chat/completions", headers=KEYS["alice"], json={"model": "mock-model", "messages": hist})
+    assert score(client, "alice")["score"] == 3
+
+
+def test_repeated_newest_message_counts_each_time(client):
+    for _ in range(3):
+        client.post(
+            "/v1/chat/completions",
+            headers=KEYS["alice"],
+            json={"model": "mock-model", "messages": [{"role": "user", "content": CARD}]},
+        )
+    assert score(client, "alice")["score"] == 9
+
+
+def test_playground_does_not_score_or_charge_the_impersonated_person(client):
+    for _ in range(13):
+        client.post("/admin/try", json={"principal": "alice", "text": "key AKIAIOSFODNN7EXAMPLE"})
+    assert score(client, "alice") is None
+    assert chat(client, "hello").status_code == 200
+
+
+def test_data_returned_to_an_agent_is_not_its_fault(client):
+    client.post(
+        "/me/api/grants",
+        headers=KEYS["bob"],
+        json={"agent": "bob-assistant", "resource": "salesforce-crm", "scopes": ["read"], "hours": 1},
+    )
+    for i in range(14):
+        client.post(
+            "/mcp/company",
+            headers={"x-api-key": "bob-agent-key"},
+            json={
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {
+                    "name": "call_api",
+                    "arguments": {"resource": "salesforce-crm", "path": "/accounts/42", "body": {"i": i}},
+                },
+            },
+        )
+    assert score(client, "bob-assistant") is None and score(client, "bob") is None

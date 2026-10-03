@@ -10,6 +10,8 @@ from .config import Policy, Resource
 from .state import StateStore
 from .types import Principal
 
+MAX_GRANT_HOURS = 24 * 366  # absolute cap; omit hours for no expiry where the resource has no max_grant_hours
+
 
 class GrantError(ValueError):
     pass
@@ -55,8 +57,8 @@ def grant(
     bad = set(scopes) - set(res.scopes)
     if not scopes or bad:
         raise GrantError(f"scopes must be a non-empty subset of {res.scopes}")
-    if hours is not None and not (math.isfinite(hours) and hours > 0):
-        raise GrantError("hours must be a positive number")
+    if hours is not None and not (math.isfinite(hours) and 0 < hours <= MAX_GRANT_HOURS):
+        raise GrantError(f"hours must be between 0 and {MAX_GRANT_HOURS}")
     if res.max_grant_hours is not None and (hours is None or hours > res.max_grant_hours):
         raise GrantError(f"{rid!r} can be granted for at most {res.max_grant_hours} hours")
     now = time.time()

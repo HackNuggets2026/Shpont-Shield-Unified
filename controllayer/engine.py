@@ -241,7 +241,7 @@ class ControlLayer:
         raw = level != "normal" and policy.insider_risk.watch_capture_raw
         if audit_allow or verdict.action is not Action.ALLOW:
             self.audit.record(ctx, verdict, extra, raw=raw)
-        if ctx.scored or verdict.blocked:  # a blocked request ends there, so it is never re-sent
+        if ctx.scored:
             self.risk.observe(policy, ctx, verdict, level)
         return verdict
 

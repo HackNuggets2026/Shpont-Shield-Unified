@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import math
 import time
-from collections import deque
+from collections import OrderedDict, deque
 from pathlib import Path
 from typing import Any
 
@@ -15,7 +16,7 @@ import httpx
 
 from .config import Policy
 from .state import StateStore
-from .types import Context, Principal, Verdict
+from .types import Context, Direction, Principal, Verdict
 
 log = logging.getLogger(__name__)
 
@@ -33,6 +34,7 @@ class RiskEngine:
         self.alerts: deque[dict[str, Any]] = deque(maxlen=500)
         self.sink_errors: deque[str] = deque(maxlen=50)
         self._tasks: set[asyncio.Task] = set()
+        self._scored: OrderedDict[tuple[str, str, str], None] = OrderedDict()
 
     def score(self, policy: Policy, pid: str, now: float | None = None) -> float:
         s, at = self._scores.get(pid, (0.0, 0.0))
@@ -65,6 +67,19 @@ class RiskEngine:
         if not cfg.enabled or not p.authenticated:
             return
         evidence = [f for f in v.findings if f.control not in _IGNORED_CONTROLS]
+        # Only what the person (or their agent) sends is evidence; model replies and data returned by
+        # tools or resources are not theirs, and scoring them would let a hostile source frame anyone.
+        if ctx.direction not in (Direction.INPUT, Direction.TOOL_CALL):
+            evidence = []
+        # The client re-sends its whole history every turn, so unmetered content (history, message
+        # fields, declared tools) counts once; the newest message always counts, so retries add up.
+        key = (p.id, ctx.direction.value, hashlib.sha256(ctx.text.encode()).hexdigest())
+        if not ctx.metered and key in self._scored:
+            evidence = []
+        self._scored[key] = None
+        self._scored.move_to_end(key)
+        if len(self._scored) > 100_000:
+            self._scored.popitem(last=False)
         # Shadowed and capped findings still count: they show intent even when not enforced.
         points = sum(
             cfg.weights.get(f.proposed, 0)

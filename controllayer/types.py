@@ -56,7 +56,7 @@ class Context:
     channel: str = "api"  # chat | mcp | sdk | dashboard
     # False for re-checks of conversation history: content is inspected, but not charged to budgets.
     metered: bool = True
-    # False for re-sent history: inspected every time, scored for insider risk only once.
+    # False for checks that are not the person's own act (playground runs, re-inspection sweeps).
     scored: bool = True
     resource: str | None = None  # catalog id when the call uses a brokered company resource
     scope: str | None = None

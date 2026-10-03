@@ -180,7 +180,6 @@ def create_app(
                 model=model,
                 channel="chat",
                 metered=metered,
-                scored=i == last,
                 pii_override=override,
                 mask_map=mask_map,
             )
@@ -218,7 +217,6 @@ def create_app(
                     model=model,
                     channel="chat",
                     metered=False,
-                    scored=i == last,
                 )
                 rv = await layer.evaluate(rctx)
                 if rv.blocked:
@@ -244,7 +242,6 @@ def create_app(
                     model=model,
                     channel="chat",
                     metered=False,
-                    scored=False,
                 )
                 tv = await layer.evaluate(tctx)
                 if tv.blocked:
@@ -763,7 +760,10 @@ def create_app(
             direction = Direction(body.get("direction", "input"))
         except ValueError:
             return JSONResponse({"error": "bad direction"}, status_code=400)
-        v = await layer.evaluate(Context(principal, direction, _text(body.get("text", "")), channel="dashboard"))
+        # A playground run is not the impersonated person's act: no risk points, no budget use.
+        v = await layer.evaluate(
+            Context(principal, direction, _text(body.get("text", "")), channel="dashboard", metered=False, scored=False)
+        )
         return JSONResponse(_verdict_json(v), status_code=v.status_code if v.blocked else 200)
 
     @app.post("/admin/policy/reload")

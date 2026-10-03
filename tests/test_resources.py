@@ -170,3 +170,8 @@ def test_grant_hours_must_be_positive_and_finite(client, hours):
 def test_uncapped_resource_may_be_granted_without_expiry(client):
     r = grant(client, resource="build-server", scopes=("exec",), hours=None)
     assert r.status_code == 200 and r.json()["expires_at"] is None
+
+
+def test_absurd_grant_hours_rejected(client):
+    assert grant(client, resource="build-server", scopes=("exec",), hours=1e306).status_code == 400
+    assert client.get("/admin/grants").status_code == 200
