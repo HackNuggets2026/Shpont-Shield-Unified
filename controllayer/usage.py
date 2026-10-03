@@ -46,6 +46,7 @@ CREATE TABLE IF NOT EXISTS events (
 CREATE INDEX IF NOT EXISTS events_ts ON events(ts);
 CREATE INDEX IF NOT EXISTS events_who ON events(principal, ts);
 CREATE INDEX IF NOT EXISTS events_req ON events(request_id);
+CREATE INDEX IF NOT EXISTS events_id ON events(id);
 CREATE TABLE IF NOT EXISTS metric_baselines (
     key TEXT PRIMARY KEY, value REAL, ts REAL
 );
@@ -379,6 +380,15 @@ class UsageStore:
         self._x(f"INSERT INTO events ({', '.join(EVENT_COLUMNS)}) VALUES ({', '.join('?' * len(EVENT_COLUMNS))})",
                 tuple(row.values()))  # fmt: skip
         return {**row, "detail": detail}
+
+    def has_event(self, eid: str, source: str, principal: str, client: str | None) -> bool:
+        """An event already recorded under this id from the same producer for the same person."""
+        return bool(
+            self._q(
+                "SELECT 1 FROM events WHERE id=? AND source=? AND principal=? AND client IS ? LIMIT 1",
+                (eid, source, principal, client),
+            )
+        )
 
     def events(
         self, since: float = 0, until: float | None = None, limit: int = 200, before: float | None = None, **eq: Any

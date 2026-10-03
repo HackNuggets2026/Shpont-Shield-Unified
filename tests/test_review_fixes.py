@@ -165,3 +165,14 @@ def test_focus_export_keeps_quantities_in_full(client, policy_dir, tmp_path_fact
     fresh.post("/v1/import/focus", content=client.get("/admin/export/focus").text)
     tokens = {r["resource"]: r["tokens"] for r in fresh.app.state.layer.usage.cost_rows(0)}
     assert tokens["gpt-4o-mini"] == 1_234_567
+
+
+def test_a_redelivered_cloudevent_is_not_charged_twice(client):
+    ev = _ce("run-42", {"usd": 2.5})
+    assert client.post("/v1/events", json=ev, headers=KEYS["carol"]).json()["duplicates"] == 0
+    r = client.post("/v1/events", json=[ev, ev], headers=KEYS["carol"]).json()  # a retry, twice
+    assert r["accepted"] == 2 and r["duplicates"] == 2
+    assert _spent(client, "carol") == 2.5
+    # The same id from someone else is their own event, not a duplicate of carol's.
+    assert client.post("/v1/events", json=ev, headers=KEYS["bob"]).json()["duplicates"] == 0
+    assert _spent(client, "bob") == 2.5

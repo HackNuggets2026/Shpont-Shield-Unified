@@ -153,7 +153,9 @@ class Ingestor:
         self.policies = policies
         self.listeners: list[Any] = []  # callables(event) - detections hook in here
 
-    def ingest(self, evt: dict[str, Any], policy: Policy | None = None) -> dict[str, Any]:
+    def ingest(self, evt: dict[str, Any], policy: Policy | None = None, dedupe: bool = False) -> dict[str, Any]:
+        """With `dedupe`, an event whose id this producer already sent for this person is not counted again
+        (CloudEvents delivery is at-least-once: retries resend the same id)."""
         p = policy or self.policies.policy
         e = dict(evt)
         ts = e.get("ts")
@@ -166,6 +168,8 @@ class Ingestor:
             e["team"] = e.get("team") or ident.team
         e["principal"] = e.get("principal") or "unattributed"
         e["team"] = e.get("team") or "unattributed"
+        if dedupe and e.get("id") and self.store.has_event(e["id"], e["source"], e["principal"], e.get("client")):
+            return {**e, "duplicate": True}
         # Resource by name, URN or model.
         ref = e.get("resource")
         name = resolve(p, ref) if isinstance(ref, str) and ref else None
