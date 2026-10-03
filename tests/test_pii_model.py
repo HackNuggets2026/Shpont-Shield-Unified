@@ -186,3 +186,35 @@ def test_sidecar_failure_follows_fail_mode(policy_dir, fail_mode, status, bad):
     edit_policy(policy_dir, lambda p: p["pii_model"].update(fail_mode=fail_mode))
     c, _ = recording(policy_dir, pf=lambda t: bad)
     assert chat(c, [{"role": "user", "content": "hello there"}]).status_code == status
+
+
+def test_reply_echoing_overridden_pii_is_not_re_redacted(policy_dir):
+    sb = ScriptedBackend({"pii_necessary": [("reply to", 0.95)]})
+    c, _ = recording(policy_dir, backend=sb)
+    r = chat(c, [{"role": "user", "content": "reply to customer Jan Kowalski"}])
+    assert r.json()["choices"][0]["message"]["content"] == "Hello reply to customer Jan Kowalski"
+
+
+def test_reply_still_redacts_pii_the_caller_did_not_supply(policy_dir):
+    c, _ = recording(policy_dir)
+    r = chat(
+        c,
+        [
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": "x"},
+            {"role": "user", "content": "customer Anna Nowak"},
+        ],
+    )
+    assert "Anna Nowak" in r.json()["choices"][0]["message"]["content"]  # masked in, restored out
+    body = guard(c, "customer Anna Nowak", direction="output").json()
+    assert body["action"] == "redact"
+
+
+def test_one_audit_row_per_clean_chat_turn(client):
+    before = client.get("/admin/summary").json()["totals"]["events"]
+    client.post(
+        "/v1/chat/completions",
+        headers=KEYS["alice"],
+        json={"model": "mock-model", "messages": [{"role": "user", "content": "hello"}]},
+    )
+    assert client.get("/admin/summary").json()["totals"]["events"] - before == 2  # input + output

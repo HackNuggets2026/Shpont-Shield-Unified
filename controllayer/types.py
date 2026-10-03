@@ -61,6 +61,8 @@ class Context:
     pii_override: str | None = None  # reason given with x-pii-override
     # Shared by all messages of one chat request so placeholders are numbered consistently.
     mask_map: dict[str, str] | None = None
+    # PII values the caller supplied in this request: not re-redacted when the reply echoes them.
+    known_pii: frozenset[str] = frozenset()
     request_id: str = field(default_factory=lambda: uuid.uuid4().hex[:16])
 
 

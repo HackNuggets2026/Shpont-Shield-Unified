@@ -136,7 +136,9 @@ class ControlLayer:
         """Gates and budgets only, for a request whose content is inspected separately."""
         return await self._evaluate(ctx, None, inspect=False)
 
-    async def evaluate(self, ctx: Context, extra: dict | None = None, semantic: bool = True) -> Verdict:
+    async def evaluate(
+        self, ctx: Context, extra: dict | None = None, semantic: bool = True, audit_allow: bool = True
+    ) -> Verdict:
         ctx.text = sanitize(ctx.text)
         key = (
             self.policy.version,
@@ -156,7 +158,7 @@ class ControlLayer:
         if cacheable and not ctx.metered and key in self._seen:
             self._seen.move_to_end(key)
             return self._seen[key]
-        verdict = await self._evaluate(ctx, extra, semantic=semantic)
+        verdict = await self._evaluate(ctx, extra, semantic=semantic, audit_allow=audit_allow)
         # Budget and engine-failure outcomes depend on the moment, not the content: never cached.
         # Never cached: budget and outage outcomes (they depend on the moment) and masked verdicts
         # (their placeholders belong to one request's numbering).
@@ -171,7 +173,9 @@ class ControlLayer:
                 self._seen.popitem(last=False)
         return verdict
 
-    async def _evaluate(self, ctx: Context, extra: dict | None, inspect: bool = True, semantic: bool = True) -> Verdict:
+    async def _evaluate(
+        self, ctx: Context, extra: dict | None, inspect: bool = True, semantic: bool = True, audit_allow: bool = True
+    ) -> Verdict:
         level = self.risk.level(self.policy, ctx.principal)
         policy = self.policy_for(ctx.principal.team, watched=level != "normal")
         t_start = time.perf_counter()
@@ -203,6 +207,8 @@ class ControlLayer:
         if inspect and not _blocked(findings):
             findings += await pii_model.check(ctx, policy, self.pii_detector(policy))
             t = lap("pii_model", t)
+        if ctx.known_pii:
+            findings = _drop_known_pii(ctx, findings)
 
         extra = dict(extra or {})
         # Deterministic block already decided the outcome; skip the model call.
@@ -233,7 +239,8 @@ class ControlLayer:
         )
         verdict = _decide(ctx, findings, policy.version, latency, reversible)
         raw = level != "normal" and policy.insider_risk.watch_capture_raw
-        self.audit.record(ctx, verdict, extra, raw=raw)
+        if audit_allow or verdict.action is not Action.ALLOW:
+            self.audit.record(ctx, verdict, extra, raw=raw)
         self.risk.observe(policy, ctx, verdict, level)
         return verdict
 
@@ -273,6 +280,17 @@ def flatten(obj: Any) -> str:
 
     walk(obj)
     return "\n".join(out)
+
+
+def _drop_known_pii(ctx: Context, findings: list[Finding]) -> list[Finding]:
+    out = []
+    for f in findings:
+        if f.control in pii_model.PII_CONTROLS and f.spans:
+            f.spans = [s for s in f.spans if ctx.text[s.start : s.end] not in ctx.known_pii]
+            if not f.spans:
+                continue
+        out.append(f)
+    return out
 
 
 def _restricted() -> Finding:

@@ -30,8 +30,21 @@ STEPS = [
         ("tools/call", {"name": "http_get", "arguments": {"url": "http://169.254.169.254/latest/meta-data"}}),
     ),
     ("mcp", "ops", ("tools/call", {"name": "delete_records", "arguments": {"table": "customers"}})),
+    # Contextual PII: the model sees <PRIVATE_PERSON_1>, alice sees the name in the reply.
+    ("chat", "alice", "Draft a reply to customer Jan Kowalski about his late delivery"),
+    # Brokered resources: alice's agent can't use GitHub until alice grants it in /me.
+    ("company", "coder", ("call_api", {"resource": "github-acme", "path": "/repos/acme/web/issues"})),
+    ("grant", "alice", {"agent": "alice-coder", "resource": "github-acme", "scopes": ["read"], "hours": 2}),
+    ("company", "coder", ("call_api", {"resource": "github-acme", "path": "/repos/acme/web/issues"})),
+    ("company", "coder", ("call_api", {"resource": "github-acme", "method": "POST", "path": "/repos/acme/web/issues"})),
 ]
-KEYS = {"alice": "dev-alice-key", "bob": "fin-bob-key", "carol": "intern-key", "ops": "ops-agent-key"}
+KEYS = {
+    "alice": "dev-alice-key",
+    "bob": "fin-bob-key",
+    "carol": "intern-key",
+    "ops": "ops-agent-key",
+    "coder": "alice-agent-key",  # alice's coding agent
+}
 
 
 def main() -> None:
@@ -51,6 +64,19 @@ def main() -> None:
             body = r.json()
             out = body["error"]["message"] if "error" in body else body["choices"][0]["message"]["content"]
             print(f"[{r.status_code}] {who:5} chat  {payload[:60]!r}\n        -> {out[:140]}")
+        elif kind == "grant":
+            r = http.post("/me/api/grants", headers={"x-api-key": KEYS[who]}, json=payload)
+            print(f"[{r.status_code}] {who:5} grants {payload['agent']} {payload['resource']} {payload['scopes']}")
+        elif kind == "company":
+            tool, args = payload
+            r = http.post(
+                "/mcp/company",
+                headers=h,
+                json={"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": tool, "arguments": args}},
+            )
+            body = r.json()
+            out = body["error"]["message"] if "error" in body else body["result"]["content"][0]["text"]
+            print(f"[mcp] {who:5} company/{tool} {json.dumps(args)[:70]}\n        -> {out[:140]}")
         else:
             method, params = payload
             r = http.post("/mcp/demo", headers=h, json={"jsonrpc": "2.0", "id": 1, "method": method, "params": params})

@@ -22,6 +22,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, Res
 from .. import resources
 from ..config import PolicyStore
 from ..controls.access import authenticate
+from ..controls.pii_model import PII_CONTROLS
 from ..decision import DecisionBackend
 from ..engine import ControlLayer, flatten
 from ..types import Action, Context, Direction, Principal, Verdict
@@ -165,6 +166,7 @@ def create_app(
         metered_ctx: Context | None = None
         last = len(messages) - 1
         mask_map: dict[str, str] = {}  # placeholder -> original, restored into the reply
+        known_pii: set[str] = set()
         override = request.headers.get("x-pii-override")
         for i, m in enumerate(messages):
             direction = Direction.TOOL_RESULT if m.get("role") == "tool" else Direction.INPUT
@@ -188,6 +190,7 @@ def create_app(
                 warnings.append(v.reason)
             if metered:
                 metered_ctx = ctx
+            known_pii |= {ctx.text[s.start : s.end] for f in v.findings if f.control in PII_CONTROLS for s in f.spans}
             if v.action is Action.REDACT:
                 if isinstance(content, str):
                     m["content"] = v.text
@@ -254,6 +257,7 @@ def create_app(
         sv = await layer.evaluate(
             Context(principal, Direction.INPUT, flatten(outgoing), model=model, channel="chat", metered=False),
             semantic=False,
+            audit_allow=False,  # a clean sweep is not a decision of its own
         )
         if sv.blocked:
             return _policy_error(sv)
@@ -285,6 +289,7 @@ def create_app(
             model=model,
             channel="chat",
             request_id=metered_ctx.request_id,
+            known_pii=frozenset(known_pii),
         )
         ov = await layer.evaluate(
             out_ctx, {"usd": round(cost, 6), "tokens": completion.input_tokens + completion.output_tokens}
