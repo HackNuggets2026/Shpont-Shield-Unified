@@ -266,3 +266,30 @@ def test_catalog_rejects_unknown_services_and_unusable_scopes(change, error):
     change(data["resources"])
     with pytest.raises(ValueError, match=re.escape(error)):
         parse_policy(yaml.safe_dump(data))
+
+
+@pytest.mark.parametrize(
+    "tool,sql,value",
+    [
+        ("postgres_query", "select x'41' as v", "\\x41"),
+        ("snowflake_query", "select zeroblob(2) as v", "\\x0000"),
+        ("postgres_query", "select -1e999 as v", "-Infinity"),
+    ],
+)
+def test_blobs_and_overflowed_floats_come_back_as_postgres_prints_them(client, tool, sql, value):
+    grant(client, "postgres-prod")
+    grant(client, "snowflake")
+    assert json.loads(text(call(client, tool, {"sql": sql})))["rows"] == [{"v": value}]
+
+
+def test_random_blob_is_hex_encoded(client):
+    grant(client, "postgres-prod")
+    (row,) = json.loads(text(call(client, "postgres_query", {"sql": "select randomblob(4) as v"})))["rows"]
+    assert re.fullmatch(r"\\x[0-9a-f]{8}", row["v"])
+
+
+def test_an_answer_that_is_not_json_is_a_tool_error_not_a_crash(client, monkeypatch):
+    monkeypatch.setattr(services, "call", lambda *a, **kw: {"rows": [object(), float("nan")]})
+    grant(client, "postgres-prod")
+    r = call(client, "postgres_query", {"sql": "select 1"})
+    assert r["result"]["isError"] and text(r).startswith("PostgreSQL (prod read replica): the answer cannot be sent")

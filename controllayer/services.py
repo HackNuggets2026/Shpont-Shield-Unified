@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import re
 import sqlite3
 import time
@@ -185,7 +186,8 @@ def _query(tables: dict[str, dict], sql: str, limit: int, system: str) -> dict[s
         cur = db.execute(sql)
         rows: list[tuple] = []
         size, truncated = 0, False
-        for row in cur:
+        for raw in cur:
+            row = tuple(_cell(v) for v in raw)
             size += sum(len(str(v)) for v in row)
             if len(rows) == limit or size > _MAX_RESULT_CHARS:
                 truncated = True
@@ -199,6 +201,16 @@ def _query(tables: dict[str, dict], sql: str, limit: int, system: str) -> dict[s
     cols = [d[0] for d in cur.description]
     rows_out = [dict(zip(cols, r, strict=True)) for r in rows]
     return {"columns": cols, "rows": rows_out, "row_count": len(rows), "truncated": truncated}
+
+
+def _cell(v: Any) -> Any:
+    """A SQLite value as JSON, written the way PostgreSQL prints it: a blob as bytea hex (`\\x41`),
+    an overflowed float as 'Infinity' or '-Infinity' (SQLite turns NaN into NULL itself)."""
+    if isinstance(v, bytes):
+        return "\\x" + v.hex()
+    if isinstance(v, float) and math.isinf(v):
+        return "Infinity" if v > 0 else "-Infinity"
+    return v
 
 
 def _tables(tables: dict[str, dict]) -> list[dict[str, Any]]:

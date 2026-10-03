@@ -95,4 +95,7 @@ def handle(req: dict, principal: Principal, policy: Policy, state: StateStore) -
         out = services.call(svc, tool, args, headers)
     except services.ServiceError as e:
         return text(f"{svc.title}: {e}", error=True)
-    return text(json.dumps(out, ensure_ascii=False))
+    try:
+        return text(json.dumps(out, ensure_ascii=False, allow_nan=False))
+    except (TypeError, ValueError) as e:
+        return text(f"{svc.title}: the answer cannot be sent as JSON ({e})", error=True)
