@@ -5,6 +5,8 @@ from __future__ import annotations
 from fnmatch import fnmatch
 
 from ..config import Policy
+from ..resources import usable
+from ..state import StateStore
 from ..types import Action, Context, Direction, Finding, Principal
 from .base import finding
 
@@ -15,7 +17,7 @@ def authenticate(policy: Policy, api_key: str | None) -> Principal:
     entry = policy.identity.api_keys.get(api_key or "")
     if entry is None:
         return ANONYMOUS
-    return Principal(id=entry.principal, team=entry.team, role=entry.role)
+    return Principal(id=entry.principal, team=entry.team, role=entry.role, kind=entry.kind, owner=entry.owner)
 
 
 def check_auth(ctx: Context, policy: Policy) -> list[Finding]:
@@ -36,12 +38,28 @@ def check_model(ctx: Context, policy: Policy) -> list[Finding]:
     return []
 
 
+def check_resource(ctx: Context, policy: Policy, state: StateStore) -> list[Finding]:
+    """Brokered resources: agents need a live grant from their owner, humans an entitlement."""
+    if ctx.resource is None:
+        return []
+    scopes = usable(policy, state, ctx.principal).get(ctx.resource)
+    if scopes is None:
+        who = "granted to this agent" if ctx.principal.kind == "agent" else "available to you"
+        return [_hard("resource_access", "not_granted", f"{ctx.resource!r} is not {who}")]
+    if ctx.scope and ctx.scope not in scopes:
+        return [_hard("resource_access", "scope_denied", f"{ctx.resource!r}: scope {ctx.scope!r} not in {scopes}")]
+    return []
+
+
 def check_tool(ctx: Context, policy: Policy) -> list[Finding]:
     cfg = policy.tool_access
     if not cfg.enabled or ctx.direction is not Direction.TOOL_CALL or not ctx.tool:
         return []
     allowed = cfg.roles.get(ctx.principal.role, [])
-    if not any(fnmatch(ctx.tool, pat) for pat in allowed):
+    # A broker call (resource + scope) is authorised by its grant instead of role-based tool permission.
+    # Reaching a catalogued MCP server (resource, no scope) does not lift the per-tool rules.
+    brokered = ctx.resource is not None and ctx.scope is not None
+    if not brokered and not any(fnmatch(ctx.tool, pat) for pat in allowed):
         return [
             finding(
                 "tool_access",

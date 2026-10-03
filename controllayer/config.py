@@ -28,6 +28,14 @@ class ApiKey(_Strict):
     principal: str
     team: str
     role: str
+    kind: Literal["human", "agent"] = "human"
+    owner: str | None = None  # agents: the employee who decides which resources the agent may use
+
+    @model_validator(mode="after")
+    def _owner(self) -> ApiKey:
+        if (self.kind == "agent") != (self.owner is not None):
+            raise ValueError("agents need an owner; humans must not have one")
+        return self
 
 
 class Identity(_Strict):
@@ -104,6 +112,92 @@ class SemanticControl(ControlBase):
             except re.error as e:
                 raise ValueError(f"bad keyword regex {pattern!r}: {e}") from e
         return self
+
+
+class Entitlement(_Strict):
+    roles: list[str] = Field(default_factory=list)
+    teams: list[str] = Field(default_factory=list)
+    principals: list[str] = Field(default_factory=list)
+
+    def allows(self, principal: str, team: str, role: str) -> bool:
+        return principal in self.principals or team in self.teams or role in self.roles
+
+
+class Resource(_Strict):
+    """A company resource employees can delegate to their agents. Agents never see its secret:
+    the gateway brokers every use and injects credentials itself."""
+
+    type: Literal["server", "credential", "saas", "mcp_server"]
+    name: str
+    description: str = ""
+    sensitivity: Literal["low", "medium", "high"] = "medium"
+    scopes: list[str] = Field(default_factory=lambda: ["read"])
+    entitled: Entitlement = Field(default_factory=Entitlement)
+    max_grant_hours: float | None = Field(None, gt=0)
+    suspended: bool = False
+    # saas/credential: base_url, auth_header, secret_env; server: host; mcp_server: server (upstream.mcp_servers key)
+    connection: dict[str, Any] = Field(default_factory=dict)
+
+
+class RiskLevels(_Strict):
+    watch: float = 20
+    restricted: float = 60
+
+
+class AlertSink(_Strict):
+    type: Literal["webhook", "file"]
+    url: str | None = None
+    path: str | None = None
+
+
+class InsiderRisk(_Strict):
+    enabled: bool = True
+    # Points per finding by the action it proposed; categories can add more.
+    weights: dict[Action, float] = Field(
+        default_factory=lambda: {Action.LOG: 0.5, Action.WARN: 2, Action.REDACT: 3, Action.BLOCK: 10}
+    )
+    category_weights: dict[str, float] = Field(default_factory=dict)
+    half_life_hours: float = Field(24, gt=0)
+    levels: RiskLevels = Field(default_factory=RiskLevels)
+    owner_share: Probability = 0.5  # fraction of an agent's points also charged to its owner
+    # Under watch: control overrides (merged like a team override) and full-text capture.
+    watch_controls: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    watch_capture_raw: bool = True
+    alert_on_block_while_watched: bool = True
+    alert_categories: list[str] = Field(default_factory=list)
+    sinks: list[AlertSink] = Field(default_factory=list)
+
+
+class PiiOverride(_Strict):
+    enabled: bool = True
+    instructions: str = (
+        "Is the personal data in this content necessary to complete the requested task "
+        "(for example replying to that customer or filling in their own form)?"
+    )
+    threshold: Probability = 0.85
+    keywords: list[str] = Field(default_factory=list)
+
+
+class PiiModelControl(ControlBase):
+    """Contextual PII spans from a token classifier (OpenAI Privacy Filter sidecar)."""
+
+    backend: Literal["privacy_filter", "stub", "off"] = "off"
+    url: str = "http://localhost:8790"
+    timeout_seconds: float = Field(3.0, gt=0)
+    min_score: Probability = 0.5
+    fail_mode: Literal["open", "closed"] = "open"
+    entities: dict[str, Action] = Field(default_factory=dict)
+    # Labels replaced by numbered placeholders that are put back into the model's reply.
+    reversible: list[str] = Field(default_factory=list)
+    # Who may send `x-pii-override: <reason>`; overrides never lift more than `override_max`.
+    override_roles: list[str] = Field(default_factory=list)
+    override_max: Action = Action.REDACT
+    model_override: PiiOverride = Field(default_factory=PiiOverride)
+
+    @field_validator("backend", mode="before")
+    @classmethod
+    def _yaml_off(cls, v: Any) -> Any:
+        return "off" if v is False else v
 
 
 class SemanticEngine(_Strict):
@@ -189,12 +283,23 @@ class Policy(_Strict):
     semantic_controls: dict[str, SemanticControl] = Field(default_factory=dict)
     teams: dict[str, TeamOverride] = Field(default_factory=dict)
     audit: Audit = Field(default_factory=Audit)
+    resources: dict[str, Resource] = Field(default_factory=dict)
+    insider_risk: InsiderRisk = Field(default_factory=InsiderRisk)
+    pii_model: PiiModelControl = Field(default_factory=PiiModelControl)
 
     version: str = ""  # content hash, filled by the loader
 
     @model_validator(mode="after")
     def _known_entities(self) -> Policy:
         from .controls.patterns import PII, SECRETS  # patterns imports this module
+
+        owners = {k.principal: k for k in self.identity.api_keys.values()}
+        for k in self.identity.api_keys.values():
+            if k.owner and (k.owner not in owners or owners[k.owner].kind != "human"):
+                raise ValueError(f"agent {k.principal!r}: owner {k.owner!r} is not a known human principal")
+        for rid, r in self.resources.items():
+            if r.type == "mcp_server" and r.connection.get("server") not in self.upstream.mcp_servers:
+                raise ValueError(f"resource {rid!r}: connection.server must name an upstream.mcp_servers entry")
 
         for name, known, cfg in (("pii", PII, self.pii), ("secrets", SECRETS, self.secrets)):
             unknown = set(cfg.entities) - set(known)

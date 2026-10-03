@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>My AI Workspace</title>
+<style>
+:root { --bg:#f6f7f9; --panel:#fff; --text:#1b1f24; --muted:#5f6b7a; --border:#e2e6eb;
+  --ok:#1f9d55; --warn:#c27c0e; --bad:#d1343b; --accent:#2563eb; --low:#1f9d55; --medium:#c27c0e; --high:#d1343b; }
+@media (prefers-color-scheme: dark) { :root { --bg:#0f1216; --panel:#171b21; --text:#e6e9ee; --muted:#94a0b0;
+  --border:#2a3039; --ok:#3fbf75; --warn:#e3a33b; --bad:#f0585e; --accent:#5b8def; --low:#3fbf75; --medium:#e3a33b; --high:#f0585e; } }
+* { box-sizing: border-box; }
+body { margin:0; background:var(--bg); color:var(--text); font:14px/1.45 system-ui,-apple-system,Segoe UI,sans-serif; }
+header { display:flex; flex-wrap:wrap; gap:8px 20px; align-items:baseline; padding:16px 20px; background:var(--panel); border-bottom:1px solid var(--border); }
+header h1 { font-size:18px; margin:0; }
+.muted { color:var(--muted); font-size:12px; }
+main { max-width:1100px; margin:0 auto; padding:16px 20px; display:grid; gap:16px; }
+.card { background:var(--panel); border:1px solid var(--border); border-radius:8px; padding:14px 16px; min-width:0; }
+.card h2 { font-size:13px; text-transform:uppercase; letter-spacing:.04em; color:var(--muted); margin:0 0 10px; }
+.notice { border-left:3px solid var(--accent); padding-left:10px; color:var(--muted); font-size:13px; }
+table { width:100%; border-collapse:collapse; font-size:13px; }
+th, td { text-align:left; padding:7px 8px; border-bottom:1px solid var(--border); vertical-align:top; }
+th { color:var(--muted); font-weight:600; font-size:12px; }
+.pill { display:inline-block; padding:1px 8px; border-radius:999px; font-size:11px; font-weight:600; color:#fff; }
+.low { background:var(--low); } .medium { background:var(--medium); } .high { background:var(--high); }
+.tag { font-size:11px; color:var(--muted); border:1px solid var(--border); border-radius:4px; padding:0 5px; margin-right:4px; white-space:nowrap; }
+.grant { display:flex; flex-wrap:wrap; gap:6px; align-items:center; margin:4px 0; }
+.ok { color:var(--ok); font-weight:600; } .bad { color:var(--bad); font-weight:600; }
+button, input, select { font:inherit; color:var(--text); background:var(--panel); border:1px solid var(--border); border-radius:6px; padding:4px 9px; }
+button.primary { background:var(--accent); border-color:var(--accent); color:#fff; cursor:pointer; }
+button.danger { border-color:var(--bad); color:var(--bad); cursor:pointer; }
+input[type=number] { width:70px; }
+.scroll { overflow-x:auto; }
+#login { max-width:420px; margin:60px auto; }
+#login input { width:100%; margin:8px 0; }
+.err { color:var(--bad); font-size:13px; min-height:1em; }
+.kpis { display:flex; flex-wrap:wrap; gap:24px; }
+.kpi .v { font-size:22px; font-weight:650; font-variant-numeric:tabular-nums; }
+.kpi .l { color:var(--muted); font-size:12px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>My AI Workspace</h1>
+  <div class="muted" id="who"></div>
+  <div style="margin-left:auto"><button id="logout" hidden>Sign out</button></div>
+</header>
+
+<section id="login" class="card" hidden>
+  <h2>Sign in</h2>
+  <div class="muted">Use your personal AI-gateway key (not an agent key).</div>
+  <input id="key" type="password" placeholder="dev-alice-key" autocomplete="off">
+  <button class="primary" id="signin">Sign in</button>
+  <div class="err" id="loginerr"></div>
+</section>
+
+<main id="app" hidden>
+  <section class="card">
+    <h2>About monitoring</h2>
+    <div class="notice" id="notice"></div>
+  </section>
+
+  <section class="card">
+    <h2>My usage today</h2>
+    <div class="kpis" id="usage"></div>
+  </section>
+
+  <section class="card scroll">
+    <h2>Company resources my agents can use</h2>
+    <div class="muted" style="margin-bottom:8px">Agents never receive the credentials: the gateway performs each call for them.
+      Grants expire automatically and stop working at once if your access or the resource is suspended.</div>
+    <div class="err" id="granterr"></div>
+    <table id="resources"></table>
+  </section>
+
+  <section class="card scroll">
+    <h2>Recent activity (me and my agents)</h2>
+    <table id="activity"></table>
+  </section>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;" })[c]);
+let KEY = "";
+try { KEY = sessionStorage.getItem("acl-key") || ""; } catch {}
+
+async function api(path, opts = {}) {
+  const r = await fetch(path, { ...opts, headers: { "content-type": "application/json", "x-api-key": KEY, ...(opts.headers || {}) } });
+  const body = await r.json().catch(() => ({}));
+  if (r.status === 401 || r.status === 403 && path === "/me/api/profile") { showLogin(body.detail || body.error || "not allowed"); throw new Error("auth"); }
+  if (!r.ok) throw new Error(body.error || body.detail || "HTTP " + r.status);
+  return body;
+}
+
+function showLogin(msg) {
+  $("app").hidden = true; $("logout").hidden = true; $("login").hidden = false; $("loginerr").textContent = msg || "";
+}
+
+const when = (ts) => ts ? new Date(ts * 1000).toLocaleString() : "never";
+
+async function load() {
+  const me = await api("/me/api/profile");
+  $("login").hidden = true; $("app").hidden = false; $("logout").hidden = false;
+  $("who").textContent = `${me.principal} · ${me.team} / ${me.role}` + (me.pii_override_allowed ? " · may override PII masking (audited)" : "");
+  $("notice").textContent = me.monitoring_notice;
+  const mine = me.budgets.find((b) => b.scope === "principal") || { requests: 0, tokens: 0, usd: 0 };
+  const team = me.budgets.find((b) => b.scope === "team");
+  $("usage").innerHTML = [
+    ["Requests", mine.requests], ["Tokens", mine.tokens.toLocaleString()], ["Spend", "$" + mine.usd.toFixed(4)],
+    ...(team && team.usd_limit ? [["Team budget used", (100 * team.usd / team.usd_limit).toFixed(1) + "%"]] : []),
+  ].map(([l, v]) => `<div class="kpi"><div class="v">${esc(v)}</div><div class="l">${esc(l)}</div></div>`).join("");
+
+  const res = await api("/me/api/resources");
+  $("resources").innerHTML = "<tr><th>Resource</th><th>Sensitivity</th>" +
+    res.agents.map((a) => `<th>${esc(a)}</th>`).join("") + "</tr>" +
+    (res.resources.map((r) => `<tr>
+      <td><b>${esc(r.name)}</b> <span class="tag">${esc(r.type)}</span>${r.suspended ? '<span class="bad">suspended</span>' : ""}
+        <div class="muted">${esc(r.description)}</div></td>
+      <td><span class="pill ${esc(r.sensitivity)}">${esc(r.sensitivity)}</span></td>
+      ${res.agents.map((a) => cell(r, a)).join("")}
+    </tr>`).join("") || `<tr><td colspan="9" class="muted">No company resources are assigned to you.</td></tr>`);
+  if (!res.agents.length) $("resources").insertAdjacentHTML("beforeend", '<tr><td colspan="9" class="muted">You have no registered agents.</td></tr>');
+
+  const act = await api("/me/api/activity");
+  $("activity").innerHTML = "<tr><th>Time</th><th>Who</th><th>Where</th><th>Outcome</th></tr>" +
+    act.map((e) => `<tr><td>${new Date(e.ts * 1000).toLocaleTimeString()}</td><td>${esc(e.principal)}</td>
+      <td>${esc(e.channel)}/${esc(e.direction)} ${e.tool ? `<span class="tag">${esc(e.tool)}</span>` : ""}</td>
+      <td>${esc(e.action)} <span class="muted">${esc(e.reason)}</span></td></tr>`).join("");
+}
+
+function cell(r, agent) {
+  const g = r.grants[agent];
+  if (g) {
+    return `<td><div class="${g.active ? "ok" : "bad"}">${g.active ? "granted" : "inactive"}</div>
+      <div class="muted">${g.scopes.map(esc).join(", ")} · expires ${esc(when(g.expires_at))}</div>
+      <button class="danger" data-revoke="${esc(agent)}|${esc(r.id)}">Revoke</button></td>`;
+  }
+  if (r.suspended) return '<td class="muted">unavailable</td>';
+  const id = `${agent}__${r.id}`;
+  return `<td><div class="grant">${r.scopes.map((s) => `<label><input type="checkbox" data-scope="${esc(id)}" value="${esc(s)}" ${s === "read" || r.scopes.length === 1 ? "checked" : ""}> ${esc(s)}</label>`).join(" ")}</div>
+    <div class="grant"><input type="number" min="1" step="1" id="h_${esc(id)}" value="${r.max_grant_hours ? Math.min(8, r.max_grant_hours) : 8}" title="hours"> h
+    <button class="primary" data-grant="${esc(agent)}|${esc(r.id)}">Grant</button></div></td>`;
+}
+
+document.addEventListener("click", async (ev) => {
+  const t = ev.target;
+  $("granterr").textContent = "";
+  try {
+    if (t.dataset.grant) {
+      const [agent, resource] = t.dataset.grant.split("|");
+      const id = `${agent}__${resource}`;
+      const scopes = [...document.querySelectorAll(`input[data-scope="${CSS.escape(id)}"]:checked`)].map((i) => i.value);
+      const hours = Number(document.getElementById("h_" + id).value);
+      await api("/me/api/grants", { method: "POST", body: JSON.stringify({ agent, resource, scopes, hours }) });
+      await load();
+    } else if (t.dataset.revoke) {
+      const [agent, resource] = t.dataset.revoke.split("|");
+      await api(`/me/api/grants/${encodeURIComponent(agent)}/${encodeURIComponent(resource)}`, { method: "DELETE" });
+      await load();
+    }
+  } catch (e) { if (e.message !== "auth") $("granterr").textContent = e.message; }
+});
+
+$("signin").onclick = async () => {
+  KEY = $("key").value.trim();
+  try { sessionStorage.setItem("acl-key", KEY); } catch {}
+  load().catch(() => {});
+};
+$("logout").onclick = () => { KEY = ""; try { sessionStorage.removeItem("acl-key"); } catch {} showLogin(""); };
+if (KEY) load().catch(() => {}); else showLogin("");
+</script>
+</body>
+</html>

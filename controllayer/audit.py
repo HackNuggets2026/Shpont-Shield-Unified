@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import statistics
+import time
 from collections import Counter, deque
 from pathlib import Path
 from typing import Any
@@ -26,6 +27,7 @@ class AuditLog:
         self.shadow_hits: Counter[str] = Counter()
         self.by_principal: Counter[str] = Counter()
         self.latency: dict[str, deque[float]] = {}
+        self.notes: deque[dict[str, Any]] = deque(maxlen=ring_size)
         self.total = 0
 
     def record(self, ctx: Context, v: Verdict, extra: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -75,6 +77,15 @@ class AuditLog:
                 self.shadow_hits[f"{f.control}/{f.category}:{f.proposed.value}"] += 1
         for stage, ms in v.latency_ms.items():
             self.latency.setdefault(stage, deque(maxlen=1000)).append(ms)
+        if self.path:
+            with self.path.open("a") as fh:
+                fh.write(json.dumps(event) + "\n")
+        return event
+
+    def note(self, kind: str, actor: str, **details: Any) -> dict[str, Any]:
+        """Administrative events (grants, revocations, watch changes) on the same trail as decisions."""
+        event = {"ts": time.time(), "kind": kind, "actor": actor, **details}
+        self.notes.append(event)
         if self.path:
             with self.path.open("a") as fh:
                 fh.write(json.dumps(event) + "\n")

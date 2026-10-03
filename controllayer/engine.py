@@ -15,14 +15,22 @@ from .controls.budget import BudgetLedger
 from .controls.patterns import pii, redact, secrets
 from .controls.semantic import SemanticGuard
 from .decision import DecisionBackend, HeuristicBackend, OllamaSystemOne
+from .state import StateStore
 from .types import Action, Context, Direction, Finding, Principal, Verdict
 
 _STATUS = {"auth": 401, "budget": 429}
 
 
 class ControlLayer:
-    def __init__(self, store: PolicyStore, backend: DecisionBackend | None = None, audit: AuditLog | None = None):
+    def __init__(
+        self,
+        store: PolicyStore,
+        backend: DecisionBackend | None = None,
+        audit: AuditLog | None = None,
+        state: StateStore | None = None,
+    ):
         self.store = store
+        self.state = state or StateStore(store.base_dir / "data" / "state.json")
         self._fixed_backend = backend
         self._backend_key: tuple | None = None
         self._backend: DecisionBackend | None = backend
@@ -117,6 +125,8 @@ class ControlLayer:
         key = (
             self.policy.version,
             self.feed.loaded_at,
+            self.state.version,
+            ctx.pii_override,
             semantic,
             ctx.principal.id,
             ctx.direction,
@@ -124,12 +134,14 @@ class ControlLayer:
             ctx.tool,
             ctx.text,
         )
-        if not ctx.metered and key in self._seen:
+        # Brokered-resource checks depend on grant expiry (time), so they are never cached.
+        cacheable = ctx.resource is None
+        if cacheable and not ctx.metered and key in self._seen:
             self._seen.move_to_end(key)
             return self._seen[key]
         verdict = await self._evaluate(ctx, extra, semantic=semantic)
         # Budget and engine-failure outcomes depend on the moment, not the content: never cached.
-        if not any(f.control in ("budget", "semantic_engine") for f in verdict.findings):
+        if cacheable and not any(f.control in ("budget", "semantic_engine") for f in verdict.findings):
             self._seen[key] = verdict
             if len(self._seen) > 10_000:
                 self._seen.popitem(last=False)
@@ -147,7 +159,8 @@ class ControlLayer:
 
         findings: list[Finding] = access.check_auth(ctx, policy)
         if not findings:
-            findings += access.check_model(ctx, policy) + access.check_tool(ctx, policy)
+            findings += access.check_model(ctx, policy) + access.check_resource(ctx, policy, self.state)
+            findings += access.check_tool(ctx, policy)
         t = lap("gates", t_start)
 
         if not _blocked(findings) and ctx.metered and ctx.direction in (Direction.INPUT, Direction.TOOL_CALL):

@@ -18,6 +18,9 @@ identity:
     fin-bob-key: { principal: bob, team: finance, role: analyst }
     ops-agent-key: { principal: ops-agent, team: platform, role: automation }
     intern-key: { principal: carol, team: interns, role: intern }
+    # Agents act for an owner, who decides in the employee panel (/me) which resources they may use.
+    alice-agent-key: { principal: alice-coder, team: engineering, role: developer, kind: agent, owner: alice }
+    bob-agent-key: { principal: bob-assistant, team: finance, role: analyst, kind: agent, owner: bob }
 
 models:
   # Glob patterns. Requests naming any other model are refused before reaching it.
@@ -28,6 +31,7 @@ upstream:
   url: ${OLLAMA_URL:-http://localhost:11434}
   mcp_servers:
     demo: builtin          # in-process demo tools; or a URL of a JSON-RPC MCP endpoint
+    company: broker        # built-in broker for the resource catalog below
 
 semantic:
   backend: ${ACL_SEMANTIC:-heuristic}   # ollama (real decision models) | heuristic (offline keyword stand-in) | "off"
@@ -90,10 +94,10 @@ signatures:
 tool_access:
   mode: block
   roles:
-    developer: ["read_*", "search_*", "http_get", "run_tests"]
-    analyst: ["read_*", "search_*", "send_email"]
+    developer: ["read_*", "search_*", "http_get", "run_tests", "list_resources"]
+    analyst: ["read_*", "search_*", "send_email", "list_resources"]
     automation: ["*"]
-    intern: ["search_*"]
+    intern: ["search_*", "list_resources"]
   irreversible: ["delete_*", "drop_*", "transfer_funds", "send_email"]
 
 # --- Semantic (AI-based) controls ---------------------------------------------
@@ -152,6 +156,112 @@ semantic_controls:
     instructions: Is the request clearly unrelated to the employee's work (personal errands, gaming, dating)?
     thresholds: { log: 0.7 }
     keywords: ["dating", "fantasy football", "horoscope"]
+
+# --- Company resources -------------------------------------------------------
+# Security owns this catalog. Employees see what they are entitled to in /me and grant it to
+# their agents (scope, expiry). Agents never receive credentials: the gateway performs each
+# call through the `company` MCP server and injects the secret from its own environment.
+
+resources:
+  github-acme:
+    type: saas
+    name: GitHub (acme org)
+    description: Repositories, issues and pull requests
+    sensitivity: medium
+    scopes: [read, write]
+    entitled: { teams: [engineering, platform] }
+    max_grant_hours: 168
+    connection:
+      base_url: mock://github
+      secret_env: GITHUB_TOKEN
+      mock_responses:
+        "GET /repos/acme/web/issues": '[{"number": 12, "title": "Login button misaligned"}]'
+  salesforce-crm:
+    type: saas
+    name: Salesforce CRM
+    description: Customer accounts and contacts (client personal data)
+    sensitivity: high
+    scopes: [read]
+    entitled: { teams: [finance], roles: [analyst] }
+    max_grant_hours: 8
+    connection:
+      base_url: mock://salesforce
+      secret_env: SALESFORCE_TOKEN
+      mock_responses:
+        "GET /accounts/42": '{"name": "Jan Kowalski", "email": "jan@example.com", "card": "4111 1111 1111 1111"}'
+  prod-db-readonly:
+    type: credential
+    name: Production DB (read replica)
+    sensitivity: high
+    scopes: [read]
+    entitled: { roles: [developer], teams: [platform] }
+    max_grant_hours: 4
+    connection: { base_url: mock://db, secret_env: PROD_DB_PASSWORD, mock_default: "3 rows" }
+  build-server:
+    type: server
+    name: CI build server
+    sensitivity: low
+    scopes: [exec]
+    entitled: { teams: [engineering] }
+    connection: { host: build-01.acme.internal }
+  demo-tools:
+    type: mcp_server
+    name: Shared-drive tools (demo MCP server)
+    sensitivity: medium
+    scopes: [use]
+    entitled: { teams: [engineering, finance, platform, interns] }
+    connection: { server: demo }
+
+# --- Insider risk ---------------------------------------------------------------
+# Every finding adds points that decay over time. Crossing a level changes enforcement for
+# that person and silently alerts security. Monitoring is disclosed to all employees in the
+# AI acceptable-use policy (GDPR / Labour Code art. 22^3); only the individual alert is silent.
+
+insider_risk:
+  enabled: true
+  half_life_hours: 24
+  levels: { watch: 20, restricted: 60 }
+  weights: { log: 0.5, warn: 2, redact: 3, block: 10 }
+  category_weights: { data_exfiltration: 10, malware: 15, not_granted: 5, scope_denied: 5 }
+  owner_share: 0.5         # an agent's misbehaviour also counts half against its owner
+  watch_controls:          # stricter policy while watched
+    pii: { mode: block }
+    prompt_injection: { thresholds: { block: 0.6, warn: 0.4, log: 0.2 } }
+  watch_capture_raw: true  # full text of watched sessions goes to the audit log
+  alert_on_block_while_watched: true
+  alert_categories: [data_exfiltration, malware, aws_access_key, private_key]
+  sinks:
+    - { type: file, path: data/security-alerts.jsonl }
+    # - { type: webhook, url: "${SECURITY_WEBHOOK_URL}" }
+
+# --- Contextual PII (OpenAI Privacy Filter) -------------------------------------
+# Token classifier sidecar (services/privacy_filter). Finds names, addresses, etc. that
+# regexes cannot. Reversible labels are swapped for placeholders (<PRIVATE_PERSON_1>) and put
+# back into the reply, so the model never sees them and the employee never notices.
+
+pii_model:
+  backend: ${ACL_PII_MODEL:-stub}   # privacy_filter | stub (offline demo, not a model) | "off"
+  url: ${PRIVACY_FILTER_URL:-http://localhost:8790}
+  mode: redact
+  directions: [input, tool_result, output]
+  min_score: 0.6
+  fail_mode: open
+  entities:
+    private_person: redact
+    private_address: redact
+    private_email: redact
+    private_phone: redact
+    private_date: log
+    private_url: log
+    account_number: redact
+    secret: block
+  reversible: [private_person, private_address, private_email, private_phone, account_number]
+  override_roles: [analyst]        # may send `x-pii-override: <reason>`; always audited
+  override_max: redact             # overrides never lift a block
+  model_override:
+    enabled: true
+    threshold: 0.85
+    keywords: ["reply to", "send (it|this) to", "invoice for", "their own"]
 
 # --- Per-team overrides -------------------------------------------------------
 

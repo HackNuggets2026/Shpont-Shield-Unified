@@ -16,18 +16,25 @@ from pathlib import Path
 from typing import Any
 
 import httpx
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, Response, StreamingResponse
 
+from .. import resources
 from ..config import PolicyStore
 from ..controls.access import authenticate
 from ..decision import DecisionBackend
 from ..engine import ControlLayer, flatten
-from ..types import Action, Context, Direction, Verdict
-from . import mcp_demo
+from ..types import Action, Context, Direction, Principal, Verdict
+from . import broker, mcp_demo
 from .upstream import UpstreamClient
 
-DASHBOARD = Path(__file__).resolve().parent.parent / "dashboard" / "index.html"
+PANELS = Path(__file__).resolve().parent.parent / "dashboard"
+DASHBOARD = PANELS / "index.html"
+
+
+def authenticate_principal(policy: Any, pid: str) -> Principal:
+    key = next((k for k, v in policy.identity.api_keys.items() if v.principal == pid), None)
+    return authenticate(policy, key)
 
 
 def _api_key(request: Request) -> str | None:
@@ -336,9 +343,25 @@ def create_app(
                 rid, -32001, f"blocked by policy: {v.reason}", {"request_id": v.request_id, "action": v.action.value}
             )
 
+        policy = layer.policy_for(principal.team)
+        # A catalogued MCP server is a resource: agents need their owner's grant to reach it.
+        # Agents may not reach uncatalogued servers at all; the company broker checks per call.
+        server_resource = next(
+            (
+                r_id
+                for r_id, r in policy.resources.items()
+                if r.type == "mcp_server" and r.connection.get("server") == server
+            ),
+            None,
+        )
+        if server_resource is None and principal.kind == "agent" and target != "broker":
+            server_resource = f"mcp:{server}"
+
         async def forward(r: dict) -> dict:
             if target == "builtin":
                 return mcp_demo.handle(r)
+            if target == "broker":
+                return await broker.handle(r, principal, policy, layer.state, http)
             resp = await http.post(target, json=r, headers={"accept": "application/json"})
             data = resp.json()
             if not isinstance(data, dict):
@@ -351,8 +374,20 @@ def create_app(
             name, args = params.get("name"), params.get("arguments") or {}
             if not isinstance(name, str) or not isinstance(args, dict):
                 return rpc(rid, -32602, "tools/call needs a string name and object arguments")
+            resource, scope = server_resource, None
+            if target == "broker" and broker.scope_for(name, args):
+                resource, scope = str(args.get("resource")), broker.scope_for(name, args)
             # All of params (name, _meta, ...), not only the arguments, reaches the server.
-            ctx = Context(principal, Direction.TOOL_CALL, flatten(params), tool=name, tool_args=args, channel="mcp")
+            ctx = Context(
+                principal,
+                Direction.TOOL_CALL,
+                flatten(params),
+                tool=name,
+                tool_args=args,
+                channel="mcp",
+                resource=resource,
+                scope=scope,
+            )
             v = await layer.evaluate(ctx, {"server": server})
             if v.blocked:
                 return blocked(v)
@@ -365,7 +400,9 @@ def create_app(
         elif method not in ("initialize", "tools/list"):
             # resources/read, prompts/get, ...: their params reach the server too (and gates apply).
             # Not metered: pings, notifications and reads are protocol traffic, not tool spend.
-            ctx = Context(principal, Direction.TOOL_CALL, flatten(params), channel="mcp", metered=False)
+            ctx = Context(
+                principal, Direction.TOOL_CALL, flatten(params), channel="mcp", metered=False, resource=server_resource
+            )
             v = await layer.evaluate(ctx, {"server": server, "method": method})
             if v.blocked:
                 return blocked(v)
@@ -375,8 +412,12 @@ def create_app(
                     return blocked(v)
                 req = {**req, "params": cleaned}
             request_id = ctx.request_id
-        elif not principal.authenticated and store.policy.identity.require_auth:
-            return blocked(await layer.evaluate(Context(principal, Direction.TOOL_CALL, "", channel="mcp")))
+        else:  # initialize / tools/list: identity and server access still apply
+            gv = await layer.gate(
+                Context(principal, Direction.TOOL_CALL, "", channel="mcp", metered=False, resource=server_resource)
+            )
+            if gv.blocked:
+                return blocked(gv)
 
         try:
             resp = await forward(req)
@@ -449,6 +490,108 @@ def create_app(
         )
         v = await layer.evaluate(ctx)
         return JSONResponse(_verdict_json(v), status_code=v.status_code if v.blocked else 200)
+
+    # ---- employee panel -------------------------------------------------------
+
+    def employee(request: Request):
+        p = authenticate(store.policy, _api_key(request))
+        if not p.authenticated:
+            raise HTTPException(401, "sign in with your personal API key")
+        if p.kind != "human":
+            raise HTTPException(403, "agents cannot use the employee panel")
+        return p
+
+    def resource_view(rid: str, r: Any) -> dict[str, Any]:
+        return {
+            "id": rid,
+            "type": r.type,
+            "name": r.name,
+            "description": r.description,
+            "sensitivity": r.sensitivity,
+            "scopes": r.scopes,
+            "max_grant_hours": r.max_grant_hours,
+            "suspended": resources.suspended(store.policy, layer.state, rid),
+        }
+
+    @app.get("/me/api/profile")
+    async def me_profile(request: Request):
+        p = employee(request)
+        snap = layer.ledger.snapshot(layer.policy_for(p.team))
+        mine = [r for r in snap["scopes"] if (r["scope"], r["key"]) in (("principal", p.id), ("team", p.team))]
+        return {
+            "principal": p.id,
+            "team": p.team,
+            "role": p.role,
+            "agents": resources.agents_of(store.policy, p.id),
+            "budgets": mine,
+            "monitoring_notice": (
+                "AI use is inspected by the company AI control layer: prompts, replies and tool calls are checked "
+                "for confidential data, client PII and policy violations, and decisions are logged."
+            ),
+            "pii_override_allowed": p.role in store.policy.pii_model.override_roles,
+        }
+
+    @app.get("/me/api/resources")
+    async def me_resources(request: Request):
+        p = employee(request)
+        policy = store.policy
+        agents = [a["principal"] for a in resources.agents_of(policy, p.id)]
+        out = []
+        for rid, r in resources.entitled(policy, p).items():
+            view = resource_view(rid, r)
+            view["grants"] = {
+                a: layer.state.grants.get(a, {}).get(rid)
+                | {"active": bool(resources.active_grant(policy, layer.state, authenticate_principal(policy, a), rid))}
+                for a in agents
+                if rid in layer.state.grants.get(a, {})
+            }
+            out.append(view)
+        return {"agents": agents, "resources": out}
+
+    @app.post("/me/api/grants")
+    async def me_grant(request: Request):
+        p = employee(request)
+        body = await _json_object(request)
+        hours = body.get("hours")
+        try:
+            g = resources.grant(
+                store.policy,
+                layer.state,
+                p,
+                str(body.get("agent")),
+                str(body.get("resource")),
+                [str(x) for x in body.get("scopes") or []],
+                float(hours) if hours is not None else None,
+            )
+        except (resources.GrantError, ValueError) as e:
+            return JSONResponse({"error": str(e)}, status_code=400)
+        layer.audit.note("grant", p.id, agent=body.get("agent"), resource=body.get("resource"), grant=g)
+        return g
+
+    @app.delete("/me/api/grants/{agent}/{rid}")
+    async def me_revoke(agent: str, rid: str, request: Request):
+        p = employee(request)
+        if agent not in {a["principal"] for a in resources.agents_of(store.policy, p.id)}:
+            return JSONResponse({"error": f"{agent!r} is not one of your agents"}, status_code=403)
+        removed = resources.revoke(layer.state, agent, rid)
+        if removed:
+            layer.audit.note("revoke", p.id, agent=agent, resource=rid)
+        return {"revoked": removed}
+
+    @app.get("/me/api/activity")
+    async def me_activity(request: Request, limit: int = 50):
+        p = employee(request)
+        mine = {p.id} | {a["principal"] for a in resources.agents_of(store.policy, p.id)}
+        rows = [
+            {k: e.get(k) for k in ("ts", "principal", "channel", "direction", "model", "tool", "action", "reason")}
+            for e in reversed(layer.audit.events)
+            if e["principal"] in mine
+        ]
+        return rows[:limit]
+
+    @app.get("/me", response_class=HTMLResponse)
+    async def me_page():
+        return (PANELS / "employee.html").read_text()
 
     # ---- reporting ------------------------------------------------------------
 
