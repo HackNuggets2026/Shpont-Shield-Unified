@@ -53,6 +53,12 @@ STEPS = [
     ("mcp", "ops", ("tools/call", {"name": "delete_records", "arguments": {"table": "customers"}})),
     # Contextual PII: the model sees <PRIVATE_PERSON_1>, alice sees the name in the reply.
     ("chat", "alice", "Draft a reply to customer Jan Kowalski about his late delivery"),
+    # Egress, last so its blocks do not put alice on watch earlier: what a share sends is checked
+    # first, and sharing outside acme.io needs the external_share scope.
+    ("grant", "alice", {"agent": "alice-coder", "resource": "google-drive", "scopes": ["read", "admin"], "hours": 2}),
+    ("company", "coder", ("gdrive_share_file", {"file_id": "1sb3Zx", "email": "hr@acme.io", "role": "reader"})),
+    ("company", "coder", ("gdrive_share_file", {"file_id": "1hb7Kq", "email": "me@gmail.com", "role": "reader"})),
+    ("company", "coder", ("gdrive_share_file", {"file_id": "1hb7Kq", "email": "bob@acme.io", "role": "reader"})),
 ]
 KEYS = {
     "alice": "dev-alice-key",

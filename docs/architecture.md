@@ -13,7 +13,7 @@ Every interaction becomes a `Context`: principal, direction, text, model or tool
 | Semantic tier 2 | `nimble` re-answers only the questions tier 1 put in `escalate_band` or below `min_confidence` | model | - |
 | Decide | strongest action wins; redact spans or withhold the whole text; audit event | µs | - |
 
-Structured payloads (tool arguments, tool results, non-text message fields) are flattened to raw text for inspection, with JSON-in-strings decoded. Redaction is applied to every key and string in place and then re-checked. If anything is still detected (a card number stored as an integer, a secret split across fields), the payload is refused, never forwarded.
+Structured payloads (tool arguments, tool results, non-text message fields) are flattened to raw text for inspection, with JSON-in-strings decoded. Redaction is applied to every key and string in place and then re-checked. JSON inside a string is redacted value by value and re-serialised, so a span cannot swallow the JSON punctuation around it. If anything is still detected (a card number stored as an integer, a secret split across fields), the payload is refused, never forwarded.
 
 The directions are `input`, `output`, `tool_call`, `tool_result` and `tool_description`. Each control declares which directions it inspects. The chat proxy checks every message in the request on the way in, because the client owns the history and can forge it; repeats are served from a verdict cache. It checks the completion on the way out. The MCP proxy checks arguments, every result and the tool list itself, including names and schema strings, so a poisoned tool is removed before the agent ever sees it.
 
@@ -21,15 +21,16 @@ The directions are `input`, `output`, `tool_call`, `tool_result` and `tool_descr
 
 API keys map to principals of kind `human` or `agent`, and every agent has an owner. The resource catalog (`resources:` in the policy) is security-owned and lists who is entitled to each resource. Grants are runtime state in `data/state.json`, written atomically and changed only through the panels. Security edits the policy; employees edit grants.
 
-Each catalog entry of `type: service` names one service in `controllayer/services.py` (`connection.service`) and the environment variable holding its credential (`connection.secret_env`). A service is catalogued at most once, so a tool name identifies the resource it uses. Each tool declares the scope it needs, and the catalog's `scopes` must be a subset of the scopes the service's tools use: a scope left out keeps its tools from every grant. The policy loader rejects an unknown service, a scope no tool uses and a service catalogued twice.
+Each catalog entry of `type: service` names one service in `controllayer/services.py` (`connection.service`) and the environment variable holding its credential (`connection.secret_env`). A service is catalogued at most once, so a tool name identifies the resource it uses. Each tool declares the scope it needs, and the catalog's `scopes` must be a subset of the scopes the service's tools use: a scope left out keeps its tools from every grant. Two scopes unlock no tool: `pii` exists on services with masked columns, and `external_share` on services whose egress tools address people. The policy loader rejects an unknown service, a scope the service cannot use and a service catalogued twice. `scope_entitlements` limits single scopes to some of the people entitled to the resource. A person can use and delegate only the scopes they are entitled to, and a live grant loses a scope as soon as its owner does.
 
 A broker call has a resource and a scope, both given by the tool. It passes the gate only if all of these hold at that moment:
 - the agent holds a grant with that scope;
 - the grant has not expired;
-- the owner is still entitled;
-- the resource is not suspended.
+- the owner is still entitled to the resource and to that scope;
+- the resource is not suspended;
+- for an egress tool, every recipient is in a `company_domains` domain, unless the caller holds `external_share`. Any other string, such as a list or a display name, counts as outside.
 
-Such decisions are never cached, because expiry depends on time. `tools/list` applies the same rules, so it shows only the tools the caller can use now. The tool's arguments are validated against its schema (unknown keys, types, enums, ranges) before the backend runs. SQL tools accept one `SELECT` or `WITH ... SELECT` statement with no write, DDL or session keyword outside literals, quoted names and comments, and run it on a read-only database with a statement timeout and a cap on value and result size. A grant's expiry is set once, when it is created or when an expired grant is renewed. Changing its scopes (`PATCH /me/api/grants/{agent}/{resource}`) keeps the expiry and works only on an active grant. A new grant over a live one is refused. Reaching a catalogued MCP server needs a grant too, but per-tool RBAC and the irreversible-tool rule still apply on that server. Agents cannot reach uncatalogued servers at all.
+Such decisions are never cached, because expiry depends on time. `tools/list` applies the same rules, so it shows only the tools the caller can use now. The tool's arguments are validated against its schema (unknown keys, types, enums, ranges) before the backend runs. SQL tools accept one `SELECT` or `WITH ... SELECT` statement with no write, DDL or session keyword outside literals, quoted names and comments, and run it on a read-only database with a statement timeout and a cap on value and result size. Blobs come back as bytea hex (`\x41`). Without the `pii` scope, the query runs on a copy of the data in which the columns classified in `services.yaml` are already masked. Post-hoc redaction alone cannot stop `hex()` or `substr()` from reshaping a value past the detectors. Before an egress tool runs, the object it sends and its message are checked as both a tool call and a tool result, and the call is refused if any of it would be redacted, withheld or blocked. A grant's expiry is set once, when it is created or when an expired grant is renewed. Changing its scopes (`PATCH /me/api/grants/{agent}/{resource}`) keeps the expiry and works only on an active grant. A new grant over a live one is refused. Reaching a catalogued MCP server needs a grant too, but per-tool RBAC and the irreversible-tool rule still apply on that server. Agents cannot reach uncatalogued servers at all.
 
 ## Insider risk
 
@@ -100,6 +101,7 @@ Monitoring employees' AI use is personal-data processing. In the EU that means G
 
 - No approval workflow yet: irreversible tools are simply blocked.
 - The company services are in-process mocks. A production backend would call each real API with the injected credential.
+- Source masking covers the SQL services. Records from the other services rely on the content checks alone. Writes into company systems (S3, including its public bucket, Notion, GitHub issues) are not treated as egress.
 - Risk scores live in memory and reset on restart; manual levels and grants persist.
 - The Privacy Filter sidecar and real decision models have not been run on the build VM; their contracts are tested against mocks.
 - Budgets and metrics are in-memory, so a restart resets them. Multiple replicas would need Redis for shared counters.
