@@ -121,7 +121,7 @@
         ? `<a class="Link--secondary no-wrap" href="${h.esc(here({ open: open ? null : r.id, grants: null }))}" data-nav>${active} active${r.grants.length > active ? ` · ${r.grants.length - active} inactive` : ""} ${open ? "▴" : "▾"}</a>`
         : h.muted("none");
       return [
-        `<b>${h.esc(r.name)}</b> ${h.muted(h.esc(r.id))}`,
+        `${ACL.logo(r.id)} <b>${h.esc(r.name)}</b> ${h.muted(h.esc(r.id))}`,
         h.esc(r.type),
         r.sensitivity ? h.badge(h.tone(r.sensitivity), r.sensitivity) : "",
         `<span class="text-mono f6">${h.esc((r.scopes || []).join(" "))}</span>`,
@@ -256,7 +256,7 @@
     const id = eventId(e), open = p.open === id, n = e.findings.length;
     const who = `${h.person(e.principal)} ${h.muted(h.esc(e.team || "") + (e.owner ? " · agent of " + h.esc(e.owner) : ""))}
       <a class="Link--muted f6" href="${h.esc(here({ principal: e.principal }))}" data-nav title="Only ${h.esc(e.principal)}">⊂</a>`;
-    const where = `${h.esc(e.channel)}/${h.esc(e.direction)}${e.tool || e.model ? " " + `<span class="text-mono f6 color-fg-muted">${h.esc(e.tool || e.model)}</span>` : ""}`;
+    const where = `${h.esc(e.channel)}/${h.esc(e.direction)}${e.tool || e.model ? ` ${ACL.logo(e.model ? "model:" + e.model : e.tool)}<span class="text-mono f6 color-fg-muted">${h.esc(e.tool || e.model)}</span>` : ""}`;
     const summary = n
       ? `<a class="Link--secondary no-wrap" href="${h.esc(here({ open: open ? null : id }))}" data-nav>${e.findings.slice(0, 2).map((f) => `${h.esc(f.control)}/${h.esc(f.category)}`).join(", ")}${n > 2 ? ` +${n - 2}` : ""} ${open ? "▴" : "▾"}</a>`
       : h.muted(h.esc(e.reason || "-"));
