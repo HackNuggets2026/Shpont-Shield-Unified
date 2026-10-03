@@ -81,8 +81,9 @@ class SemanticControl(ControlBase):
     # choice: option -> description, and option -> action
     criteria: dict[str, str] = Field(default_factory=dict)
     actions: dict[str, Action] = Field(default_factory=dict)
-    # Only used by the offline heuristic backend.
+    # Regexes used only by the offline heuristic backend (noul: keywords; choice: per option).
     keywords: list[str] = Field(default_factory=list)
+    option_keywords: dict[str, list[str]] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def _check(self) -> SemanticControl:

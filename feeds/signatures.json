@@ -1,0 +1,99 @@
+{
+  "feed_version": "2026-10-03.1",
+  "source": "acme-secops/ai-threat-intel (sample; replace with your managed feed URL)",
+  "signatures": [
+    {
+      "id": "SIG-PICKLE-001",
+      "name": "Pickle code-execution opcodes (unsafe model deserialization)",
+      "reference": "CVE-2024-3568 / HF malicious models",
+      "category": "unsafe_deserialization",
+      "pattern": "c(?:os|posix|subprocess|builtins)\\n(?:system|popen|exec|eval)|__reduce__|torch\\.load\\([^)]*weights_only\\s*=\\s*False",
+      "directions": ["input", "output", "tool_call", "tool_result"],
+      "severity": "critical",
+      "action": "block"
+    },
+    {
+      "id": "SIG-HF-RCODE-002",
+      "name": "trust_remote_code on unvetted model repository",
+      "reference": "HF supply-chain advisories",
+      "category": "supply_chain",
+      "pattern": "trust_remote_code\\s*=\\s*True",
+      "directions": ["output", "tool_call"],
+      "severity": "high",
+      "action": "warn"
+    },
+    {
+      "id": "SIG-RAY-003",
+      "name": "ShadowRay unauthenticated Ray Jobs API RCE",
+      "reference": "CVE-2023-48022",
+      "category": "rce",
+      "pattern": "/api/jobs/?[^\\n]{0,200}entrypoint",
+      "flags": "i",
+      "directions": ["input", "output", "tool_call"],
+      "severity": "critical",
+      "action": "block"
+    },
+    {
+      "id": "SIG-LANGFLOW-004",
+      "name": "Langflow /api/v1/validate/code unauthenticated RCE",
+      "reference": "CVE-2025-3248",
+      "category": "rce",
+      "pattern": "/api/v1/validate/code",
+      "directions": ["input", "output", "tool_call"],
+      "severity": "critical",
+      "action": "block"
+    },
+    {
+      "id": "SIG-MCP-POISON-005",
+      "name": "MCP tool-description poisoning (hidden instructions to the agent)",
+      "reference": "Invariant Labs tool poisoning, 2025",
+      "category": "tool_poisoning",
+      "pattern": "<(?:IMPORTANT|SYSTEM|instructions?)>|do not (?:tell|mention|inform) the user|~/\\.ssh/id_rsa|mcp\\.json",
+      "flags": "i",
+      "directions": ["tool_description", "tool_result"],
+      "severity": "critical",
+      "action": "block"
+    },
+    {
+      "id": "SIG-SHELL-006",
+      "name": "Reverse shell / remote payload execution",
+      "reference": "generic",
+      "category": "rce",
+      "pattern": "bash\\s+-i\\s+>&\\s*/dev/tcp/|(?:curl|wget)\\s+[^|;]+\\|\\s*(?:ba)?sh\\b|nc\\s+-e\\s+/bin/(?:ba)?sh",
+      "directions": ["input", "output", "tool_call", "tool_result"],
+      "severity": "critical",
+      "action": "block"
+    },
+    {
+      "id": "SIG-PROMPTLEAK-007",
+      "name": "Known jailbreak preamble (DAN family)",
+      "reference": "public jailbreak corpora",
+      "category": "jailbreak",
+      "pattern": "\\bDo Anything Now\\b|\\bDAN mode\\b|\\bAIM\\b.*Machiavellian",
+      "flags": "i",
+      "directions": ["input", "tool_result"],
+      "severity": "high",
+      "action": "block"
+    },
+    {
+      "id": "SIG-SSRF-008",
+      "name": "Cloud metadata endpoint access (SSRF via agent tools)",
+      "reference": "Capital One 2019 / agent SSRF",
+      "category": "ssrf",
+      "pattern": "169\\.254\\.169\\.254|metadata\\.google\\.internal",
+      "directions": ["tool_call", "input"],
+      "severity": "critical",
+      "action": "block"
+    },
+    {
+      "id": "SIG-MDIMG-009",
+      "name": "Markdown image exfiltration (data in URL query)",
+      "reference": "Bing Chat / ChatGPT plugin exfil, 2023",
+      "category": "exfiltration",
+      "pattern": "!\\[[^\\]]*\\]\\(https?://[^)]*\\?[^)]*=",
+      "directions": ["output", "tool_result"],
+      "severity": "high",
+      "action": "block"
+    }
+  ]
+}

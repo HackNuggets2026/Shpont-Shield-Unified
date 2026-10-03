@@ -75,15 +75,19 @@ class PatternDetector:
         if not applies(cfg, ctx):
             return []
         out = []
-        for entity, proposed in cfg.entities.items():
-            det = self.detectors.get(entity)
-            if det is None:
+        claimed: list[Span] = []
+        # Detector order is priority order: a phone-shaped run of digits inside a card number is the card.
+        for entity, det in self.detectors.items():
+            proposed = cfg.entities.get(entity)
+            if proposed is None:
                 continue
             spans = [
                 Span(m.start(), m.end(), entity)
                 for m in det.pattern.finditer(ctx.text)
-                if det.validate is None or det.validate(m.group())
+                if (det.validate is None or det.validate(m.group()))
+                and not any(m.start() < c.end and c.start < m.end() for c in claimed)
             ]
+            claimed += spans
             if spans:
                 out.append(
                     finding(
