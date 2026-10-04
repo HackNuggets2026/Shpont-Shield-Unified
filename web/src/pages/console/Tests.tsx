@@ -45,7 +45,7 @@ export function TestsPage() {
       {res && <Regressions res={res} />}
 
       {res ? (
-        <div className="grid gap-4 md:grid-cols-2">
+        <div className="grid items-start gap-4 md:grid-cols-2">
           {res.scenarios.map((sc) => (
             <ScenarioCard key={sc.id} sc={sc} regressed={new Set(res.regressions.filter((r) => r.scenario === sc.id).map((r) => r.step))} />
           ))}
@@ -287,7 +287,8 @@ interface ControlRow {
   failed: number;
 }
 
-const passedOutcome = (t: PytestCase) => t.outcome === "passed" || t.outcome === "xfailed";
+const passedOutcome = (t: PytestCase) => t.outcome === "passed" || t.outcome === "xfailed" || t.outcome === "xpassed";
+const skippedOutcome = (t: PytestCase) => t.outcome === "skipped";
 const failedOutcome = (t: PytestCase) => t.outcome === "failed" || t.outcome === "error";
 
 function byControl(r: PytestReport): ControlRow[] {
@@ -299,6 +300,7 @@ function byControl(r: PytestReport): ControlRow[] {
       row = { control: key, positive: { passed: 0, total: 0 }, negative: { passed: 0, total: 0 }, other: { passed: 0, total: 0 }, failed: 0 };
       rows.set(key, row);
     }
+    if (skippedOutcome(t)) continue;
     const cell = row[t.kind] ?? row.other;
     cell.total += 1;
     if (passedOutcome(t)) cell.passed += 1;
