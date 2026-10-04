@@ -103,6 +103,11 @@ class SelfTest:
     def latest(self) -> dict[str, Any] | None:
         return self.history[-1] if self.history else None
 
+    def stale(self) -> bool:
+        """Auto-run is on and no run has seen the live policy yet."""
+        last = self.latest()
+        return self.auto and (last is None or last["policy_version"] != self.store.policy.version)
+
     def status(self) -> dict[str, Any]:
         return {
             "auto": self.auto,

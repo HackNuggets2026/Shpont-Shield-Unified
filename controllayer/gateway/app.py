@@ -187,7 +187,10 @@ def create_app(
 
     @contextlib.asynccontextmanager
     async def lifespan(app: FastAPI):
-        app.state.selftest.loop = asyncio.get_running_loop()  # policy-change self-tests run on this loop
+        tests = app.state.selftest
+        tests.loop = asyncio.get_running_loop()  # policy-change self-tests run on this loop
+        if tests.stale():  # the policy changed while the gateway was down
+            app.state.selftest_boot = asyncio.create_task(tests.run("startup"))
         task = asyncio.create_task(background()) if watch else None
         yield
         app.state.selftest.loop = None

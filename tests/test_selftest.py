@@ -19,7 +19,9 @@ pytestmark = [pytest.mark.control("selftest")]
 @pytest.fixture
 def tests_client(make_client, monkeypatch):
     monkeypatch.setenv("ACL_SCENARIOS", str(ROOT / "scenarios.yaml"))
-    return make_client()
+    c = make_client()
+    c.app.state.selftest.auto = True
+    return c
 
 
 def _wait(pred, timeout: float = 10.0) -> None:
@@ -185,3 +187,14 @@ def test_history_survives_a_restart(make_client, monkeypatch):
     again = make_client()
     assert again.get("/admin/selftest/latest").json()["result"]["run_id"] == run["run_id"]
     assert selftest.HISTORY == 20
+
+
+def test_startup_runs_when_the_policy_changed_while_down(make_client, monkeypatch):
+    monkeypatch.setenv("ACL_SCENARIOS", str(ROOT / "scenarios.yaml"))
+    monkeypatch.setenv("ACL_SELFTEST_AUTO", "1")
+    with make_client() as c:
+        _wait(lambda: c.app.state.selftest.latest() is not None)
+        assert c.app.state.selftest.latest()["trigger"] == "startup"
+    with make_client() as c:  # same policy, history on disk: nothing to do
+        assert not c.app.state.selftest.stale()
+        assert len(c.app.state.selftest.history) == 1
