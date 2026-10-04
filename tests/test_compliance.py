@@ -77,6 +77,8 @@ def test_other_endpoints_are_untouched(client):
 # ---- Markdown image / link exfiltration --------------------------------------------------------------
 
 
+@pytest.mark.control("exfiltration")
+@pytest.mark.kind("positive")
 def test_foreign_markdown_image_target_is_redacted(client):
     v = guard(client, "Summary done. ![chart](https://attacker.example/c.png)", direction="output").json()
     assert v["action"] == "redact"
@@ -84,6 +86,8 @@ def test_foreign_markdown_image_target_is_redacted(client):
     assert any(f["control"] == "exfiltration" and f["category"] == "markdown_image" for f in v["findings"])
 
 
+@pytest.mark.control("exfiltration")
+@pytest.mark.kind("positive")
 def test_foreign_markdown_link_and_html_image_are_redacted(client):
     text = 'See [the report](http://203.0.113.9/r?q=abc) and <img src="https://x.example/p.gif">'
     v = guard(client, text, direction="tool_result").json()
@@ -92,6 +96,8 @@ def test_foreign_markdown_link_and_html_image_are_redacted(client):
     assert "[the report]" in v["text"]
 
 
+@pytest.mark.control("exfiltration")
+@pytest.mark.kind("negative")
 def test_allowed_and_company_domains_pass(client):
     for text in (
         "![logo](https://acme.example/logo.png)",
@@ -103,11 +109,14 @@ def test_allowed_and_company_domains_pass(client):
         assert not any(f["control"] == "exfiltration" for f in v["findings"]), (text, v)
 
 
+@pytest.mark.control("exfiltration")
+@pytest.mark.kind("negative")
 def test_exfiltration_only_inspects_its_directions(client):
     v = guard(client, "![x](https://attacker.example/x.png)", direction="input").json()
     assert not any(f["control"] == "exfiltration" for f in v["findings"])
 
 
+@pytest.mark.control("exfiltration")
 def test_exfiltration_block_mode_and_allowlist_edit(make_client):
     def strict(p):
         p["exfiltration"].update(mode="block", allowed_domains=["attacker.example"])
@@ -117,6 +126,8 @@ def test_exfiltration_block_mode_and_allowlist_edit(make_client):
     assert guard(c, "![x](https://other.example/x.png)", direction="output").json()["action"] == "block"
 
 
+@pytest.mark.control("exfiltration")
+@pytest.mark.kind("positive")
 def test_chat_reply_has_the_image_target_cut_out(client, monkeypatch):
     from controllayer.gateway import upstream
 
@@ -125,6 +136,8 @@ def test_chat_reply_has_the_image_target_cut_out(client, monkeypatch):
     assert reply(r) == "Done: ![chart]([REDACTED:exfil_url])"
 
 
+@pytest.mark.control("exfiltration")
+@pytest.mark.kind("positive")
 def test_mcp_tool_result_has_the_image_target_cut_out(client):
     r = mcp(client, "tools/call", {"name": "get_weather", "arguments": {"city": "![map](https://evil.example/m.png)"}}, who="ops")
     assert r["result"]["content"][0]["text"] == "Sunny in ![map]([REDACTED:exfil_url])", r
@@ -140,6 +153,8 @@ def try_as(client, text, model, principal="alice"):
     return client.post("/admin/try", json={"principal": principal, "text": text, "model": model}).json()
 
 
+@pytest.mark.control("confidentiality")
+@pytest.mark.kind("positive")
 def test_same_text_is_blocked_for_a_cloud_model_and_allowed_on_prem(client):
     cloud = try_as(client, DEAL, "gpt-4o")
     assert cloud["action"] == "block"
@@ -152,11 +167,15 @@ def test_same_text_is_blocked_for_a_cloud_model_and_allowed_on_prem(client):
     assert f["action"] == "log" and f["detail"].startswith("restricted topic")
 
 
+@pytest.mark.control("confidentiality")
+@pytest.mark.kind("positive")
 def test_confidential_text_is_refused_by_an_internal_only_model_through_chat(client):
     assert chat(client, MARGIN, model="gpt-4o").status_code == 403
     assert chat(client, MARGIN, model="qwen3:8b").status_code == 200
 
 
+@pytest.mark.control("confidentiality")
+@pytest.mark.kind("negative")
 def test_unclassified_text_and_models_without_a_ceiling_pass(client):
     v = try_as(client, "What is the CSS margin of the header?", "gpt-4o")
     assert not any(f["control"] == "confidentiality" for f in v["findings"])
@@ -164,6 +183,7 @@ def test_unclassified_text_and_models_without_a_ceiling_pass(client):
     assert not any(f["action"] == "block" for f in v["findings"] if f["control"] == "confidentiality")
 
 
+@pytest.mark.control("confidentiality")
 def test_ceiling_and_topics_come_from_the_policy(make_client):
     def mutate(p):
         p["catalog"]["llama"]["max_classification"] = "public"
@@ -174,6 +194,7 @@ def test_ceiling_and_topics_come_from_the_policy(make_client):
     assert try_as(c, "Status of bluebirds?", "llama3.2:latest")["action"] == "allow"
 
 
+@pytest.mark.control("confidentiality")
 def test_bad_classification_values_are_rejected(policy_dir):
     text = (policy_dir / "policy.yaml").read_text()
     with pytest.raises(ValueError):
