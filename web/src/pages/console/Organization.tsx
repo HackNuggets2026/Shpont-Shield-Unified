@@ -156,8 +156,8 @@ export function Organization() {
             <Link to={orgPath.people({ sort: "usd" })} className="rounded-md px-2 py-1 text-ink2 ring-1 ring-inset ring-line hover:bg-raised">
               Top spenders
             </Link>
-            <Link to={orgPath.people({ status: "quarantined" })} className="rounded-md px-2 py-1 text-ink2 ring-1 ring-inset ring-line hover:bg-raised">
-              Quarantined
+            <Link to={orgPath.people({ status: "restricted" })} className="rounded-md px-2 py-1 text-ink2 ring-1 ring-inset ring-line hover:bg-raised">
+              Restricted
             </Link>
             <Link to={orgPath.people({ status: "limited" })} className="rounded-md px-2 py-1 text-ink2 ring-1 ring-inset ring-line hover:bg-raised">
               Limited

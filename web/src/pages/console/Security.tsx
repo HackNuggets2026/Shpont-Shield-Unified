@@ -5,7 +5,7 @@ import { admin } from "../../api";
 import { ops, type IncidentFilters } from "../../opsApi";
 import { ActivityFeed } from "../../components/ActivityFeed";
 import { AdminLog } from "../../components/AdminLog";
-import { LevelPill, PersonStatusPill } from "../../components/pills";
+import { LevelPill, PersonStatusPill, levelTone } from "../../components/pills";
 import { Card, Empty, ErrorBox, Kpi, Loading, PageHeader, Pill, Q, Segmented, Select, cx } from "../../components/ui";
 import { IconAlert } from "../../components/icons";
 import { DepartmentSelect, OrgLine, Pager, SearchBox, TeamSelect, useDepartments, useUrlFilters } from "../../components/opsKit";
@@ -115,7 +115,7 @@ export function Security() {
     const known = new Set([...(s?.by_rule.map((r) => r.rule) ?? []), ...Object.keys(RULES)]);
     return [...known].sort((a, b) => ruleLabel(a).localeCompare(ruleLabel(b)));
   }, [s]);
-  const th = pol.data?.response ?? null;
+  const th = pol.data?.levels ?? null;
 
   const toTable = () => requestAnimationFrame(() => tableRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }));
   const pickCell = (rule: string, department: string) => {
@@ -200,7 +200,7 @@ export function Security() {
               {(d) => <OpenedClosedChart trend={d.trend} height={170} />}
             </Q>
           </Card>
-          <Card title="By department" subtitle="Open incidents and people past the alert level. Click to filter." flush>
+          <Card title="By department" subtitle="Open incidents and people under watch or restricted. Click to filter." flush>
             <Q q={summary} rows={4}>
               {(d) =>
                 d.by_department.length === 0 ? (
@@ -329,7 +329,7 @@ export function Security() {
             atRisk !== undefined && atRisk > 20
               ? `Top 20 of ${countC(atRisk)}, highest risk score first`
               : pol.data
-                ? `Decaying sum of open incident weights; halves every ${Math.round(pol.data.half_life_minutes)} min`
+                ? `Blocks and open incidents add points; the score halves every ${Math.round(pol.data.half_life_hours)} h`
                 : "Highest risk score first"
           }
           actions={
@@ -355,12 +355,12 @@ export function Security() {
                 <li key={p.principal}>
                   <Link
                     to={`/console/people/${encodeURIComponent(p.principal)}`}
-                    className={cx("flex items-center justify-between gap-3 px-4 py-2.5 hover:bg-raised/60", p.level === "quarantine" && "bg-bad/[0.04]")}
+                    className={cx("flex items-center justify-between gap-3 px-4 py-2.5 hover:bg-raised/60", levelTone(p.level ?? "") === "bad" && "bg-bad/[0.04]")}
                   >
                     <div className="min-w-0">
                       <div className="flex flex-wrap items-center gap-1.5">
                         <span className="font-medium text-ink">{p.name || p.principal}</span>
-                        {p.level && p.level !== "none" && <LevelPill level={p.level} />}
+                        {p.level && <LevelPill level={p.level} />}
                         {p.status && p.status !== "active" && <PersonStatusPill status={p.status} />}
                       </div>
                       <OrgLine team={p.team} department={p.department} className="mt-0.5" />
@@ -377,15 +377,13 @@ export function Security() {
           {th && (
             <div className="flex flex-wrap gap-x-3 gap-y-1 border-t border-line px-4 py-2 text-[11px] text-muted">
               <span>
-                alert ≥ <b className="text-ink2">{th.alert}</b>
+                Watch ≥ <b className="text-ink2">{th.watch}</b> (stricter checks)
               </span>
               <span>
-                tighten ≥ <b className="text-ink2">{th.tighten}</b> (budget to {Math.round(th.tighten_budget_scale * 100)}%)
+                Restricted ≥ <b className="text-ink2">{th.restricted}</b> (every request blocked)
               </span>
-              <span>
-                quarantine ≥ <b className="text-ink2">{th.quarantine}</b>
-              </span>
-              {!th.auto && <span className="text-warn">automatic responses off</span>}
+              <span>opening a trap restricts at once</span>
+              {pol.data && !pol.data.response.auto && <span className="text-warn">automatic responses off</span>}
             </div>
           )}
         </Card>

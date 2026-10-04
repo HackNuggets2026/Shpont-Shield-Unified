@@ -10,14 +10,14 @@ import { GrantDialog, GrantsTable } from "../../components/Grants";
 import { IncidentTable } from "../../components/IncidentList";
 import { LeasesTable } from "../../components/Leases";
 import { LevelPill, PersonStatusPill, RequestStatusPill, sourceLabel } from "../../components/pills";
-import { RestrictActions, ViewEventsButton } from "../../components/RestrictActions";
-import { Button, Card, Empty, ErrorBox, Kpi, Loading, PageHeader, TableWrap } from "../../components/ui";
+import { ViewEventsButton } from "../../components/RestrictActions";
+import { InsiderRiskCard } from "../../components/InsiderRisk";
+import { Button, Card, Empty, ErrorBox, Loading, PageHeader, TableWrap } from "../../components/ui";
 import { IconKey } from "../../components/icons";
 import { Breadcrumbs } from "../../components/org";
 import { useWorkflowColors, wfLabel } from "../../lib/workflows";
 import { org, orgPath } from "../../orgApi";
 import { ago, dateTime, num, pct, tokens, usd } from "../../lib/format";
-import { RiskBar } from "./People";
 
 export function BreakdownTable({ rows, dim, empty = "No usage" }: { rows: Breakdown[]; dim: string; empty?: string }) {
   const shown = rows.filter((r) => r.usd || r.tokens || r.requests || r.minutes);
@@ -128,25 +128,14 @@ export function PersonPage() {
         </div>
       )}
 
-      <Card title="Restrict or restore" subtitle="Every action needs a reason; the person sees it on their privacy page.">
-        <RestrictActions pid={p.principal} status={p.status} scale={p.budget_scale} />
-      </Card>
-
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
-        <Kpi label="Risk score" value={<RiskBar score={p.risk} />} sub={`level ${p.level === "none" ? "normal" : p.level}`} />
-        <Kpi label="Spend, 30 days" value={usd(total30)} sub={`today ${usd(p.today.usd)}`} />
-        <Kpi label="Calls today" value={num(p.today.requests)} sub={`${tokens(p.today.tokens)} tokens`} />
-        <Kpi
-          label="Policy adherence"
-          value={p.adherence ? pct(p.adherence.adherence) : "—"}
-          sub={p.adherence ? `${num(p.adherence.total)} checks · ${num(p.adherence.block)} blocked` : "no checks"}
-          tone={p.adherence && (p.adherence.adherence ?? 1) < 0.9 ? "bad" : undefined}
-        />
-        <Kpi label="Open incidents" value={p.open_incidents} tone={p.open_incidents ? "bad" : undefined} sub={`${p.incidents.length} in total`} />
-      </div>
+      <InsiderRiskCard pid={p.principal} status={p.status} scale={p.budget_scale} />
 
       <div className="grid gap-4 xl:grid-cols-3">
-        <Card title="Spend by workflow, 30 days" className="xl:col-span-2">
+        <Card
+          title="Spend by workflow, 30 days"
+          subtitle={`${usd(total30)} in 30 days · today ${usd(p.today.usd)}, ${num(p.today.requests)} calls, ${tokens(p.today.tokens)} tokens`}
+          className="xl:col-span-2"
+        >
           <StackedChart ts={p.spend} height={220} colors={wfColors} labelOf={wfLabel} />
         </Card>
         <Card title="By source and resource" subtitle="30 days">
@@ -170,7 +159,11 @@ export function PersonPage() {
         <Card title="Workflows" subtitle="30 days" flush>
           <BreakdownTable rows={p.by_workflow} dim="Workflow" empty="No workflow usage" />
         </Card>
-        <Card title="Incidents" flush>
+        <Card
+          title="Incidents"
+          subtitle={p.open_incidents ? `${p.open_incidents} open of ${p.incidents.length}` : `${p.incidents.length} in total, none open`}
+          flush
+        >
           <IncidentTable incidents={p.incidents} showPerson={false} empty="No incidents for this person" />
         </Card>
       </div>

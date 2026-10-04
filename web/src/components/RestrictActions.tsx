@@ -7,14 +7,14 @@ import { DecisionPill } from "./pills";
 import { Button, Empty, Field, Pill, TableWrap } from "./ui";
 import { IconEye, IconLock } from "./icons";
 
-type Mode = "quarantine" | "revoke" | "tighten" | "restore";
+type Mode = "restrict" | "revoke" | "tighten" | "restore";
 
 const COPY: Record<Mode, { title: string; confirm: string; tone: "danger" | "primary" | "good"; body: string }> = {
-  quarantine: {
-    title: "Quarantine",
-    confirm: "Quarantine",
+  restrict: {
+    title: "Restrict",
+    confirm: "Restrict",
     tone: "danger",
-    body: "Every AI call, tool call and resource start by this person is refused until restored. Running resources keep running until stopped.",
+    body: "Every request by this person (and their agents) is blocked until an admin sets them back to Auto. Running resources keep running until stopped.",
   },
   revoke: {
     title: "Revoke access",
@@ -32,24 +32,45 @@ const COPY: Record<Mode, { title: string; confirm: string; tone: "danger" | "pri
     title: "Restore access",
     confirm: "Restore",
     tone: "good",
-    body: "Clears every restriction (status, budget scale, approvals) and resolves the open incidents behind it.",
+    body: "Clears the budget and key limits (status, budget scale) and resolves the open incidents behind them. The insider-risk level is set separately.",
   },
 };
 
-/** Quarantine / tighten / revoke / restore for one person, each behind a reason. */
-export function RestrictActions({ pid, status, scale, compact }: { pid: string; status: string; scale: number; compact?: boolean }) {
+/** Restrict / tighten / revoke / restore for one person, each behind a reason. `level` is the insider-risk
+ * level (Restrict is hidden when already restricted); `only` limits which buttons show. */
+export function RestrictActions({
+  pid,
+  status,
+  scale,
+  compact,
+  level,
+  only,
+}: {
+  pid: string;
+  status: string;
+  scale: number;
+  compact?: boolean;
+  level?: string;
+  only?: Mode[];
+}) {
   const qc = useQueryClient();
   const [mode, setMode] = useState<Mode | null>(null);
   const [newScale, setNewScale] = useState(0.25);
   const restricted = status !== "active" || scale < 1;
+  const show = (m: Mode) => !only || only.includes(m);
 
   const run = async (reason: string) => {
+    if (mode === "restrict") {
+      await admin.setRisk(pid, { level: "restricted", reason });
+      await qc.invalidateQueries({ queryKey: ["admin"] });
+      return;
+    }
     const body: Record<string, unknown> =
       mode === "restore"
         ? { clear: true, reason }
         : mode === "tighten"
           ? { budget_scale: newScale, reason }
-          : { status: mode === "quarantine" ? "quarantined" : "revoked", reason };
+          : { status: "revoked", reason };
     await admin.restrict(pid, body);
     await qc.invalidateQueries({ queryKey: ["admin"] });
   };
@@ -58,22 +79,24 @@ export function RestrictActions({ pid, status, scale, compact }: { pid: string; 
   return (
     <>
       <div className="flex flex-wrap gap-2">
-        {status !== "quarantined" && (
-          <Button size={compact ? "sm" : "md"} variant="danger" onClick={() => setMode("quarantine")}>
-            <IconLock size={14} /> Quarantine
+        {show("restrict") && level !== "restricted" && (
+          <Button size={compact ? "sm" : "md"} variant="danger" onClick={() => setMode("restrict")}>
+            <IconLock size={14} /> Restrict
           </Button>
         )}
-        <Button size={compact ? "sm" : "md"} onClick={() => setMode("tighten")}>
-          Tighten budget
-        </Button>
-        {status !== "revoked" && (
+        {show("tighten") && (
+          <Button size={compact ? "sm" : "md"} onClick={() => setMode("tighten")}>
+            Tighten budget
+          </Button>
+        )}
+        {show("revoke") && status !== "revoked" && (
           <Button size={compact ? "sm" : "md"} onClick={() => setMode("revoke")}>
             Revoke key
           </Button>
         )}
-        {restricted && (
+        {show("restore") && restricted && (
           <Button size={compact ? "sm" : "md"} variant="good" onClick={() => setMode("restore")}>
-            Restore
+            {only ? "Lift limits" : "Restore"}
           </Button>
         )}
       </div>

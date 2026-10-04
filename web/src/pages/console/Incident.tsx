@@ -227,8 +227,8 @@ export function IncidentPage() {
   const { incident: inc, timeline, principal } = q.data;
   const row = person.data;
   const who = inc0?.name || dir.data?.name || principal.id;
-  const th = pol.data?.response ?? null;
-  const halfLife = pol.data?.half_life_minutes ?? null;
+  const th = pol.data?.levels ?? null;
+  const halfLife = pol.data ? pol.data.half_life_hours * 60 : null; // minutes
   const live = inc.status === "open" || inc.status === "acknowledged";
   const nowWeight = live && halfLife ? inc.weight * 0.5 ** ((Date.now() / 1000 - inc.ts) / (halfLife * 60)) : 0;
 
@@ -301,7 +301,7 @@ export function IncidentPage() {
           </Step>
           <Step n={2} title="System responded" tone={autos.length ? "serious" : "neutral"}>
             {autos.length === 0 ? (
-              <div className="text-ink2">No automatic action{th ? `: the score stayed below the alert level (${th.alert})` : ""}.</div>
+              <div className="text-ink2">No automatic action{th ? `: the score moves the person to Watch at ${th.watch} and Restricted at ${th.restricted} on its own` : ""}.</div>
             ) : (
               <ul className="space-y-1">
                 {autos.map((a, i) => (
@@ -400,7 +400,7 @@ export function IncidentPage() {
               </div>
             )}
             <div className="mt-4 space-y-2">
-              <RestrictActions pid={principal.id} status={principal.status} scale={scale} compact />
+              <RestrictActions pid={principal.id} status={principal.status} scale={scale} level={principal.level} compact />
               <ViewContentButton
                 pid={principal.id}
                 incidentId={inc.id}

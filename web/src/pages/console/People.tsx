@@ -8,13 +8,14 @@ import { IconSearch } from "../../components/icons";
 import { Card, Empty, ErrorBox, Loading, PageHeader, Pill, Select, TableWrap, cx } from "../../components/ui";
 import { count, money, pct, tokens, usd } from "../../lib/format";
 
-export function RiskBar({ score }: { score: number }) {
-  const tone = score >= 100 ? "bg-bad" : score >= 60 ? "bg-serious" : score >= 30 ? "bg-warn" : "bg-good/70";
+/** A risk score, coloured by the insider-risk thresholds (watch 30, restricted 120 by default). */
+export function RiskBar({ score, watch = 30, restricted = 120 }: { score: number; watch?: number; restricted?: number }) {
+  const tone = score >= restricted ? "bg-bad" : score >= watch ? "bg-warn" : "bg-good/70";
   return (
     <div className="flex items-center gap-2">
       <span className="tnum w-9 text-right text-sm font-semibold text-ink">{Math.round(score)}</span>
       <div className="h-1.5 w-16 overflow-hidden rounded-full bg-ink/10">
-        <div className={cx("h-full rounded-full", tone)} style={{ width: `${Math.min(score, 120) / 1.2}%` }} />
+        <div className={cx("h-full rounded-full", tone)} style={{ width: `${(Math.min(score, restricted) / restricted) * 100}%` }} />
       </div>
     </div>
   );
@@ -83,7 +84,7 @@ export function PeopleTable({
               <td>
                 <div className="flex items-center gap-2">
                   <RiskBar score={r.risk} />
-                  {r.level !== "none" && <LevelPill level={r.level} />}
+                  <LevelPill level={r.level} />
                 </div>
               </td>
               <td>
@@ -130,7 +131,8 @@ const STATUSES = [
   { value: "", label: "Any status" },
   { value: "active", label: "Active" },
   { value: "limited", label: "Limited budget" },
-  { value: "quarantined", label: "Quarantined" },
+  { value: "watch", label: "Watch" },
+  { value: "restricted", label: "Restricted" },
   { value: "revoked", label: "Revoked" },
 ];
 

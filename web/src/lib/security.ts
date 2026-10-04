@@ -47,17 +47,27 @@ export function severityFirst(a: Incident, b: Incident): number {
 
 export interface DetectionPolicy {
   enabled: boolean;
-  half_life_minutes: number;
-  response: { auto: boolean; alert: number; tighten: number; quarantine: number; tighten_budget_scale: number };
+  response: { auto: boolean; restrict_rules: string[]; tighten_budget_scale: number };
   rules: Record<string, { enabled: boolean; weight: number; window_minutes: number; count: number; tools: string[] }>;
+  /** From `insider_risk`: the one risk ladder incidents feed. */
+  levels: { watch: number; restricted: number };
+  half_life_hours: number;
 }
 
-export const DEFAULT_THRESHOLDS = { alert: 30, tighten: 60, quarantine: 80 };
+export const DEFAULT_THRESHOLDS = { watch: 30, restricted: 120 };
 
 export async function detectionPolicy(): Promise<DetectionPolicy | null> {
-  const r = await get<{ policy?: { detections?: DetectionPolicy } }>("/api/admin/policy");
-  return r.policy?.detections ?? null;
+  const r = await get<{
+    policy?: { detections?: Omit<DetectionPolicy, "levels" | "half_life_hours">; insider_risk?: { levels?: DetectionPolicy["levels"]; half_life_hours?: number } };
+  }>("/api/admin/policy");
+  const d = r.policy?.detections;
+  if (!d) return null;
+  return { ...d, levels: r.policy?.insider_risk?.levels ?? DEFAULT_THRESHOLDS, half_life_hours: r.policy?.insider_risk?.half_life_hours ?? 24 };
 }
+
+/** Trust score: the risk score inverted onto 0-100, where 100 means no concerns and 0 is the restricted line. */
+export const trustOf = (score: number, restricted = DEFAULT_THRESHOLDS.restricted) =>
+  Math.max(0, Math.round(100 * (1 - score / restricted)));
 
 // ---- incidents, including history the live list leaves out ---------------------------------------
 
@@ -91,7 +101,9 @@ export function responseLabel(a: AdminAction): string {
   const d = (a.detail ?? {}) as Record<string, unknown>;
   if (a.action === "tighten" || typeof d.budget_scale === "number")
     return typeof d.budget_scale === "number" ? `Budget cut to ${Math.round(d.budget_scale * 100)}%` : "Budget tightened";
-  if (a.action === "quarantine" || d.status === "quarantined") return "Quarantined";
+  if (a.action === "restrict" && d.level === "restricted") return "Restricted";
+  if (a.action === "recommend_restrict") return "Restriction recommended";
+  if (a.action === "quarantine" || d.status === "quarantined") return "Restricted";
   if (a.action === "revoke" || d.status === "revoked") return "Key revoked";
   if (a.action === "alert") return "Alert raised";
   if (a.action === "view_events") return "Viewed content";

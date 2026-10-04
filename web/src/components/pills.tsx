@@ -34,11 +34,24 @@ export function PersonStatusPill({ status, scale }: { status: string; scale?: nu
   );
 }
 
-export const levelTone = (l: string): Tone =>
-  l === "quarantine" ? "bad" : l === "tighten" ? "serious" : l === "alert" ? "warn" : "neutral";
+/** The insider-risk ladder: normal (no badge; admins see it as Auto) < watch < restricted. */
+export const riskLevel = (l: string | null | undefined): "normal" | "watch" | "restricted" =>
+  l === "restricted" || l === "quarantine" ? "restricted" : l === "watch" || l === "tighten" || l === "alert" ? "watch" : "normal";
 
+export const levelTone = (l: string): Tone => {
+  const r = riskLevel(l);
+  return r === "restricted" ? "bad" : r === "watch" ? "warn" : "neutral";
+};
+
+/** Watch or Restricted; nothing when the person is fine. */
 export function LevelPill({ level }: { level: string }) {
-  return <Pill tone={levelTone(level)}>{level === "none" ? "normal" : level}</Pill>;
+  const r = riskLevel(level);
+  if (r === "normal") return null;
+  return (
+    <Pill tone={levelTone(r)} dot>
+      {r === "restricted" ? "Restricted" : "Watch"}
+    </Pill>
+  );
 }
 
 export const incidentTone = (s: string): Tone =>

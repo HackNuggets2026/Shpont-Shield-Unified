@@ -127,7 +127,7 @@ export interface PersonRow extends PrincipalRow {
   tokens: number;
 }
 
-export type PersonStatus = "active" | "quarantined" | "revoked" | "limited";
+export type PersonStatus = "active" | "quarantined" | "revoked" | "limited" | "watch" | "restricted";
 
 export interface PeopleQuery {
   q?: string;

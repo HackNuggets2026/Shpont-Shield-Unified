@@ -99,6 +99,7 @@ async function request<T>(method: string, path: string, body?: unknown, c: Crede
 
 export const get = <T>(path: string) => request<T>("GET", path);
 export const post = <T>(path: string, body: unknown) => request<T>("POST", path, body);
+export const del = <T>(path: string) => request<T>("DELETE", path);
 
 function qs(params: Record<string, string | number | undefined | null>): string {
   const u = new URLSearchParams();
@@ -466,6 +467,10 @@ export const admin = {
   principals: () => get<PrincipalRow[]>(`${A}/principals`),
   restrict: (pid: string, body: Record<string, unknown>) => post<Ok>(`${A}/principals/${encodeURIComponent(pid)}`, body),
   person: (pid: string, days = 30) => get<Person>(`${A}/people/${encodeURIComponent(pid)}${qs({ days })}`),
+  risk: (pid: string) => get<PersonRisk>(`${A}/risk/${encodeURIComponent(pid)}`),
+  setRisk: (pid: string, body: { level: "auto" | "watch" | "restricted"; reason?: string; reset_score?: boolean }) =>
+    post<Ok>(`${A}/risk/${encodeURIComponent(pid)}`, body),
+  dismissSignal: (pid: string, source: string) => del<Ok>(`${A}/risk/${encodeURIComponent(pid)}/signal/${source}`),
   personEvents: (pid: string, reason: string, limit = 100) =>
     get<AuditEvent[]>(`${A}/principals/${encodeURIComponent(pid)}/events${qs({ reason, limit })}`),
   incidents: (status?: string) =>
@@ -727,3 +732,26 @@ export const controlsApi = {
   profile: () => get<{ profiles: ControlProfile[]; active: ControlProfile | null }>(`${A}/controls/profile`),
   setProfile: (profile: ControlProfile) => post<Ok>(`${A}/controls/profile`, { profile }),
 };
+
+/** Insider-risk ladder: normal (shown as Auto, no badge) < watch < restricted. */
+export type RiskLevel = "normal" | "watch" | "restricted";
+
+export interface PersonRisk {
+  principal: string;
+  score: number;
+  from_findings: number;
+  from_incidents: number;
+  computed: RiskLevel;
+  /** Security's override; a legacy "normal" one shows as "Auto (cleared)". */
+  manual: { level: RiskLevel; reason?: string; at?: number; by?: string } | null;
+  level: RiskLevel;
+  auto: RiskLevel;
+  signals: { source: string; level: RiskLevel; reason?: string; at: number; expires_at: number }[];
+  levels: { watch: number; restricted: number };
+  half_life_hours: number;
+  reset_at: number | null;
+  last_24h: { blocks: number; incidents: number; traps: number };
+  alerts: { ts: number; level: string; reason: string; score: number }[];
+  incidents: Incident[];
+  history: { ts: number; score: number }[];
+}
