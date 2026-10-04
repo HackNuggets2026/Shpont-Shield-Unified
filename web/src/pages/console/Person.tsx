@@ -12,6 +12,7 @@ import { LeasesTable } from "../../components/Leases";
 import { LevelPill, PersonStatusPill, RequestStatusPill, sourceLabel } from "../../components/pills";
 import { ViewEventsButton } from "../../components/RestrictActions";
 import { InsiderRiskCard } from "../../components/InsiderRisk";
+import { ReachCard } from "../../components/Reach";
 import { Button, Card, Empty, ErrorBox, Loading, PageHeader, TableWrap } from "../../components/ui";
 import { IconKey } from "../../components/icons";
 import { Breadcrumbs } from "../../components/org";
@@ -129,6 +130,7 @@ export function PersonPage() {
       )}
 
       <InsiderRiskCard pid={p.principal} status={p.status} scale={p.budget_scale} />
+      <ReachCard pid={p.principal} />
 
       <div className="grid gap-4 xl:grid-cols-3">
         <Card

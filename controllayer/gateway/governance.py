@@ -22,9 +22,10 @@ from typing import Any
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
+from .. import reach as reach_map
 from ..config import Policy, PolicyStore
 from ..controls import workflows
-from ..controls.access import authenticate
+from ..controls.access import authenticate, by_principal
 from ..controls.budget import Usage
 from ..detections import LEVELS
 from ..engine import ControlLayer
@@ -844,6 +845,15 @@ def register(
             "requests": usage.requests(principal=pid),
             "admin_actions": person_actions(pid),
         }
+
+    @app.get("/admin/people/{pid}/reach")
+    async def admin_person_reach(pid: str):
+        """What this identity can touch, by leg of the lethal trifecta, and the cheapest single fix."""
+        p = store.policy
+        who = by_principal(p, pid)
+        if not who.authenticated:
+            return err("not in the directory", 404)
+        return reach_map.reach(p, layer.state, who)
 
     def value(by: str, days: float, principal: str | None, department: str | None = None, team: str | None = None):
         since = day_window(days)

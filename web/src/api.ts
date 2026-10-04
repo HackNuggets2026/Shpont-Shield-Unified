@@ -467,6 +467,7 @@ export const admin = {
   principals: () => get<PrincipalRow[]>(`${A}/principals`),
   restrict: (pid: string, body: Record<string, unknown>) => post<Ok>(`${A}/principals/${encodeURIComponent(pid)}`, body),
   person: (pid: string, days = 30) => get<Person>(`${A}/people/${encodeURIComponent(pid)}${qs({ days })}`),
+  reach: (pid: string) => get<PersonReach>(`${A}/people/${encodeURIComponent(pid)}/reach`),
   risk: (pid: string) => get<PersonRisk>(`${A}/risk/${encodeURIComponent(pid)}`),
   setRisk: (pid: string, body: { level: "auto" | "watch" | "restricted"; reason?: string; reset_score?: boolean }) =>
     post<Ok>(`${A}/risk/${encodeURIComponent(pid)}`, body),
@@ -761,6 +762,28 @@ export const controlsApi = {
   profile: () => get<{ profiles: ControlProfile[]; active: ControlProfile | null }>(`${A}/controls/profile`),
   setProfile: (profile: ControlProfile) => post<Ok>(`${A}/controls/profile`, { profile }),
 };
+
+/** GET /admin/people/{pid}/reach: what one identity can touch, by leg of the lethal trifecta. */
+export type ReachLeg = "private" | "untrusted" | "egress";
+export interface ReachSource {
+  leg: ReachLeg;
+  kind: "tool" | "resource";
+  id: string;
+  label: string;
+  /** role:<role> | entitled | grant:<owner or access grant> */
+  via: string;
+  scopes?: string[];
+}
+export interface PersonReach {
+  principal: string;
+  kind: "human" | "agent";
+  role: string;
+  owner: string | null;
+  legs: Record<ReachLeg, ReachSource[]>;
+  trifecta: boolean;
+  weakest: ReachLeg | null;
+  fix: string | null;
+}
 
 /** Insider-risk ladder: normal (shown as Auto, no badge) < watch < restricted. */
 export type RiskLevel = "normal" | "watch" | "restricted";
