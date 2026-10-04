@@ -96,6 +96,15 @@ class SignatureControl(ControlBase):
     refresh_seconds: float = 30
 
 
+class ExfiltrationControl(ControlBase):
+    """Markdown images and links in replies and tool results whose target is outside `allowed_domains`
+    (and `company_domains`). redact cuts the URL out, block withholds the text."""
+
+    mode: Action = Action.REDACT
+    directions: list[Direction] = Field(default_factory=lambda: [Direction.OUTPUT, Direction.TOOL_RESULT])
+    allowed_domains: list[str] = Field(default_factory=list)
+
+
 class ToolAccessControl(ControlBase):
     # role -> allowed tool globs; "*" allows everything
     roles: dict[str, list[str]] = Field(default_factory=dict)
@@ -806,6 +815,7 @@ class Policy(_Strict):
     pii: PatternControl = Field(default_factory=PatternControl)
     secrets: PatternControl = Field(default_factory=PatternControl)
     signatures: SignatureControl = Field(default_factory=SignatureControl)
+    exfiltration: ExfiltrationControl = Field(default_factory=ExfiltrationControl)
     tool_access: ToolAccessControl = Field(default_factory=ToolAccessControl)
     semantic_controls: dict[str, SemanticControl] = Field(default_factory=dict)
     teams: dict[str, TeamOverride] = Field(default_factory=dict)
@@ -1001,6 +1011,7 @@ def _merge(base: dict, patch: dict, delete_none: bool = False) -> None:
 # thresholds (console Controls page), never identity or upstreams.
 OVERLAY_KEYS = {"principals", "menu", "budgets", "catalog", "resources", "detections", "quarantine"}
 OVERLAY_KEYS |= {"pii", "pii_model", "secrets", "signatures", "tool_access", "semantic_controls"}
+OVERLAY_KEYS |= {"exfiltration"}
 
 
 _ENV = re.compile(r"\$\{(\w+)(?::-([^}]*))?\}")

