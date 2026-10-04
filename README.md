@@ -133,11 +133,19 @@ The backends are deterministic mocks with realistic records (`controllayer/servi
 
 ## Insider risk
 
-Every finding adds points to the person's score, which decays with a 24 h half-life. An agent's points also count half against its owner. At `watch` the person gets a stricter policy (`insider_risk.watch_controls`) and full-text capture. At `restricted` everything is blocked. Other tools (a SIEM, an EDR) can raise a person's level with **external signals**, each capped, expiring and authenticated by that integration's own token. Security can override a person's level in either direction, or leave it on auto; an agent is never less restricted than its owner. Level changes, blocks while watched and selected categories (exfiltration, malware, leaked keys) raise **silent alerts** to the console, a JSONL file or a SIEM webhook (each sink sends native JSON, OCSF or ECS: `format:`). The employee's response is unchanged. Monitoring itself is disclosed (GDPR, Polish Labour Code art. 22³).
+There is one risk score per person and one ladder. Every finding adds points (log 0.5, warn 2, redact 3, block 10, plus category weights), and every detection incident (probing, exfiltration, a trap opened, ...) adds its rule weight. The score halves every 24 h. An agent's points also count half against its owner. The levels:
+
+| Level | When | Effect |
+|---|---|---|
+| Auto (no badge) | score below `insider_risk.levels.watch` (30) | normal policy |
+| Watch | score at 30 or more, or set by security, or an external signal | a stricter policy (`insider_risk.watch_controls`) and full-text capture; admins can also tighten the person's budget |
+| Restricted | score at 120 or more, a trap opened (`detections.response.restrict_rules`), set by security, or an external signal | every request by the person and their agents is blocked until an admin sets them back to Auto |
+
+The console shows the score inverted as a **trust score** from 0 to 100 (100 = no concerns; Watch below 75, Restricted at 0), with one sentence saying why ("7 blocks and 2 incidents in the last 24 h; the score halves every day"), the last 7 days, external signals (each with Dismiss) and recent alerts and incidents. Its level control is Auto / Watch / Restricted; "Back to normal" is Auto plus a score reset (incidents stay on file). Other tools (a SIEM, an EDR) can raise a person's level with **external signals**, each capped, expiring and authenticated by that integration's own token. Level changes, blocks while watched and selected categories (exfiltration, malware, leaked keys) raise **silent alerts** to the console, a JSONL file or a SIEM webhook (each sink sends native JSON, OCSF or ECS: `format:`). The employee's response is unchanged. Monitoring itself is disclosed (GDPR, Polish Labour Code art. 22³).
 
 A person's level, strongest rule first:
 
-1. **Override.** A level security set (`POST /admin/risk/{pid}` `{"level": "normal"|"watch"|"restricted"}`) is the level, in either direction. Scores and signals do not change it, but a rise of the auto level underneath still raises a silent alert. `auto` removes the override, and `POST /admin/risk/{pid}/reset` clears the score.
+1. **Set by security.** `POST /admin/risk/{pid}` `{"level": "watch"|"restricted", "reason"}` holds the level whatever the score; a rise of the auto level underneath still raises a silent alert. `{"level": "auto"}` hands it back to the score (`"reset_score": true` also zeroes it), and `POST /admin/risk/{pid}/reset` clears the score alone. An older `"normal"` hold still works and shows as "Auto (cleared)". `GET /admin/risk/{pid}` returns the score and its parts, the level and where it comes from, signals, alerts, incidents and a 7-day history.
 2. **Auto.** Otherwise the higher of the score-based level and the strongest active external signal.
 3. **Owner.** An agent's level is the higher of its own and its owner's.
 
@@ -212,8 +220,8 @@ The same gateway meters and limits *what AI work costs*, not just what it says.
 - **Workflow menu.** `menu.workflows` lists the kinds of work people do with AI (`pr_review`, `ui_qa`, `data_analysis`, ...). Each item says who may run it, which models, tools and resources it uses, what one run may cost, and whether it needs approval. Clients label traffic with `x-acl-workflow`, `x-acl-task` and `x-acl-session` headers. Unlabeled chat is attributed by one extra question in tev1's existing call. That guess is used for reporting only and never to refuse a request.
 - **Measured prices.** Every item shows what a run really costs (typical and p90), computed from history. Costs include tokens, simulator and VM minutes, and CI minutes.
 - **Resources beyond tokens.** MCP tools that start a simulator, VM or browser (`boot_simulator`, argent's `boot-device`, `create_vm`) open a **lease**, and stop tools close it. The gateway bills leases per minute, caps how many each person can run at once, and flags leases idle past a limit (zombies). Resources can be set to stop zombies automatically. Usage the gateway cannot see is reported with `POST /v1/usage`.
-- **Restrictions.** Admins can quarantine (read-only tools, 10% budget), revoke, scale budgets, approve workflows, and turn menu items off. Each change is validated, written to `data/admin-overlay.yaml` (merged over `policy.yaml`, hot-reloaded) and logged with a reason. Past 80% of a budget, requests are routed to a cheaper model instead of being refused.
-- **Security from usage.** Detections combine usage with verdicts: probing (repeated blocks), exfiltration (double weight when it comes with a token spike), usage spikes, a key used from a new client, sensitive tools an agent never used before, repeated secret pastes, and zombie or unlabeled resources. Incidents add to a per-person **risk score** that halves every 2 h. Crossing thresholds first tightens the person's budget, then quarantines them. Only an admin relaxes a restriction.
+- **Restrictions.** Admins can restrict (see Insider risk), revoke, scale budgets, approve workflows, and turn menu items off. Each change is validated, written to `data/admin-overlay.yaml` (merged over `policy.yaml`, hot-reloaded) and logged with a reason. Past 80% of a budget, requests are routed to a cheaper model instead of being refused.
+- **Security from usage.** Detections combine usage with verdicts: probing (repeated blocks), exfiltration (double weight when it comes with a token spike), usage spikes, a key used from a new client, sensitive tools an agent never used before, repeated secret pastes, and zombie or unlabeled resources. Each incident adds its weight to the person's insider-risk score (one score, one ladder: Auto, Watch, Restricted; see Insider risk). Opening a trap restricts at once. Only an admin relaxes a restriction.
 - **One console.** `/` is the admin console for platform, FinOps and security people. Employees have no screen of their own; `/api/me/*` gives their tools the same facts with their own API key: spend, budgets, menu prices, runs, running resources, what was blocked and why, and every admin action or content view concerning them. Viewing one person's events needs a stated reason, which that person can see.
 
 ```bash
@@ -256,7 +264,7 @@ Some things in a company should never be touched by anyone: nothing legitimate n
 
 | What happened | Rule | Effect |
 |---|---|---|
-| A tool call names the decoy (MCP, or a Claude Code `Read` of a planted file) | `decoy_touch` (weight 100) | High-severity incident, quarantine at once |
+| A tool call names the decoy (MCP, or a Claude Code `Read` of a planted file) | `decoy_touch` (weight 100) | High-severity incident, Restricted at once |
 | The decoy's marker shows up in a prompt or tool call: its content is being moved on | `decoy_touch` | Same |
 | A prompt asks for it by name ("the unpublished board pack") | `decoy_mention` (weight 30) | An alert: maybe just curiosity |
 

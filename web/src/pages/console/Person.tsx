@@ -102,7 +102,7 @@ export function PersonPage() {
             ) : (
               p.principal
             )}
-            <PersonStatusPill status={p.status} scale={p.budget_scale} />
+            {(p.status !== "active" || p.budget_scale < 1) && <PersonStatusPill status={p.status} scale={p.budget_scale} />}
             <LevelPill level={p.level} />
           </span>
         }

@@ -67,7 +67,7 @@ export function Traps() {
   return (
     <Card
       title="Traps"
-      subtitle="Decoys planted where people look. Nothing legitimate touches one, so opening it quarantines at once; the person only ever sees “restricted material”."
+      subtitle="Decoys planted where people look. Nothing legitimate touches one, so opening it restricts the person at once; the person only ever sees “restricted material”."
     >
       <Q q={q} rows={3}>
         {(d) =>

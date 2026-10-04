@@ -17,7 +17,7 @@ export function TrapsPage() {
     <div className="space-y-6">
       <PageHeader
         title="Traps"
-        subtitle="Decoys planted where people and agents look. Nothing legitimate ever touches one, so opening it quarantines at once. Asking for one by name is an alert. The person only ever sees “restricted material”."
+        subtitle="Decoys planted where people and agents look. Nothing legitimate ever touches one, so opening it restricts the person at once. Asking for one by name is an alert. The person only ever sees “restricted material”."
       />
 
       <Q q={q} rows={4}>
@@ -96,7 +96,7 @@ export function TrapsPage() {
           <li>Each trap is listed where people look (document search, the data catalog), so finding one is harmless.</li>
           <li>
             A tool call that names it, or its content showing up in a prompt or tool call, is <b>Trap opened</b>: a
-            high-severity incident and quarantine at once.
+            high-severity incident and Restricted at once.
           </li>
           <li>A prompt asking for it by name is <b>Trap asked for</b>: an alert, since it may just be curiosity.</li>
           <li>The gateway answers an opening call with convincing fake content; nothing real is behind a trap.</li>
