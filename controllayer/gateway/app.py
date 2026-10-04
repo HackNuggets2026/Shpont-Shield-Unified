@@ -22,7 +22,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
-from .. import audit, export, resources, servertiming
+from .. import audit, export, resources, selftest, servertiming
 from ..config import PolicyStore
 from ..controls import decoys
 from ..controls.access import authenticate, by_principal, identify
@@ -185,8 +185,11 @@ def create_app(
 
     @contextlib.asynccontextmanager
     async def lifespan(app: FastAPI):
+        app.state.selftest.loop = asyncio.get_running_loop()  # policy-change self-tests run on this loop
         task = asyncio.create_task(background()) if watch else None
         yield
+        app.state.selftest.loop = None
+        app.state.selftest.cancel()
         if task:
             task.cancel()
 
@@ -1361,6 +1364,7 @@ def create_app(
     hooks.register(app, store, layer, _api_key, _json_object)
     controls_api.register(app, store, layer, _json_object)
     redteam.register(app)
+    selftest.register(app, layer, store)
 
     @app.middleware("http")
     async def api_prefix(request: Request, call_next):

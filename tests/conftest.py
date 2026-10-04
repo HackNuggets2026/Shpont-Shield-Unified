@@ -4,9 +4,12 @@ import fcntl
 import json
 import os
 import pickle
+import platform
 import shutil
 import time
+from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 import pytest
 import yaml
@@ -188,3 +191,120 @@ def org_copy(seeded: Path, dest: Path, state: dict | None = None) -> Path:
     if state is not None:
         (dest / "data" / "state.json").write_text(json.dumps(state))
     return dest / "policy.yaml"
+
+
+# ---- --acl-report: a JSON report per control for the console's Tests page --------------------------
+# Markers: control(id) names the control a test exercises; kind("positive") means the control reacts
+# to an attack (blocks, redacts, flags), kind("negative") means clean input passes untouched.
+# The marks travel as user_properties, so the report is complete under xdist (-n auto) too.
+
+
+def pytest_addoption(parser: pytest.Parser) -> None:
+    parser.addoption("--acl-report", metavar="PATH", default=None, help="write a per-control JSON test report")
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    config.addinivalue_line("markers", "control(id): the control a test exercises, e.g. secrets")
+    config.addinivalue_line(
+        "markers", "kind(kind): positive (the control reacts to an attack) | negative (clean input passes)"
+    )
+    path = config.getoption("--acl-report")
+    if path and not hasattr(config, "workerinput"):  # the xdist controller (or a plain run) writes it
+        config.pluginmanager.register(AclReport(Path(path)), "acl-report")
+
+
+def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
+    for item in items:
+        c = item.get_closest_marker("control")
+        k = item.get_closest_marker("kind")
+        kind = k.args[0] if k and k.args else "other"
+        item.user_properties.append(("acl_control", c.args[0] if c and c.args else None))
+        item.user_properties.append(("acl_kind", kind if kind in ("positive", "negative") else "other"))
+        item.user_properties.append(("acl_title", _title(item)))
+
+
+def _title(item: pytest.Item) -> str:
+    fn = getattr(item, "function", None)
+    doc = (getattr(fn, "__doc__", None) or "").strip()
+    title = doc.splitlines()[0].strip() if doc else item.name
+    cs = getattr(item, "callspec", None)
+    return f"{title} [{cs.id}]" if cs is not None and doc else title
+
+
+class AclReport:
+    def __init__(self, path: Path):
+        self.path = path
+        self.results: dict[str, dict[str, Any]] = {}
+        self.t0 = time.time()
+
+    def pytest_runtest_logreport(self, report: pytest.TestReport) -> None:
+        r = self.results.setdefault(
+            report.nodeid,
+            {
+                "control_id": None,
+                "kind": "other",
+                "title": report.nodeid,
+                "outcome": None,
+                "duration_ms": 0.0,
+                "message": "",
+            },
+        )
+        props = dict(report.user_properties or [])
+        r["control_id"] = props.get("acl_control", r["control_id"])
+        r["kind"] = props.get("acl_kind", r["kind"])
+        r["title"] = props.get("acl_title", r["title"])
+        r["duration_ms"] += report.duration * 1000
+        wasxfail = getattr(report, "wasxfail", None)
+        text = (report.longreprtext or "")[-1500:]
+        if report.when == "call":
+            if report.passed:
+                r["outcome"] = "xpassed" if wasxfail is not None else "passed"
+            elif report.failed:
+                r["outcome"], r["message"] = "failed", text
+            else:
+                r["outcome"] = "xfailed" if wasxfail is not None else "skipped"
+                r["message"] = wasxfail if wasxfail is not None else _skip_reason(report)
+        elif report.when == "setup" and not report.passed:
+            if report.failed:
+                r["outcome"], r["message"] = "error", text
+            else:
+                r["outcome"] = "xfailed" if wasxfail is not None else "skipped"
+                r["message"] = wasxfail if wasxfail is not None else _skip_reason(report)
+        elif report.when == "teardown" and report.failed and r["outcome"] in (None, "passed"):
+            r["outcome"], r["message"] = "error", text
+
+    def pytest_sessionfinish(self, session: pytest.Session, exitstatus: int) -> None:
+        counts = {"passed": 0, "failed": 0, "skipped": 0, "xfailed": 0, "xpassed": 0, "error": 0}
+        tests = []
+        for nid, r in self.results.items():
+            outcome = r["outcome"] or "error"
+            counts[outcome] = counts.get(outcome, 0) + 1
+            tests.append({"nodeid": nid, **r, "outcome": outcome, "duration_ms": round(r["duration_ms"], 1)})
+        report = {
+            "generated_at": datetime.now(UTC).isoformat(timespec="seconds"),
+            "python": platform.python_version(),
+            "exit_status": int(exitstatus),
+            "summary": {
+                "passed": counts["passed"],
+                "failed": counts["failed"] + counts["error"],
+                "skipped": counts["skipped"],
+                "xfailed": counts["xfailed"],
+                "xpassed": counts["xpassed"],
+                "errors": counts["error"],
+                "total": len(tests),
+                "duration_s": round(time.time() - self.t0, 2),
+            },
+            "tests": tests,
+        }
+        path = self.path if self.path.is_absolute() else Path(session.config.invocation_params.dir) / self.path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        tmp.write_text(json.dumps(report, ensure_ascii=False, indent=1))
+        os.replace(tmp, path)
+
+
+def _skip_reason(report: pytest.TestReport) -> str:
+    lr = report.longrepr
+    if isinstance(lr, tuple) and len(lr) == 3:
+        return str(lr[2])
+    return str(lr or "")

@@ -3,7 +3,7 @@ PY ?= .venv/bin/python
 PORT ?= 8787
 SEED ?= 42
 
-.PHONY: test fresh seed demo web web-dev redteam redteam-ci redteam-test
+.PHONY: test selftest fresh seed demo web web-dev redteam redteam-ci redteam-test
 
 test:
 	$(PY) -m pytest -q && $(PY) -m ruff check . && $(PY) -m ruff format --check .
@@ -35,3 +35,7 @@ redteam-ci:       ## CI gate: fail below posture 90 or on a broken signature in 
 
 redteam-test:
 	cd redteam && $(abspath $(PY)) -m pytest -q
+
+selftest:         ## the test suite with JUnit XML and the per-control JSON report shown on the console's Tests page
+	mkdir -p reports
+	$(PY) -m pytest -q --junitxml=reports/junit.xml --acl-report=reports/acl-report.json

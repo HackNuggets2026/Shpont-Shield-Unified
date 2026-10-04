@@ -3,7 +3,7 @@ WORKDIR /app
 COPY pyproject.toml ./
 COPY controllayer ./controllayer
 RUN pip install --no-cache-dir .
-COPY policy.yaml ./
+COPY policy.yaml scenarios.yaml ./
 COPY feeds ./feeds
 COPY demo ./demo
 COPY deploy ./deploy
