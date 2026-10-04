@@ -1,0 +1,18 @@
+# Shpont Shield Redteam sidecar: attacks the gateway and scores its posture. ${VAR:-default} reads the environment.
+
+target:
+  url: ${SHIELD_URL:-http://127.0.0.1:8787}          # the gateway under test
+  admin_token: ${ACL_ADMIN_TOKEN:-demo-admin-token}
+
+# The signature feed the gateway enforces (policy.yaml signatures.feed); `feed --check` self-tests it.
+feed: ${REDTEAM_FEED:-../feeds/signatures.json}
+
+poligon:
+  corpus: corpus            # attacks/ must be stopped, benign/ must pass
+  mutate: true              # also fire evasion rewrites of every attack
+  interval_seconds: 30      # re-fire on a timer; a policy or feed change re-fires at once
+  workers: 8
+
+server:
+  host: ${REDTEAM_HOST:-127.0.0.1}
+  port: ${REDTEAM_PORT:-8799}    # the gateway finds it through ACL_REDTEAM_URL (default http://127.0.0.1:8799)

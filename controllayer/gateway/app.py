@@ -32,7 +32,19 @@ from ..decision import DecisionBackend
 from ..engine import ControlLayer, flatten
 from ..risk import LEVELS, integration_of
 from ..types import Action, Context, Direction, Verdict
-from . import anthropic, broker, catalog, console_api, controls_api, governance, hooks, ingest, mcp_demo, otel
+from . import (
+    anthropic,
+    broker,
+    catalog,
+    console_api,
+    controls_api,
+    governance,
+    hooks,
+    ingest,
+    mcp_demo,
+    otel,
+    redteam,
+)
 from .upstream import UpstreamClient
 
 # The built console (web/: make web). Absent: / says how to build it.
@@ -1336,6 +1348,7 @@ def create_app(
     otel.register(app, store, layer, _api_key)
     hooks.register(app, store, layer, _api_key, _json_object)
     controls_api.register(app, store, layer, _json_object)
+    redteam.register(app)
 
     @app.middleware("http")
     async def api_prefix(request: Request, call_next):

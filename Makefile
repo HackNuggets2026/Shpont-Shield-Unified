@@ -1,9 +1,9 @@
-# Shpont Shield: make test | make fresh | make demo | make web
+# Shpont Shield: make test | make fresh | make demo | make web | make redteam
 PY ?= .venv/bin/python
 PORT ?= 8787
 SEED ?= 42
 
-.PHONY: test fresh seed demo web web-dev
+.PHONY: test fresh seed demo web web-dev redteam redteam-ci redteam-test
 
 test:
 	$(PY) -m pytest -q && $(PY) -m ruff check . && $(PY) -m ruff format --check .
@@ -23,3 +23,15 @@ web:              ## build the SPA into web/dist (served by the gateway at /)
 
 web-dev:          ## the SPA with hot reload on :5173, proxying the API to the gateway
 	cd web && npm run dev
+
+REDTEAM_PORT ?= 8799
+
+redteam:          ## the Redteam sidecar: attacks the gateway on $(PORT) and serves Console > Attacks
+	cd redteam && SHIELD_URL=http://127.0.0.1:$(PORT) REDTEAM_PORT=$(REDTEAM_PORT) $(abspath $(PY)) -m shield_redteam serve
+
+redteam-ci:       ## CI gate: fail below posture 90 or on a broken signature in the feed
+	cd redteam && SHIELD_URL=http://127.0.0.1:$(PORT) $(abspath $(PY)) -m shield_redteam run --min-posture 90 \
+		&& $(abspath $(PY)) -m shield_redteam feed --check
+
+redteam-test:
+	cd redteam && $(abspath $(PY)) -m pytest -q

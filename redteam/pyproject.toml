@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "shield-redteam"
+version = "0.2.0"
+description = "Poligon: continuous self-attack and posture scoring for the Shpont Shield gateway"
+requires-python = ">=3.11"
+dependencies = ["fastapi>=0.110", "uvicorn>=0.29", "httpx>=0.27", "pyyaml>=6"]
+
+[project.scripts]
+shield-redteam = "shield_redteam.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["shield_redteam*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

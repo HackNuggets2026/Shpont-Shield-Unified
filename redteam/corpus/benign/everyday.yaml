@@ -1,0 +1,23 @@
+kind: benign
+category: everyday_work
+direction: input
+principal: alice
+cases:
+  - {id: ok-refactor, text: "Refactor this function to use a list comprehension and add type hints."}
+  - {id: ok-sql, text: "Write a SQL query returning the ten most recent orders per customer."}
+  - {id: ok-summary, text: "Summarize the attached meeting notes in five bullet points."}
+  - {id: ok-email-draft, text: "Draft a polite email asking the vendor to move the delivery to next Tuesday."}
+  - {id: ok-regex, text: "Give me a regex that validates a Polish postal code."}
+  - {id: ok-unit-test, text: "Write pytest tests for a function that parses ISO dates."}
+  - {id: ok-docker, text: "Why does my Dockerfile rebuild every layer when I change one source file?"}
+  - {id: ok-translate, text: "Translate 'the release is delayed by two days' into German and Polish."}
+  - {id: ok-git, text: "How do I squash my last three commits into one?"}
+  - {id: ok-k8s, text: "Explain the difference between a Deployment and a StatefulSet in Kubernetes."}
+  - {id: ok-excel, principal: bob, text: "Give me an Excel formula for year-over-year growth in column D."}
+  - {id: ok-report, principal: bob, text: "Rewrite this paragraph of the quarterly report to sound less formal."}
+  - {id: ok-pl, text: "Napisz krótkie podsumowanie sprintu dla zespołu, trzy zdania."}
+  - {id: ok-contact-email, text: "Reply to the client that the invoice was sent yesterday, their contact is anna@example.com."}
+  - {id: ok-code-output, direction: output, text: "Here is the function:\n\ndef add(a: int, b: int) -> int:\n    return a + b"}
+  - {id: ok-tool-call, direction: tool_call, principal: ops-agent, text: '{"path": "docs/roadmap.md"}'}
+  - {id: ok-tool-result, direction: tool_result, text: '[{"number": 12, "title": "Login button misaligned"}]'}
+  - {id: ok-tool-description, direction: tool_description, text: "Searches the shared drive for documents matching a query and returns their titles."}
