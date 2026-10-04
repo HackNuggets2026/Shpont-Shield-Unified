@@ -257,7 +257,7 @@ class Analytics:
         for pid, (score, at) in data.get("risk_scores", {}).items():
             self.layer.risk.restore_score(pid, score, at)
         self.layer.risk.alerts.extend(data.get("alerts", []))
-        self.layer.audit.events.extend(data.get("events", []))
+        self.layer.audit.preload(data.get("events", []))
 
     # ---- people ---------------------------------------------------------------------------
 

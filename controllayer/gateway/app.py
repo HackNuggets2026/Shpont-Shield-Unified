@@ -899,40 +899,75 @@ def create_app(
         channel: str | None = None,
         direction: str | None = None,
         q: str | None = None,
+        since: float | None = None,
+        window: int | None = None,
     ):
-        """`principal` matches the actor or, for an agent's events, its owner. `q` is a case-insensitive
-        substring of the principal, owner, team, tool, model, reason or a finding's control, category
-        or detail."""
-        needle = (q or "").lower()
+        """Newest first, from the whole audit trail (not only the in-memory ring). Filters as in
+        `audit.event_filter`; `since` is a live-tail cursor (strictly newer than that ts) and `window`
+        keeps the last N seconds."""
+        ok = _audit_filter(action, control, principal, channel, direction, q, since, window)
+        out: list[dict[str, Any]] = []
+        for e in reversed(layer.audit.decisions()):
+            if ok(e):
+                out.append(e)
+                if len(out) >= limit:
+                    break
+        return out
 
-        def matches(e: dict[str, Any]) -> bool:
-            fields = [e.get(k) for k in ("principal", "owner", "team", "tool", "model", "reason")]
-            fields += [f.get(k) for f in e["findings"] for k in ("control", "category", "detail")]
-            return any(needle in str(v).lower() for v in fields if v)
+    @app.get("/admin/audit/stats")
+    async def audit_stats(
+        window: int = 3600,
+        bucket: int | None = None,
+        action: str | None = None,
+        control: str | None = None,
+        principal: str | None = None,
+        channel: str | None = None,
+        direction: str | None = None,
+        q: str | None = None,
+    ):
+        """Decision statistics for the last `window` seconds (default one hour) in `bucket`-second steps
+        (default: about 60 buckets), honouring the same filters as /admin/events."""
+        if window <= 0:
+            raise BadRequest("window must be positive")
+        bucket = bucket or max(1, window // 60)
+        if bucket <= 0:
+            raise BadRequest("bucket must be positive")
+        now = time.time()
+        ok = _audit_filter(action, control, principal, channel, direction, q, now - window - bucket, None)
+        return audit.stats([e for e in layer.audit.decisions() if ok(e)], window, bucket, now)
 
-        out = [
-            e
-            for e in reversed(layer.audit.events)
-            if (not action or e["action"] == action)
-            and (not control or any(f["control"] == control for f in e["findings"]))
-            and (not principal or principal in (e["principal"], e.get("owner")))
-            and (not channel or e["channel"] == channel)
-            and (not direction or e["direction"] == direction)
-            and (not needle or matches(e))
-        ]
-        return out[:limit]
+    def _audit_filter(action, control, principal, channel, direction, q, since, window):
+        if window:
+            since = max(since or 0, time.time() - window)
+        return audit.event_filter(action, control, principal, channel, direction, q, since)
 
     @app.get("/admin/audit/export")
-    async def audit_export(format: str = "jsonl"):
+    async def audit_export(
+        format: str = "jsonl",
+        action: str | None = None,
+        control: str | None = None,
+        principal: str | None = None,
+        channel: str | None = None,
+        direction: str | None = None,
+        q: str | None = None,
+        since: float | None = None,
+        window: int | None = None,
+    ):
+        """The full audit file (not only the in-memory ring), with the same filters as /admin/events.
+        OCSF and ECS add administrative notes and alerts to the stream, unless a decision filter is set
+        (the time range still applies to them)."""
         if format not in ("jsonl", "csv", "ocsf", "ecs"):
             raise BadRequest("format must be jsonl, csv, ocsf or ecs")
-        rows = list(layer.audit.events)
+        ok = _audit_filter(action, control, principal, channel, direction, q, since, window)
+        rows = [e for e in layer.audit.decisions() if ok(e)]
+        narrowed = any((action, control, principal, channel, direction, q))
+        in_range = _audit_filter(None, None, None, None, None, None, since, window)
         if format in ("ocsf", "ecs"):
             # One stream for a SIEM: decisions, admin actions and insider-risk alerts, in time order.
             records = sorted(
                 [(e, "decision") for e in rows]
-                + [(n, "note") for n in layer.audit.notes]
-                + [(a, "alert") for a in layer.risk.alerts],
+                + ([] if narrowed else [(n, "note") for n in layer.audit.history()[1] if in_range(n)])
+                + ([] if narrowed else [(a, "alert") for a in layer.risk.alerts if in_range(a)]),
                 key=lambda r: r[0]["ts"],
             )
             return Response(
