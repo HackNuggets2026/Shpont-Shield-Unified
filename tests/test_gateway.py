@@ -152,6 +152,34 @@ def test_dashboard_playground_evaluates_as_principal(client):
     assert r.json()["action"] == "redact"
 
 
+def test_dashboard_playground_takes_model_and_tool_call(client):
+    r = client.post("/admin/try", json={"principal": "alice", "text": "hi", "model": "not-a-model"})
+    assert r.status_code == 403 and any(f["category"] == "model_not_allowed" for f in r.json()["findings"])
+    assert (
+        client.post("/admin/try", json={"principal": "alice", "text": "hi", "model": "gpt-4o"}).json()["action"]
+        == "allow"
+    )
+
+    call = {
+        "principal": "carol",
+        "direction": "tool_call",
+        "tool": "http_get",
+        "arguments": {"url": "https://example.com"},
+    }
+    r = client.post("/admin/try", json=call)
+    assert r.status_code == 403 and r.json()["findings"][0]["control"] == "tool_access"
+    leak = {**call, "principal": "ops-agent", "arguments": '{"body": "key AKIAIOSFODNN7EXAMPLE"}'}
+    r = client.post("/admin/try", json=leak).json()
+    assert any(f["control"] == "secrets" for f in r["findings"]) and "control:secrets" in r["latency_ms"]
+    assert client.post("/admin/try", json={**call, "arguments": "[1]"}).status_code == 400
+
+
+def test_dashboard_playground_is_exempt_from_rate_and_loop_guards(client):
+    for _ in range(12):
+        r = client.post("/admin/try", json={"principal": "alice", "text": "what is a monad?"})
+        assert r.status_code == 200 and r.json()["action"] == "allow"
+
+
 def test_audit_masks_detected_spans_even_when_only_logged(client):
     from .conftest import KEYS
 

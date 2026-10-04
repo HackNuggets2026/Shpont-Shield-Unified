@@ -1030,10 +1030,36 @@ def create_app(
             direction = Direction(body.get("direction", "input"))
         except ValueError:
             return JSONResponse({"error": "bad direction"}, status_code=400)
+        model = body.get("model") or None
+        tool = body.get("tool") or None
+        args = body.get("arguments")
+        if (model is not None and not isinstance(model, str)) or (tool is not None and not isinstance(tool, str)):
+            return JSONResponse({"error": "model and tool must be strings"}, status_code=400)
+        if isinstance(args, str) and args.strip():
+            try:
+                args = json.loads(args)
+            except ValueError:
+                return JSONResponse({"error": "arguments must be a JSON object"}, status_code=400)
+        if args is not None and args != "" and not isinstance(args, dict):
+            return JSONResponse({"error": "arguments must be a JSON object"}, status_code=400)
+        args = args or None
+        text = _text(body.get("text", ""))
+        if direction is Direction.TOOL_CALL and tool:
+            # The same text an MCP tools/call is checked as: the name and every argument, flattened.
+            text = flatten({"name": tool, "arguments": args or {}, **({"text": text} if text else {})})
         # A playground run is not the impersonated person's act: no risk points, no budget use.
-        v = await layer.evaluate(
-            Context(principal, direction, _text(body.get("text", "")), channel="dashboard", metered=False, scored=False)
+        ctx = Context(
+            principal,
+            direction,
+            text,
+            model=model,
+            tool=tool,
+            tool_args=args,
+            channel="dashboard",
+            metered=False,
+            scored=False,
         )
+        v = await layer.evaluate(ctx)
         return JSONResponse(_verdict_json(v), status_code=v.status_code if v.blocked else 200)
 
     @app.post("/admin/policy/reload")

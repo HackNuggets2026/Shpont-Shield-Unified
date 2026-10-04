@@ -265,9 +265,19 @@ class ControlLayer:
             t = lap("budget", t)
 
         if inspect and not _blocked(findings):
-            findings += secrets.check(ctx, policy.secrets)
-            findings += pii.check(ctx, policy.pii)
-            findings += signatures.check(ctx, policy.signatures, self.feed)
+            if ctx.channel == "dashboard":
+                # The playground shows what each deterministic control cost.
+                t0 = t
+                findings += secrets.check(ctx, policy.secrets)
+                t0 = lap("control:secrets", t0)
+                findings += pii.check(ctx, policy.pii)
+                t0 = lap("control:pii", t0)
+                findings += signatures.check(ctx, policy.signatures, self.feed)
+                lap("control:signatures", t0)
+            else:
+                findings += secrets.check(ctx, policy.secrets)
+                findings += pii.check(ctx, policy.pii)
+                findings += signatures.check(ctx, policy.signatures, self.feed)
             t = lap("deterministic", t)
 
         if inspect and not _blocked(findings):
