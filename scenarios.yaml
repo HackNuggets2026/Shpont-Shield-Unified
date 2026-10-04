@@ -121,6 +121,15 @@ scenarios:
       - { principal: ops-agent, direction: tool_call, tool: run_python, arguments: { code: "load_file('sentiment-v2.safetensors')" },
           expect: [allow], why: safetensors carry no code }
 
+  - id: classification
+    title: Per-model classification ceilings
+    why: The same prompt reaches an on-prem model and is refused by a cloud model whose max_classification is lower.
+    steps:
+      - { principal: alice, direction: input, model: gpt-4o, expect: [block], control: confidentiality, why: restricted deal talk to a model cleared for internal data,
+          text: "Summarise the due diligence findings before we sign the term sheet with ShopFlow." }
+      - { principal: alice, direction: input, model: "llama3.2:latest", expect: [log, allow], why: the on-prem model is cleared for restricted data,
+          text: "Summarise the due diligence findings before we sign the term sheet with ShopFlow." }
+
   - id: output
     title: Output filter
     why: The model's reply is checked before it reaches the caller.

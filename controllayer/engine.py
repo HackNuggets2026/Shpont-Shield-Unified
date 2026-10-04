@@ -15,7 +15,7 @@ import httpx
 from . import semantic_model, servertiming
 from .audit import AuditLog
 from .config import Policy, PolicyStore
-from .controls import access, decoys, exfiltration, pii_model, signatures, workflows
+from .controls import access, classification, decoys, exfiltration, pii_model, signatures, workflows
 from .controls.budget import BudgetLedger
 from .controls.patterns import pii, redact, secrets
 from .controls.resources import LeaseTracker, check_grants
@@ -290,6 +290,7 @@ class ControlLayer:
                 findings += pii.check(ctx, policy.pii)
                 findings += signatures.check(ctx, policy.signatures, self.feed)
             findings += exfiltration.check(ctx, policy.exfiltration, policy.company_domains)
+            findings += classification.check(ctx, policy)
             t = lap("deterministic", t)
 
         if inspect and not _blocked(findings):

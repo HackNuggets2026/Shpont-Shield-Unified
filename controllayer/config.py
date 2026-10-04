@@ -105,6 +105,35 @@ class ExfiltrationControl(ControlBase):
     allowed_domains: list[str] = Field(default_factory=list)
 
 
+# Data classification levels, lowest first. A catalog model's `max_classification` is the highest it may receive.
+CLASSIFICATIONS = ("public", "internal", "confidential", "restricted")
+Classification = Literal["public", "internal", "confidential", "restricted"]
+
+
+class ConfidentialTopic(_Strict):
+    classification: Classification = "confidential"
+    description: str = ""
+    keywords: list[str]  # case-insensitive regexes; any match puts the text in this topic
+
+    @field_validator("keywords")
+    @classmethod
+    def _compile(cls, v: list[str]) -> list[str]:
+        for pattern in v:
+            try:
+                re.compile(pattern)
+            except re.error as e:
+                raise ValueError(f"bad keyword regex {pattern!r}: {e}") from e
+        return v
+
+
+class ConfidentialityControl(ControlBase):
+    """Deterministic keyword topics classify a prompt; a model whose catalog `max_classification` is lower than
+    the prompt's classification does not receive it. Within the ceiling the match is only logged."""
+
+    directions: list[Direction] = Field(default_factory=lambda: [Direction.INPUT])
+    topics: dict[str, ConfidentialTopic] = Field(default_factory=dict)
+
+
 class ToolAccessControl(ControlBase):
     # role -> allowed tool globs; "*" allows everything
     roles: dict[str, list[str]] = Field(default_factory=dict)
@@ -550,6 +579,8 @@ class ResourceType(_Strict):
     grant: GrantSpec | None = None
     sensitivity: Literal["low", "medium", "high", "critical"] = "low"
     owner: str = ""
+    # ai_model entries: the highest data classification this model may receive (unset: no ceiling).
+    max_classification: Classification | None = None
 
     @field_validator("urn")
     @classmethod
@@ -816,6 +847,7 @@ class Policy(_Strict):
     secrets: PatternControl = Field(default_factory=PatternControl)
     signatures: SignatureControl = Field(default_factory=SignatureControl)
     exfiltration: ExfiltrationControl = Field(default_factory=ExfiltrationControl)
+    confidentiality: ConfidentialityControl = Field(default_factory=ConfidentialityControl)
     tool_access: ToolAccessControl = Field(default_factory=ToolAccessControl)
     semantic_controls: dict[str, SemanticControl] = Field(default_factory=dict)
     teams: dict[str, TeamOverride] = Field(default_factory=dict)
@@ -1011,7 +1043,7 @@ def _merge(base: dict, patch: dict, delete_none: bool = False) -> None:
 # thresholds (console Controls page), never identity or upstreams.
 OVERLAY_KEYS = {"principals", "menu", "budgets", "catalog", "resources", "detections", "quarantine"}
 OVERLAY_KEYS |= {"pii", "pii_model", "secrets", "signatures", "tool_access", "semantic_controls"}
-OVERLAY_KEYS |= {"exfiltration"}
+OVERLAY_KEYS |= {"exfiltration", "confidentiality"}
 
 
 _ENV = re.compile(r"\$\{(\w+)(?::-([^}]*))?\}")

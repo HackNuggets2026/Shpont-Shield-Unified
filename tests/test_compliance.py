@@ -6,8 +6,10 @@ from __future__ import annotations
 import re
 
 import httpx
+import pytest
 from fastapi.testclient import TestClient
 
+from controllayer.config import parse_policy
 from controllayer.gateway.app import create_app
 
 from .conftest import ADMIN, KEYS, chat, edit_policy, guard, mcp, reply
@@ -126,3 +128,53 @@ def test_chat_reply_has_the_image_target_cut_out(client, monkeypatch):
 def test_mcp_tool_result_has_the_image_target_cut_out(client):
     r = mcp(client, "tools/call", {"name": "get_weather", "arguments": {"city": "![map](https://evil.example/m.png)"}}, who="ops")
     assert r["result"]["content"][0]["text"] == "Sunny in ![map]([REDACTED:exfil_url])", r
+
+
+# ---- per-model classification ceilings ---------------------------------------------------------------
+
+DEAL = "Summarise the due diligence findings before we sign the term sheet with ShopFlow."
+MARGIN = "Draft a note on our gross margin per seat after the price increase."
+
+
+def try_as(client, text, model, principal="alice"):
+    return client.post("/admin/try", json={"principal": principal, "text": text, "model": model}).json()
+
+
+def test_same_text_is_blocked_for_a_cloud_model_and_allowed_on_prem(client):
+    cloud = try_as(client, DEAL, "gpt-4o")
+    assert cloud["action"] == "block"
+    f = next(f for f in cloud["findings"] if f["control"] == "confidentiality")
+    assert f["category"] == "mergers_acquisitions" and "accepts up to internal" in f["detail"]
+
+    local = try_as(client, DEAL, "llama3.2:latest")
+    assert local["action"] in ("allow", "log")
+    f = next(f for f in local["findings"] if f["control"] == "confidentiality")
+    assert f["action"] == "log" and f["detail"].startswith("restricted topic")
+
+
+def test_confidential_text_is_refused_by_an_internal_only_model_through_chat(client):
+    assert chat(client, MARGIN, model="gpt-4o").status_code == 403
+    assert chat(client, MARGIN, model="qwen3:8b").status_code == 200
+
+
+def test_unclassified_text_and_models_without_a_ceiling_pass(client):
+    v = try_as(client, "What is the CSS margin of the header?", "gpt-4o")
+    assert not any(f["control"] == "confidentiality" for f in v["findings"])
+    v = try_as(client, DEAL, "mock-model")  # the mock catalog entry sets no max_classification
+    assert not any(f["action"] == "block" for f in v["findings"] if f["control"] == "confidentiality")
+
+
+def test_ceiling_and_topics_come_from_the_policy(make_client):
+    def mutate(p):
+        p["catalog"]["llama"]["max_classification"] = "public"
+        p["confidentiality"]["topics"]["codenames"] = {"classification": "internal", "keywords": ["\\bBluebird\\b"]}
+
+    c = make_client(mutate=mutate)
+    assert try_as(c, "Status of Bluebird?", "llama3.2:latest")["action"] == "block"
+    assert try_as(c, "Status of bluebirds?", "llama3.2:latest")["action"] == "allow"
+
+
+def test_bad_classification_values_are_rejected(policy_dir):
+    text = (policy_dir / "policy.yaml").read_text()
+    with pytest.raises(ValueError):
+        parse_policy(text.replace("max_classification: internal", "max_classification: secret", 1))

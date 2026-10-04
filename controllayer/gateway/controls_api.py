@@ -11,10 +11,10 @@ from typing import Any, Callable
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
-from ..config import ControlBase, ExfiltrationControl, PiiModelControl, Policy, PolicyStore, SemanticControl, parse_policy
+from ..config import ConfidentialityControl, ControlBase, ExfiltrationControl, PiiModelControl, Policy, PolicyStore, SemanticControl, parse_policy
 from ..types import Action
 
-PATTERN = ("secrets", "pii", "pii_model", "signatures", "exfiltration", "tool_access")
+PATTERN = ("secrets", "pii", "pii_model", "signatures", "exfiltration", "confidentiality", "tool_access")
 THRESHOLD_ORDER = ("block", "redact", "warn", "log")
 PROFILES = ("strict", "balanced", "permissive")
 
@@ -45,6 +45,10 @@ def threshold_fields(th: tuple[str, float], v: float) -> dict[str, Any]:
 def describe(c: ControlBase) -> str | None:
     if isinstance(c, SemanticControl):
         return " ".join(c.instructions.split())
+    if isinstance(c, ConfidentialityControl):
+        return "Keyword topics classify a prompt; models whose max_classification is lower do not receive it: " + (
+            ", ".join(f"{t} ({v.classification})" for t, v in c.topics.items())
+        )
     if isinstance(c, ExfiltrationControl):
         return "Markdown images and links to domains outside the allowlist: " + ", ".join(c.allowed_domains)
     if isinstance(c, PiiModelControl):

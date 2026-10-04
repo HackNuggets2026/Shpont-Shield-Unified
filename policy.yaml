@@ -158,6 +158,26 @@ exfiltration:
   directions: [output, tool_result]
   allowed_domains: [acme.example, github.com, githubusercontent.com, wikipedia.org]
 
+# Data classification (public < internal < confidential < restricted). Keyword topics classify a prompt; a model
+# whose catalog `max_classification` is lower does not receive it (blocked), so the same text goes to an on-prem
+# model and is refused by a cloud one. Within the ceiling the match is only logged. Deterministic: no model involved.
+confidentiality:
+  mode: block
+  directions: [input]
+  topics:
+    unreleased_products:
+      classification: confidential
+      description: Unannounced features, launch dates and the product roadmap
+      keywords: ["\\bProject Atlas\\b", "\\bAtlas v2\\b", "\\bunreleased (product|feature|roadmap)", "\\b(internal|non-public|unannounced) roadmap\\b"]
+    commercial_terms:
+      classification: confidential
+      description: Margins, negotiated discounts, purchase prices and customer contract terms
+      keywords: ["\\bgross margins?\\b", "\\bnegotiated (discount|price|rate)s?\\b", "\\bindividual (price list|pricing)\\b", "\\bpurchase price from\\b"]
+    mergers_acquisitions:
+      classification: restricted
+      description: Acquisitions, mergers, investment talks and results before publication
+      keywords: ["\\bdue diligence\\b", "\\bterm sheet\\b", "\\b(acquisition|takeover) of\\b", "\\bmerger with\\b", "\\b(results|earnings) before (publication|the announcement)\\b"]
+
 tool_access:
   mode: block
   # MCP tool names, and Claude Code's built-in tools (Read, Edit, Bash...) for traffic from its hooks.
@@ -553,6 +573,7 @@ catalog:
     provider: openai
     unit: token
     models: [gpt-4o]
+    max_classification: internal
     price: { usd_per_1m_input: 2.50, usd_per_1m_output: 10.00 }
   gpt-4o-mini:
     class: consumable
@@ -563,6 +584,7 @@ catalog:
     provider: openai
     unit: token
     models: [gpt-4o-mini]
+    max_classification: internal
     price: { usd_per_1m_input: 0.15, usd_per_1m_output: 0.60 }
   llama:
     class: consumable
@@ -573,6 +595,7 @@ catalog:
     provider: local
     unit: token
     models: ["llama3.2:*"]
+    max_classification: restricted
     price: { usd_per_compute_second: 0.0004 }   # local models cost compute time, not tokens
   qwen:
     class: consumable
@@ -583,6 +606,7 @@ catalog:
     provider: local
     unit: token
     models: ["qwen3:*"]
+    max_classification: restricted
     price: { usd_per_compute_second: 0.0003 }
   mock:
     class: consumable
