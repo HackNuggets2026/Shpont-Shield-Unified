@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import importlib.util
 import json
 import logging
 import os
@@ -39,13 +40,9 @@ def model_dir(repo: str = DEFAULT_MODEL, root: str | Path | None = None) -> Path
 
 
 def deps_installed() -> bool:
-    try:
-        import numpy  # noqa: F401
-        import onnxruntime  # noqa: F401
-        import tokenizers  # noqa: F401
-    except ImportError:
-        return False
-    return True
+    """Whether the optional deps are importable, without importing them: importing onnxruntime is
+    enough for some builds to abort at interpreter exit (libc++ recursive_mutex), so only load() does."""
+    return all(importlib.util.find_spec(m) is not None for m in ("numpy", "onnxruntime", "tokenizers"))
 
 
 def files_present(repo: str = DEFAULT_MODEL, root: str | Path | None = None) -> bool:

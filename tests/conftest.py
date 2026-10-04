@@ -19,6 +19,10 @@ from controllayer import config, seed
 from controllayer.decision import ScriptedBackend
 from controllayer.gateway.app import create_app
 
+# Session fixtures (the seeded orgs) build gateways before any function fixture runs: pin the keyword
+# fallback for the whole process, so no worker loads the ONNX classifier (its teardown can abort xdist).
+os.environ.setdefault("ACL_SEMANTIC", "heuristic")
+
 ROOT = Path(__file__).resolve().parent.parent
 ADMIN = "demo-admin-token"
 
