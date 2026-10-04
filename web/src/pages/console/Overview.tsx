@@ -2,6 +2,7 @@ import { useMemo, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { admin } from "../../api";
+import { redteam } from "../../redteamApi";
 import { org, orgPath, type CostOutlier, type OrgIncident } from "../../orgApi";
 import { Sparkline, StackedChart } from "../../components/charts";
 import { Delta, UnitTable, useDeptColors, useOrg } from "../../components/org";
@@ -249,6 +250,49 @@ function NeedsAttention() {
   );
 }
 
+const POSTURE_TARGET = 90;
+
+/** The Redteam posture from the sidecar's last run; nothing at all when the sidecar is not running. */
+function PostureCard() {
+  const st = useQuery({ queryKey: ["redteam", "state"], queryFn: redteam.state, refetchInterval: 30_000, retry: false });
+  const r = st.data?.poligon.report;
+  if (!r || r.posture == null) return null;
+  const v = r.posture;
+  const tone = v >= POSTURE_TARGET ? "good" : v >= 70 ? "warn" : "bad";
+  const hist = st.data!.poligon.history;
+  const prev = hist.length > 1 ? hist[hist.length - 2].posture : null;
+  const delta = prev == null ? null : Math.round((v - prev) * 10) / 10;
+  return (
+    <Link to="/console/attacks" className="soft-card group relative block overflow-hidden rounded-2xl px-5 py-4 transition hover:ring-1 hover:ring-accent/30">
+      <Wash color={TONE_COLOR[tone]} height="5rem" />
+      <div className="relative flex items-center justify-between gap-3">
+        <div className="min-w-0">
+          <div className="text-[15px] font-semibold text-ink">Security posture</div>
+          <div className="mt-0.5 text-xs text-muted">
+            {r.attacks.stopped} of {r.attacks.total} attacks stopped · last run {ago(r.started)}
+          </div>
+        </div>
+        <div className="shrink-0 text-right">
+          <div className="text-2xl font-semibold tabular-nums" style={{ color: TONE_COLOR[tone] }}>
+            {v}
+            <span className="text-sm font-normal text-muted"> / 100</span>
+          </div>
+          {delta != null && delta !== 0 && (
+            <div className={cx("text-[11px] tabular-nums", delta > 0 ? "text-good" : "text-bad")}>
+              {delta > 0 ? "+" : ""}
+              {delta} since the run before
+            </div>
+          )}
+        </div>
+      </div>
+      <div className="relative mt-3">
+        <Meter value={v} max={100} tone={tone} />
+      </div>
+      <div className="relative mt-2 text-[11px] text-muted group-hover:text-accent">Target {POSTURE_TARGET}. Open Attacks →</div>
+    </Link>
+  );
+}
+
 /** One quiet line for the numbers that live on other pages. */
 function SecondaryLine() {
   const ov = useQuery({ queryKey: ["admin", "overview"], queryFn: admin.overview, refetchInterval: 10_000 });
@@ -305,7 +349,12 @@ export function Overview() {
         <div className="xl:col-span-2">
           <SpendCard />
         </div>
-        <NeedsAttention />
+        <div className="flex min-w-0 flex-col gap-4">
+          <PostureCard />
+          <div className="min-h-0 flex-1">
+            <NeedsAttention />
+          </div>
+        </div>
       </div>
       <Card
         title="Departments"
