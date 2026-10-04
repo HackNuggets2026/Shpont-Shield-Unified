@@ -23,19 +23,21 @@ flowchart LR
   T1 --> V
   V -->|allowed| U[LLM / MCP server]
   U -->|response| D
-  V --> L[(Audit JSONL)] & K[Dashboard · /metrics]
+  V --> L[(Audit JSONL)] & K[Admin console · /metrics]
 ```
 
 The same pipeline runs in both directions. Prompts and tool calls are checked on the way out. Model replies, tool results and tool descriptions are checked on the way back, which is how it catches indirect injection, output leaks and poisoned MCP tools.
+
+This repository is the team's merged build: Mikołaj's usage-governance fork with latekvo's Shpont-Shield merged in through git, plus pieces ported from the other team apps. See [What came from where](#what-came-from-where).
 
 ## Quick start (no models needed)
 
 ```bash
 python3.12 -m venv .venv && .venv/bin/pip install -e '.[dev]'
-make web                                # build the console (Node 20+); without it / says how to build it
+make web                                # build the console (Node 20+); until then / is a short "console is not built" page
 .venv/bin/python -m seed --data-dir data/demo           # 30 days of a 5,000-person bank
 .venv/bin/python -m controllayer --data-dir data/demo   # gateway and console on http://127.0.0.1:8787
-open http://127.0.0.1:8787/             # the console (demo mode: no sign-in; else demo-admin-token)
+open http://127.0.0.1:8787/             # the admin console (sign in with demo-admin-token)
 ```
 
 Other useful commands:
@@ -46,12 +48,12 @@ Other useful commands:
 .venv/bin/python -m controllayer --data-dir data/fresh   # same policy, empty state (or ACL_DATA_DIR)
 .venv/bin/python demo/live.py           # the live demo, beat by beat, against a running gateway
 .venv/bin/python demo/agent.py          # scripted agent: benign steps + attacks
-open 'http://127.0.0.1:8787/legacy/'    # the earlier HTML security console (/legacy/me: employee panel)
+open 'http://127.0.0.1:8787/legacy/'    # Shield's earlier HTML dashboard, read-only reference (not maintained)
 ```
 
 `web/dist` is not committed: after pulling changes to `web/`, run `make web` again.
 
-The shipped policy runs in **demo mode** (`identity.demo_mode: true`), so nothing asks for a credential: the console, `/admin/*` and `/metrics` skip the admin token, a caller without a known API key acts as `identity.demo_principal` (alice), `/legacy/me` offers a "viewing as" switch, and risk signals name their integration in the body. A supplied API key still identifies its owner, which is how the demo agent acts as different people. **Demo mode must be off in production** (`ACL_DEMO_MODE=false`, or `demo_mode: false` in the policy); while it is on, the gateway logs a warning at startup and `/admin/summary` reports `"demo_mode": true`.
+The shipped policy runs in **demo mode** (`identity.demo_mode: true`), so nothing asks for a credential: the console, `/admin/*` and `/metrics` skip the admin token, a caller without a known API key acts as `identity.demo_principal` (alice), and risk signals name their integration in the body. A supplied API key still identifies its owner, which is how the demo agent acts as different people. **Demo mode must be off in production** (`ACL_DEMO_MODE=false`, or `demo_mode: false` in the policy); while it is on, the gateway logs a warning at startup and `/admin/summary` reports `"demo_mode": true`.
 
 By default the policy uses the `mock` upstream and the `heuristic` semantic backend. The heuristic backend is a keyword stand-in for the decision model, so everything runs on a laptop with no GPU.
 
@@ -64,22 +66,32 @@ ACL_LIVE=1 pytest -m live       # contract test against the real /v1/systemone
 
 Without Docker, set `ACL_SEMANTIC=ollama ACL_UPSTREAM=ollama` before starting the gateway. You can also edit `semantic.backend` / `upstream.backend` in `policy.yaml` while it runs. nimble needs about 10 GB of memory. On smaller machines, set `deep_model: null` to use the fast tier alone, or `deep_model: tev1` after `ollama pull tev1`.
 
-## Panels (earlier HTML dashboard, under `/legacy/`)
+## Console
 
-The React console owns `/`. The earlier Primer HTML dashboard is kept, read-only, under `/legacy/` as a reference while its views are ported.
+`/` is the admin console (React, `web/`, built with `make web`). It is for security, platform and FinOps people; employees have no screen of their own (their tools use the JSON under `/api/me/*` with their own key). The sidebar has a global search for people, teams and departments, and these pages:
 
-| URL | Who | What |
-|---|---|---|
-| `/legacy/me` | Employees (their own key; in demo mode a "viewing as" switch instead) | Usage, a monitoring notice, recent activity of themselves and their agents, and **company resources**: grant or revoke each of their agents' access to company services and MCP servers, with scopes and expiry (a scope click keeps the expiry; an expired grant is renewed explicitly) |
-| `/legacy/security` (also `/legacy/`) | Security staff (`?token=`, none in demo mode) | **Overview**: spend today / 7 / 30 days against budget, spend over time, cost per model and company service, spend per person, budget use, the people who most need attention. **People**: search, filter and sort everyone (server-side paging). **Person** (`?person=<id>`): their spend by service, budget, agents and grants (one-click on/off), risk level (AUTO or an override) and recent decisions. **Risk**, **Resources** (suspend, grants), **Controls**, **Audit** (filters, exports), **Try a prompt** |
+| Page | What |
+|---|---|
+| Overview | Spend against the monthly budget, open incidents, spend by workflow, what needs attention, departments |
+| Activity | The live event stream: every check, lease, incident and admin action |
+| Security | Where incidents happen (rule by department), opened vs. closed, the incident queue, people at risk and automatic responses |
+| Traps | The decoys planted for insiders, who touched one and the evidence |
+| Attacks | Attack corpora fired at the live policy and what got through |
+| Controls | Every control, its mode and strictness, edited through the admin overlay |
+| Playground | Try a prompt or tool call against the live policy and see each check's verdict |
+| Tests | The self-test and red-team results over time |
+| Organization | Departments, teams and people (search, risk, spend), down to one person's page |
+| Resources | The catalog: models, leasable machines and access grants, with live leases and zombies |
+| Workflows | The priced menu of AI work, with measured cost per run |
+| Requests | Approvals waiting for an admin: workflows, budget and time-boxed access |
 
-The console is `controllayer/dashboard/app.js` (router, helpers, SVG charts) plus one file per view in `views/`; `/legacy/me` is `core.js`. Both are plain HTML on [Primer CSS](https://primer.style/css) (loaded from jsDelivr). Every number and chart links to the filtered list behind it. Modules, URL parameters and the `/admin/analytics/*` API are in [docs/console-contract.md](docs/console-contract.md).
+Every number links to the filtered list behind it. The earlier Shield HTML dashboard is kept, read-only and unmaintained, under `/legacy/` only; [docs/console-contract.md](docs/console-contract.md) describes it.
 
-`python -m controllayer.seed --people 2000 --days 30` generates a synthetic company for the console: people and agents in teams with daily budgets (`data/org.json`, which `identity.directory` merges into the policy), 30 days of usage across models and company services, risk scores, alerts, grants and overrides. Restart the gateway after seeding.
+`python -m controllayer.seed --people 2000 --days 30` generates a smaller synthetic company in Shield's format (the console's demo bank comes from `python -m seed`): people and agents in teams with daily budgets (`data/org.json`, which `identity.directory` merges into the policy), 30 days of usage across models and company services, risk scores, alerts, grants and overrides. Restart the gateway after seeding.
 
 ## Company resources for agents
 
-Security defines a catalog in `policy.yaml` (`resources:`) with who is entitled to each resource, which scopes may be granted and the longest grant allowed. Employees delegate entitled resources to their agents in `/legacy/me` (API: `/me/api/*`). Agents use them through the gateway's built-in `company` MCP server, which offers each service's own tools:
+Security defines a catalog in `policy.yaml` (`resources:`) with who is entitled to each resource, which scopes may be granted and the longest grant allowed. Entitled resources are delegated to agents through the API (`/me/api/*`, with the employee's own key) or granted by an admin in the console. Agents use them through the gateway's built-in `company` MCP server, which offers each service's own tools:
 
 | Area | Services (tools) |
 |---|---|
@@ -108,7 +120,7 @@ A person's level, strongest rule first:
 2. **Auto.** Otherwise the higher of the score-based level and the strongest active external signal.
 3. **Owner.** An agent's level is the higher of its own and its owner's.
 
-An integration listed in `identity.integrations` (`{name: {token_env, max_level, max_ttl_hours, max_sources}}`) sends `POST /admin/risk/{pid}/signal` with `Authorization: Bearer <its token>` and `{"level"` or `"score", "ttl_seconds", "source", "reason"}`. A score maps through `insider_risk.levels`. The level is capped at `max_level`. Each source (`<integration>` or `<integration>/<source>`) holds one signal, which its next signal replaces; `normal` withdraws it. An integration can only write its own sources, and at most `max_sources` (default 8) live ones per person: past that, a new source displaces the weakest, soonest-expiring one (named in the reply as `evicted`), or is refused with 429 if every live one is stronger. Stored signals count only under the current policy: removing an integration (say its token leaked) voids its signals at once, and lowering its `max_level` or `max_ttl_hours` caps them. Signals persist in `data/state.json`, are audited, show in `/admin/risk` and the security panel (where one click dismisses them), and raise a silent alert when they lift a level. The admin token is not accepted on this endpoint, and an integration token works nowhere else. In demo mode a call without an integration token names its integration in the body (`"integration": "wazuh"`), whose caps still apply.
+An integration listed in `identity.integrations` (`{name: {token_env, max_level, max_ttl_hours, max_sources}}`) sends `POST /admin/risk/{pid}/signal` with `Authorization: Bearer <its token>` and `{"level"` or `"score", "ttl_seconds", "source", "reason"}`. A score maps through `insider_risk.levels`. The level is capped at `max_level`. Each source (`<integration>` or `<integration>/<source>`) holds one signal, which its next signal replaces; `normal` withdraws it. An integration can only write its own sources, and at most `max_sources` (default 8) live ones per person: past that, a new source displaces the weakest, soonest-expiring one (named in the reply as `evicted`), or is refused with 429 if every live one is stronger. Stored signals count only under the current policy: removing an integration (say its token leaked) voids its signals at once, and lowering its `max_level` or `max_ttl_hours` caps them. Signals persist in `data/state.json`, are audited, show in `/admin/risk`, and raise a silent alert when they lift a level. The admin token is not accepted on this endpoint, and an integration token works nowhere else. In demo mode a call without an integration token names its integration in the body (`"integration": "wazuh"`), whose caps still apply.
 
 ## Contextual PII (OpenAI Privacy Filter)
 
@@ -159,14 +171,13 @@ All controls, thresholds, allowed models, budgets and team overrides live in [`p
 
 | Endpoint | For |
 |---|---|
-| `/` | Admin console (React, `make web`): overview, workflows, security, resources, requests, people and teams |
+| `/` | Admin console (React, `make web`): the pages listed under [Console](#console) |
 | `/api/me/*` | JSON for an employee's own tools, with their own API key: usage, quota, menu, runs, leases, blocked events, admin activity about them |
 | `/admin/overview`, `/admin/usage?by=workflow,task`, `/admin/menu`, `/admin/leases`, `/admin/incidents`, `/admin/principals`, `/admin/requests`, `/admin/actions` | Governance JSON; POST variants change restrictions |
-| `/admin/audit/export?format=jsonl\|csv` | Audit log for security teams. Detected PII and secrets are masked in every event, whatever the action; the SHA-256 of the original is kept |
 | `/admin/catalog`, `/admin/grants` | The resource catalog by class, with usage, live leases and live grants |
 | `/admin/export/focus?days=30` | AI spend as a FinOps FOCUS 1.1 CSV, ready for finance tools |
 | `/admin/export/backstage` | The catalog as Backstage `kind: Resource` entities |
-| `/admin/audit/export?format=ocsf\|ecs` | The same decisions plus admin actions and insider-risk alerts as one NDJSON stream for a SIEM: [OCSF 1.9.0](https://schema.ocsf.io/1.9.0/) or ECS 9.5 (Elastic, Wazuh). Same masking; full text only where the native event has it |
+| `/admin/audit/export?format=jsonl\|csv\|ocsf\|ecs` | Audit log for security teams: `jsonl` and `csv` are the gateway's decisions; `ocsf` and `ecs` add admin actions and insider-risk alerts as one NDJSON stream for a SIEM: [OCSF 1.9.0](https://schema.ocsf.io/1.9.0/) or ECS 9.5 (Elastic, Wazuh). Detected PII and secrets are masked in every event, whatever the action; the SHA-256 of the original is kept |
 | `/admin/summary`, `/admin/events` | JSON for other tools |
 | `PATCH /admin/controls/{name}`, `/admin/controls/profile` | Edit one control live (`enabled`, `mode`, `shadow`, `threshold`) or apply a strict/balanced/permissive profile; written to the admin overlay, an invalid value returns 400 with the validation message |
 | `/metrics` | Prometheus: decisions, findings, latency per stage, spend |
@@ -202,7 +213,7 @@ Everything an agent can touch is an entry under `catalog:` in `policy.yaml`. An 
 | `leasable` | iOS simulators, sandbox VMs, browsers | minutes held | concurrent leases, maximum duration, idle shutdown |
 | `access_grant` | prod database, prod deploy, external email | uses | a time-boxed grant approved by an admin, or a workflow that includes it |
 
-There is one evaluator for all three classes (`controls/resources.py: authorize`), in Cedar's shape: a principal, an action, a resource and a context. The gateway uses it on every tool call, and `POST /v1/authorize` exposes it to other systems. Employees request a grant from `/me`, and admins approve it or grant it directly (`POST /admin/principals/{id}/grants`). A grant is stored in the shape of an OAuth RAR (RFC 9396) `authorization_details` entry: resource, URN locations, actions, an optional workflow and an expiry. While it is live, it also lets the tool past the role list and the irreversible list. Each grant is logged and shown to the employee.
+There is one evaluator for all three classes (`controls/resources.py: authorize`), in Cedar's shape: a principal, an action, a resource and a context. The gateway uses it on every tool call, and `POST /v1/authorize` exposes it to other systems. Employees request a grant through the API with their own key (`POST /me/requests`), and admins approve it on the Requests page or grant it directly (`POST /admin/principals/{id}/grants`). A grant is stored in the shape of an OAuth RAR (RFC 9396) `authorization_details` entry: resource, URN locations, actions, an optional workflow and an expiry. While it is live, it also lets the tool past the role list and the irreversible list. Each grant is logged, and the employee can see it through `/api/me/*`.
 
 The catalog is built on existing standards rather than a home-grown format:
 
@@ -228,7 +239,7 @@ Some things in a company should never be touched by anyone: nothing legitimate n
 | The decoy's marker shows up in a prompt or tool call: its content is being moved on | `decoy_touch` | Same |
 | A prompt asks for it by name ("the unpublished board pack") | `decoy_mention` (weight 30) | An alert: maybe just curiosity |
 
-The gateway answers an opening call itself with the decoy's fake `content`, so no real system is involved and the person sees an ordinary result. Search results, tool results and conversation history never count. Employees never learn that it was a trap: in everything they can see about themselves it is "restricted material". Admins see each trap, where it is planted and who touched it on the Security page (`GET /admin/decoys`).
+The gateway answers an opening call itself with the decoy's fake `content`, so no real system is involved and the person sees an ordinary result. Search results, tool results and conversation history never count. Employees never learn that it was a trap: in everything they can see about themselves it is "restricted material". Admins see each trap, where it is planted and who touched it on the Traps page (`/console/traps`, API `GET /admin/decoys`).
 
 To catch Claude Code too, put a file with a decoy's name in the repositories people work in (for example `finance/board-pack-Q3-2026-UNPUBLISHED.pdf`): the `PreToolUse` hook sees the `Read`. Decoy strings that work without any of this, through the signature feed, live in [Shpont-Shield-Redteam](https://github.com/HackNuggets2026/Shpont-Shield-Redteam)'s Tripwire.
 
@@ -258,3 +269,15 @@ Gateway checks, lease starts and stops, incidents, usage reports, CloudEvents an
 With real decision models, latency is dominated by tev1. Deterministic blocks skip the model call, and only uncertain answers reach nimble.
 
 See [docs/architecture.md](docs/architecture.md) for design decisions and the OWASP mapping.
+
+## What came from where
+
+Five apps were built in parallel by the team; this one is their merge.
+
+| Who | App | What it brought |
+|---|---|---|
+| latekvo | Shpont-Shield | The gateway core it merged in through git: the Anthropic Messages proxy for Claude Code, the MCP broker and company resources, insider risk with external signals, the Privacy Filter, OCSF/ECS audit export, `/metrics`, and the HTML dashboard now under `/legacy/` |
+| Dawid | Shpont-Shield-Behavior (Warden) | Judging agents by what they do, not only by what they say: behavior signals behind the person page and insider risk |
+| Dotims | Shpont-Shield-Redteam | Poligon and Tripwire: the attack corpora behind Attacks and Tests, and the decoys behind Traps |
+| Nikodem | SzpontyShield | The agent console and demo scenarios behind the Playground, and the policy editor ideas behind Controls |
+| Mikołaj | Shpont-Shield-Usage | The base: usage governance (workflows, leases, requests, budgets at company scale) and the React admin console with its sidebar and global search |

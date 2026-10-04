@@ -1,8 +1,8 @@
 # Product decisions
 
-## Employee panel (`/me`): likely to be dropped
+## Employee panel (`/me`): dropped
 
-**Status:** under consideration, leaning towards removal. The security console is the product.
+**Status:** decided. The admin console at `/` is the product; there is no employee screen. Shield's old employee panel survives only as a read-only reference under `/legacy/me`.
 
 **Why:** a company adopts this more easily when ordinary employees never have to learn or touch anything. The control layer should be invisible to them: their tools keep working, and only the security team operates it. A panel every employee must use adds:
 - training and change-management cost to the rollout,
@@ -13,4 +13,4 @@
 - security staff, or an automated policy, assign resources to agents;
 - employees are told about the monitoring through the company's acceptable-use policy, not through a UI.
 
-**Until decided:** `/me` stays as it is. New work targets the security console first and does not add employee-facing features.
+**Outcome:** the employee UI is gone. The JSON behind it stays for employees' own tools (`/api/me/*`, `/me/api/*`, with their own key), and new work targets the admin console only.

@@ -1,6 +1,8 @@
-# Security console: modules and API contract
+# Legacy HTML dashboard: modules and API contract
 
-The security console (`/security`, also `/`) is `app.js` plus the view files below. The employee panel (`/me`) is `core.js`.
+**Reference only.** This describes Shield's earlier Primer HTML dashboard, which is kept read-only and unmaintained under `/legacy/` (`/legacy/security`, also `/legacy/`, and its employee panel at `/legacy/me`). The product's console is the React admin console at `/` (`web/`); its pages are listed in the README under Console. Employees have no screen of their own in the product.
+
+The legacy dashboard is `app.js` plus the view files below; its employee panel is `core.js`.
 
 ## Front-end modules
 

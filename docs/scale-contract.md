@@ -4,7 +4,7 @@ Target: one install per company with 1,000 to 50,000 employees. The demo org is 
 5,000 people in 6 departments and about 40 teams, seeded over 30 days. The console works with **organization
 units** (departments, then teams), workflows and resources. Individual people appear only as top-N outliers,
 in search, or after drilling into a team. The incident page keeps naming the person, because security needs a
-name. The employee portal does not change.
+name. There is no employee portal; the console is admin-only.
 
 All admin endpoints are under `/api/admin/*` and need the `x-admin-token` header. Money is in USD (floats),
 time in unix seconds, and every window is in UTC days. Existing endpoints keep their shapes; new fields are

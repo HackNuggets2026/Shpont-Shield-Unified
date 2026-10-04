@@ -30,8 +30,8 @@ Everything is configured in one hot-reloaded `policy.yaml`. An ethics rule is on
 | Jev / tev1 / nimble as decision model | **Shared, the core.** Two-tier cascade on `/v1/systemone`. Not yet run on real models (this VM can't host them) |
 | Flag malicious employees, monitor closely, silently alert security | **Built:** decaying risk score, watch (stricter policy + full capture) / restricted levels, silent alerts to console, file or webhook |
 | OpenAI Privacy Filter for PII, minimally invasive, overridable | **Built:** sidecar + contextual spans, reversible masking restored in replies, user and model overrides that never lift a block |
-| Employee panel | **Built:** `/me`. Usage, activity, and grants of company resources (servers, credentials, SaaS, MCP) to their agents |
-| Security panel | **Built:** `/security`. Everything above plus risk levels, alerts, grant revocation, resource suspension |
+| Employee panel | **Dropped:** the console is admin-only. Employees' tools get their own usage, activity and grants as JSON (`/api/me/*`, `/me/api/*`) with their own key |
+| Security panel | **Built:** the admin console at `/` (Security, Traps, Organization, Resources, Requests, ...). Everything above plus risk levels, alerts, grant revocation, resource suspension |
 
 ## Why Privacy Filter fits so well
 
