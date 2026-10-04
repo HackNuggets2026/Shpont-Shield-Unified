@@ -241,7 +241,24 @@ Some things in a company should never be touched by anyone: nothing legitimate n
 
 The gateway answers an opening call itself with the decoy's fake `content`, so no real system is involved and the person sees an ordinary result. Search results, tool results and conversation history never count. Employees never learn that it was a trap: in everything they can see about themselves it is "restricted material". Admins see each trap, where it is planted and who touched it on the Traps page (`/console/traps`, API `GET /admin/decoys`).
 
-To catch Claude Code too, put a file with a decoy's name in the repositories people work in (for example `finance/board-pack-Q3-2026-UNPUBLISHED.pdf`): the `PreToolUse` hook sees the `Read`. Decoy strings that work without any of this, through the signature feed, live in [Shpont-Shield-Redteam](https://github.com/HackNuggets2026/Shpont-Shield-Redteam)'s Tripwire.
+To catch Claude Code too, put a file with a decoy's name in the repositories people work in (for example `finance/board-pack-Q3-2026-UNPUBLISHED.pdf`): the `PreToolUse` hook sees the `Read`.
+
+## Attacks (Redteam sidecar)
+
+`redteam/` is a separate process that attacks this gateway around the clock and scores what gets through (Console > Attacks). It fires a corpus of known attacks (`redteam/corpus/attacks`, must be stopped), normal work requests (`redteam/corpus/benign`, must pass) and disguised rewrites of every attack (leet, homoglyphs, zero-width, spacing, base64, role-play) through `POST /admin/try`, which runs the full pipeline but never meters, scores or audits the caller.
+
+- **Posture** 0-100 = 100 x protection x (1 - friction): blocking everything scores 0, so does blocking nothing.
+- It re-runs every 30 s and at once when the gateway's configuration fingerprint changes (policy, feed, controls, risk levels), and records what each change did: posture before and after, attacks opened or closed, new false positives. Change a control on the Controls page and the effect shows on Attacks within seconds.
+- **Feed health** self-tests the signature feed the gateway enforces: every signature must compile, match its own `tests.match` examples and stay quiet on `tests.clean`.
+
+```bash
+make demo                    # the gateway on :8787
+make redteam                 # the sidecar on :8799 (REDTEAM_PORT), attacking :8787 (PORT)
+make redteam-ci              # CI gate, the same as:
+cd redteam && ../.venv/bin/python -m shield_redteam run --min-posture 90 && ../.venv/bin/python -m shield_redteam feed --check
+```
+
+`pip install -e redteam` also gives the `shield-redteam` command (`shield-redteam run --min-posture 90 && shield-redteam feed --check`). Settings live in `redteam/redteam.yaml` (`SHIELD_URL`, `ACL_ADMIN_TOKEN`, `REDTEAM_PORT`, `REDTEAM_FEED`). The console reads the sidecar through the gateway at `/api/admin/redteam/{state,stage,run,report,report.md}` (admin token required), forwarded to `ACL_REDTEAM_URL` (default `http://127.0.0.1:8799`); when it is down that answers 503 `{"error": "redteam not running"}` and the page shows how to start it. The sidecar never edits the gateway's configuration. Its own tests: `make redteam-test`.
 
 ## Claude Code
 

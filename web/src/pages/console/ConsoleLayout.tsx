@@ -3,6 +3,7 @@ import { admin } from "../../api";
 import { Shell, type NavItem } from "../../components/Shell";
 import { GlobalSearch, useOrg } from "../../components/org";
 import { IconActivity, IconAlert, IconBox, IconBuilding, IconFlow, IconGauge, IconInbox, IconLock, IconShield, IconTerminal } from "../../components/icons";
+import { IconBug } from "../../components/icons";
 
 export function ConsoleLayout() {
   const ov = useQuery({ queryKey: ["admin", "overview"], queryFn: admin.overview, refetchInterval: 10_000 });
@@ -16,6 +17,7 @@ export function ConsoleLayout() {
     { to: "/console/workflows", label: "Workflows", icon: <IconFlow /> },
     { to: "/console/security", label: "Security", icon: <IconAlert />, badge: ov.data?.incidents_open, badgeTone: "bad" },
     { to: "/console/traps", label: "Traps", icon: <IconLock />, badge: traps.data?.open, badgeTone: "bad" },
+    { to: "/console/attacks", label: "Attacks", icon: <IconBug /> },
     { to: "/console/controls", label: "Controls", icon: <IconShield /> },
     { to: "/console/playground", label: "Playground", icon: <IconTerminal /> },
     { to: "/console/resources", label: "Resources", icon: <IconBox />, badge: ov.data?.zombies, badgeTone: "warn" },
