@@ -554,6 +554,7 @@ def seed(
     store.db.execute("BEGIN")
     try:
         org = OrgSeeder(store, random.Random(rng_seed + 1), now, days, people, named_directory(policies))
+        org.quiet_teams = {p.team for p in ORG if p.live_demo}
         s.routine()
         s.governance()
         s.frank()

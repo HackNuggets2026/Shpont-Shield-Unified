@@ -183,6 +183,9 @@ class OrgSeeder:
         self.stats = {"people": 0, "events": 0, "leases": 0}
         self._ids: set[str] = {p["principal"] for p in named}
         self.named = named
+        # Teams the live demo uses (carol's interns, alice's engineering, ...): their members get no seeded
+        # traffic today, so team budgets have room at any hour, whichever directory the people come from.
+        self.quiet_teams: set[str] = set()
         self.build(people)
 
     def id(self) -> str:
@@ -243,7 +246,7 @@ class OrgSeeder:
             day0 = today0 - d * DAY
             weekend = time.gmtime(day0).tm_wday >= 5 and d > 0
             for m in self.members:
-                if not m.active:
+                if not m.active or (d == 0 and m.team in self.quiet_teams):
                     continue
                 if weekend:  # ~12% of a weekday: on-call, deadlines, the odd keen person
                     if self.rng.random() > 0.35:
