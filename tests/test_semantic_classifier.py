@@ -124,6 +124,7 @@ def test_summary_reports_the_active_backend(make_client):
 def test_summary_is_honest_about_the_keyword_fallback(make_client):
     s = make_client().get("/admin/summary").json()["semantic"]
     assert s["backend"] == KEYWORD_FALLBACK and s["model"] is None and s["configured"] == "heuristic"
+    assert {"fast_model", "deep_model", "fail_mode"} <= set(s)  # older readers keep their keys
 
 
 def test_missing_model_falls_back_to_keywords_without_crashing(make_client, tmp_path, monkeypatch):

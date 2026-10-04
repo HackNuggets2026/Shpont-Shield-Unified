@@ -898,9 +898,8 @@ def create_app(
             b = layer.backend(p)
             describe = getattr(b, "describe", None)
             out = describe(p) if describe else {"backend": getattr(b, "name", type(b).__name__), "model": None}
-        out.update(configured=e.backend, fail_mode=e.fail_mode)
-        if out["backend"] == "ollama":
-            out.update(fast_model=e.fast_model, deep_model=e.deep_model)
+        # fast_model/deep_model stay for older readers; they are only in use when backend is "ollama".
+        out.update(configured=e.backend, fast_model=e.fast_model, deep_model=e.deep_model, fail_mode=e.fail_mode)
         return out
 
     @app.get("/admin/summary")

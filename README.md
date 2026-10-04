@@ -55,7 +55,7 @@ open 'http://127.0.0.1:8787/legacy/'    # Shield's earlier HTML dashboard, read-
 
 The shipped policy runs in **demo mode** (`identity.demo_mode: true`), so nothing asks for a credential: the console, `/admin/*` and `/metrics` skip the admin token, a caller without a known API key acts as `identity.demo_principal` (alice), and risk signals name their integration in the body. A supplied API key still identifies its owner, which is how the demo agent acts as different people. **Demo mode must be off in production** (`ACL_DEMO_MODE=false`, or `demo_mode: false` in the policy); while it is on, the gateway logs a warning at startup and `/admin/summary` reports `"demo_mode": true`.
 
-By default the policy uses the `mock` upstream and the `heuristic` semantic backend. The heuristic backend is a keyword stand-in for the decision model, so everything runs on a laptop with no GPU.
+By default the policy uses the `mock` upstream and `semantic.backend: auto`: the local prompt-injection classifier (see [Semantic tier](#semantic-tier)) when it is downloaded, otherwise the keyword fallback, a regex stand-in for a model. Either way everything runs on a laptop with no GPU.
 
 ## With real models
 
@@ -65,6 +65,27 @@ ACL_LIVE=1 pytest -m live       # contract test against the real /v1/systemone
 ```
 
 Without Docker, set `ACL_SEMANTIC=ollama ACL_UPSTREAM=ollama` before starting the gateway. You can also edit `semantic.backend` / `upstream.backend` in `policy.yaml` while it runs. nimble needs about 10 GB of memory. On smaller machines, set `deep_model: null` to use the fast tier alone, or `deep_model: tev1` after `ollama pull tev1`.
+
+## Semantic tier
+
+Without Ollama, prompt injection is scored by an open CPU classifier, `protectai/deberta-v3-base-prompt-injection-v2` (Apache-2.0, ONNX, onnxruntime, no GPU):
+
+```bash
+pip install -e '.[classifier]'                  # onnxruntime, tokenizers, numpy
+python -m controllayer.semantic_model download  # ~739 MB into ~/.cache/controllayer/models (or $ACL_MODEL_DIR)
+pytest -m live tests/test_semantic_classifier.py
+```
+
+With `semantic.backend: auto` (the default) the gateway uses it once the files are there; `backend: classifier` also downloads it on first use. Until it is loaded, or if it is missing, the keyword fallback answers and `/admin/summary` says so: `semantic.backend` is `"classifier"` (with `model`, `device: "cpu"`, `threshold`) or `"keyword fallback (no model)"`. Its findings carry `tier: "semantic"` and the model's score; keyword findings carry `tier: "keyword"`. P(injection) at or above `semantic.classifier.threshold` (0.9) applies the control's mode. Inputs under 24 characters and the short strings of JSON tool results are not scored. Base64 blobs are decoded and letter-spaced text (`I g n o r e  a l l ...`) is collapsed before scoring, for the classifier and the keyword fallback alike.
+
+Measured on the red-team corpus (23 injection attacks, 30 benign prompts, plus the review's bypasses):
+
+| | Attacks caught | Benign flagged | Latency |
+|---|---|---|---|
+| Keyword fallback | 12 / 23 | 0 / 30 | ~0.2 ms |
+| Classifier, P >= 0.9 | 23 / 23 | 2 / 30 | 27 ms p50, 41 ms p95 (2 CPU threads) |
+
+The two false positives were a short JSON tool result (now skipped) and "Which test card numbers does the payment sandbox accept?". The corpus is small and self-written: a strong signal, not a benchmark.
 
 ## Console
 

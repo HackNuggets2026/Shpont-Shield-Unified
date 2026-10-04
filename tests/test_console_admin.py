@@ -159,7 +159,7 @@ def test_controls_table_and_status_strip(client):
         assert c["name"] in page.html
     assert (
         s["feed"]["version"] in page.html
-        and s["semantic"]["fast_model"] in page.html
+        and s["semantic"]["backend"] in page.html
         and s["policy"]["version"] in page.html
     )
     assert 'Label--danger">block' in page.html and 'Label--accent">redact' in page.html and ">shadow<" in page.html
