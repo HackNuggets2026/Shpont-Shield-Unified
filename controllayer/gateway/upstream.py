@@ -10,6 +10,7 @@ from dataclasses import dataclass
 
 import httpx
 
+from .. import servertiming
 from ..config import Upstream
 
 
@@ -47,7 +48,7 @@ class UpstreamClient:
         headers = {}
         if self.cfg.api_key_env:
             headers["Authorization"] = f"Bearer {os.environ.get(self.cfg.api_key_env, '')}"
-        r = await self.client.post(url, json={**body, "stream": False}, headers=headers)
+        r = await servertiming.timed(self.client.post(url, json={**body, "stream": False}, headers=headers))
         r.raise_for_status()
         data = r.json()
         usage = data.get("usage") or {}

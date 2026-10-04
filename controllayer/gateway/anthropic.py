@@ -23,6 +23,7 @@ import httpx
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
+from .. import servertiming
 from ..config import PolicyStore
 from ..controls.access import identify
 from ..controls.patterns import remask, unmask
@@ -696,7 +697,7 @@ def mount(app: FastAPI, layer: ControlLayer, store: PolicyStore, http: httpx.Asy
         except _Refused as r:
             return r.response
         try:
-            resp = await http.send(req)
+            resp = await servertiming.timed(http.send(req))
         except httpx.HTTPError as e:
             return error(502, f"upstream unavailable: {type(e).__name__}")
         if resp.status_code != 200:
@@ -728,7 +729,7 @@ def mount(app: FastAPI, layer: ControlLayer, store: PolicyStore, http: httpx.Asy
                 msg, upstream_headers = anthropic_mock(out), {}
             else:
                 try:
-                    resp = await http.send(req)
+                    resp = await servertiming.timed(http.send(req))
                 except httpx.HTTPError as e:
                     return error(502, f"upstream unavailable: {type(e).__name__}")
                 if resp.status_code != 200:
@@ -754,7 +755,7 @@ def mount(app: FastAPI, layer: ControlLayer, store: PolicyStore, http: httpx.Asy
             closer = None
         else:
             try:
-                resp = await http.send(req, stream=True)
+                resp = await servertiming.timed(http.send(req, stream=True))
             except httpx.HTTPError as e:
                 return error(502, f"upstream unavailable: {type(e).__name__}")
             if resp.status_code != 200:

@@ -12,6 +12,7 @@ from typing import Any
 
 import httpx
 
+from . import servertiming
 from .audit import AuditLog
 from .config import Policy, PolicyStore
 from .controls import access, decoys, pii_model, signatures, workflows
@@ -218,6 +219,7 @@ class ControlLayer:
         cacheable = ctx.resource is None
         if cacheable and ctx.resent and key in self._seen:
             self._seen.move_to_end(key)
+            servertiming.note_verdict(self._seen[key])
             return self._seen[key]
         verdict = await self._evaluate(ctx, extra, semantic=semantic, audit_allow=audit_allow)
         # Never cached: budget, lease, workflow and outage outcomes (they depend on the moment or on
@@ -342,6 +344,7 @@ class ControlLayer:
         self.detections.observe(ctx, verdict, policy)
         if ctx.scored:
             self.risk.observe(policy, ctx, verdict, level)
+        servertiming.note_verdict(verdict)
         return verdict
 
 

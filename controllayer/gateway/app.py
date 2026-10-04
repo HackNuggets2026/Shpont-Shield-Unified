@@ -22,7 +22,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
-from .. import audit, export, resources
+from .. import audit, export, resources, servertiming
 from ..config import PolicyStore
 from ..controls import decoys
 from ..controls.access import authenticate, by_principal, identify
@@ -136,7 +136,7 @@ def create_app(
     async def mcp_forward(target: str, r: dict) -> dict:
         if target == "builtin":
             return mcp_demo.handle(r)
-        resp = await http.post(target, json=r, headers={"accept": "application/json"})
+        resp = await servertiming.timed(http.post(target, json=r, headers={"accept": "application/json"}))
         data = resp.json()
         if not isinstance(data, dict):
             raise ValueError("MCP server returned a non-object")
@@ -227,6 +227,18 @@ def create_app(
         response = await call_next(request)
         if request.method in ("POST", "PUT", "PATCH", "DELETE") and path.startswith("/admin"):
             cache.clear()  # an admin change shows on the next read, not 15 s later
+        return response
+
+    @app.middleware("http")
+    async def shield_headers(request: Request, call_next):
+        """Server-Timing (guard, upstream, total) and X-Shield-* on model and MCP responses."""
+        if request.method != "POST" or not servertiming.applies(request.url.path):
+            return await call_next(request)
+        rec = servertiming.start()
+        response = await call_next(request)
+        response.headers.update(
+            servertiming.headers(rec, store.policy.version, response.status_code, response.headers)
+        )
         return response
 
     def upstream() -> UpstreamClient:
