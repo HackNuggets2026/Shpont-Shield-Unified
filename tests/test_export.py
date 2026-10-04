@@ -185,7 +185,7 @@ def test_privacy_is_identical_in_every_format(gw):
     assert [e.get("raw_text") for e in native] == [None, None, "watched note"]
     for fmt in ("jsonl", "ocsf", "ecs"):
         body = gw.get(f"/admin/audit/export?format={fmt}").text
-        for secret in (IBAN, EMAIL, AWS, "smith", "1981"):
+        for secret in (IBAN, EMAIL, AWS, "smith", "0712 1981"):  # not a bare "1981": timestamps and hashes have it
             assert secret not in body, (fmt, secret)
     ocsf = [d for d in export(gw, "ocsf") if d["class_uid"] == 6003]
     assert ocsf[0]["message_context"]["prompt_text"] == native[0]["text"]
