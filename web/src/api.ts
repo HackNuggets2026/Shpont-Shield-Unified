@@ -581,3 +581,46 @@ export const me = {
   }) => post<{ ok: boolean; id: string }>(`${M}/requests`, body),
   releaseLease: (id: string) => post<{ ok: boolean; stopped: boolean }>(`${M}/leases/${encodeURIComponent(id)}/release`, {}),
 };
+
+// ---- guardrail controls (console Controls page) ---------------------------------------------------
+
+export type ControlMode = "allow" | "log" | "warn" | "redact" | "block";
+export type ControlProfile = "strict" | "balanced" | "permissive";
+
+export interface ControlRow {
+  name: string;
+  kind: "deterministic" | "context" | "semantic";
+  enabled: boolean;
+  mode: ControlMode;
+  shadow: boolean;
+  hits: number;
+  /** The main probability line (`min_score` for the PII model); null when the control has none. */
+  threshold: { action: string; value: number } | null;
+  description: string | null;
+  categories: [string, number][];
+}
+
+export interface LatencyStat {
+  p50: number;
+  p95: number;
+  max: number;
+  count: number;
+}
+
+export interface ControlsSummary {
+  policy: { name: string; version: string; reloads: number; last_error: string | null };
+  feed: { version: string | null; signatures: number; loaded_at: number | null; errors: string[] };
+  semantic: { backend: "ollama" | "heuristic" | "off"; fast_model: string; deep_model: string | null; fail_mode: "open" | "closed" };
+  controls: ControlRow[];
+  top_categories: [string, number][];
+  shadow_would_have: [string, number][];
+  latency_ms: Record<string, LatencyStat>;
+}
+
+export const controlsApi = {
+  summary: () => get<ControlsSummary>(`${A}/summary`),
+  edit: (name: string, body: Partial<{ enabled: boolean; mode: ControlMode; shadow: boolean; threshold: number }>) =>
+    request<Ok>("PATCH", `${A}/controls/${encodeURIComponent(name)}`, body),
+  profile: () => get<{ profiles: ControlProfile[]; active: ControlProfile | null }>(`${A}/controls/profile`),
+  setProfile: (profile: ControlProfile) => post<Ok>(`${A}/controls/profile`, { profile }),
+};
