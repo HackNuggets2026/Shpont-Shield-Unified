@@ -30,15 +30,20 @@ The same pipeline runs in both directions. Prompts and tool calls are checked on
 
 This repository is the team's merged build: Mikołaj's usage-governance fork with latekvo's Shpont-Shield merged in through git, plus pieces ported from the other team apps. See [What came from where](#what-came-from-where).
 
-## Quick start (no models needed)
+## Quick start (no GPU, no Ollama, no API keys)
+
+macOS or Linux with Python 3.12+ and Node 20+:
 
 ```bash
-python3.12 -m venv .venv && .venv/bin/pip install -e '.[dev]'
-make web                                # build the console (Node 20+); until then / is a short "console is not built" page
-.venv/bin/python -m seed --data-dir data/demo           # 30 days of a 5,000-person bank
-.venv/bin/python -m controllayer --data-dir data/demo   # gateway and console on http://127.0.0.1:8787
-open http://127.0.0.1:8787/             # the admin console (sign in with demo-admin-token)
+make setup        # .venv with dev + classifier extras, the CPU injection model (~739 MB), the console build
+make selftest     # the full suite (~850 tests, one worker per CPU, ~15 s); JUnit + per-control report in reports/
+make demo         # seeds 30 days of a 5,000-person bank into data/demo, then the gateway on :8787
+open http://127.0.0.1:8787/   # the console; sign in with demo-admin-token (xdg-open on Linux)
+make redteam      # second terminal: the attack sidecar on :8799, scores the posture on Console > Attacks
+.venv/bin/python demo/live.py --auto   # third terminal: the scripted demo (injection, leaks, carol to Restricted)
 ```
+
+Without `make`: `python3 -m venv .venv && .venv/bin/pip install -e '.[dev,classifier]' -e redteam`, `.venv/bin/python -m controllayer.semantic_model download` (skip it to run on the labelled keyword fallback), `cd web && npm install && npm run build`, `.venv/bin/python -m seed --data-dir data/demo`, `.venv/bin/python -m controllayer --data-dir data/demo`. Re-seed before each demo: carol's and mallory's escalations are one-shot.
 
 Other useful commands:
 

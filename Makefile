@@ -1,9 +1,18 @@
-# Shpont Shield: make test | make fresh | make demo | make web | make redteam
+# Shpont Shield: make setup | make selftest | make demo | make redteam | make test | make fresh | make web
 PY ?= .venv/bin/python
+PYTHON ?= $(shell command -v python3.13 || command -v python3.12 || command -v python3.11 || echo python3)
 PORT ?= 8787
 SEED ?= 42
 
-.PHONY: test selftest fresh seed demo web web-dev redteam redteam-ci redteam-test
+.PHONY: setup test selftest fresh seed demo web web-dev redteam redteam-ci redteam-test
+
+setup:            ## venv with the dev and classifier extras, the CPU injection model (~739 MB) and the console build
+	@if command -v uv >/dev/null; then uv venv -q --allow-existing --python 3.12 .venv \
+		&& uv pip install -q --python $(PY) -e '.[dev,classifier]' -e redteam; \
+	else $(PYTHON) -c 'import sys; sys.exit(sys.version_info < (3, 11) and "needs Python 3.11+ (or uv): set PYTHON=python3.12")' \
+		&& $(PYTHON) -m venv .venv && $(PY) -m pip install -q -U pip && $(PY) -m pip install -q -e '.[dev,classifier]' -e redteam; fi
+	$(PY) -m controllayer.semantic_model download
+	cd web && npm install && npm run build
 
 test:
 	$(PY) -m pytest -q && $(PY) -m ruff check . && $(PY) -m ruff format --check .
