@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en" data-color-mode="light" data-light-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI Control Layer</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@primer/css@21.5.1/dist/primer.css">
+<link rel="stylesheet" href="/ui/core.css">
+<script>
+  // Optional alternative look: ?theme=flat (no borders or outlines). Only allowlisted names load.
+  if (new URLSearchParams(location.search).get("theme") === "flat") {
+    document.write('<link rel="stylesheet" href="/ui/themes/flat.css">');
+  }
+</script>
+</head>
+<body class="color-bg-default color-fg-default">
+<div id="acl-root"></div>
+<script src="/ui/app.js"></script>
+<script src="/ui/views/overview.js"></script>
+<script src="/ui/views/people.js"></script>
+<script src="/ui/views/person.js"></script>
+<script src="/ui/views/admin.js"></script>
+<script src="/ui/core.js"></script>
+</body>
+</html>

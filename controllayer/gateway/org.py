@@ -163,7 +163,7 @@ class OrgView:
     def risk(self, policy: Policy) -> tuple[dict[str, float], dict[str, int], set[str]]:
         """Scores, open incidents per person (all time), and the people at risk: a risk score at or above the
         alert threshold (the same definition as the overview's `at_risk`)."""
-        scores = self.layer.risk.scores(policy)
+        scores = self.layer.detections.scores(policy)
         open_: dict[str, int] = defaultdict(int)
         for r in self.usage._q("SELECT principal, COUNT(*) n FROM incidents WHERE status='open' GROUP BY principal"):
             open_[r["principal"]] = r["n"]
@@ -309,7 +309,7 @@ class OrgView:
         risk = []
         for m in people:
             if m["risk"] > 0 or m["open_incidents"]:
-                risk.append({**_who(m), "risk": m["risk"], "level": self.layer.risk.level(m["risk"], policy),
+                risk.append({**_who(m), "risk": m["risk"], "level": self.layer.detections.level(m["risk"], policy),
                              "status": policy.principal(m["principal"]).status,
                              "open_incidents": m["open_incidents"]})  # fmt: skip
         risk.sort(key=lambda r: (-r["risk"], -r["open_incidents"], r["principal"]))

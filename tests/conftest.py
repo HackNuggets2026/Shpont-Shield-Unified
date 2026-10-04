@@ -1,12 +1,18 @@
 from __future__ import annotations
 
+import fcntl
+import json
+import os
+import pickle
 import shutil
+import time
 from pathlib import Path
 
 import pytest
 import yaml
 from fastapi.testclient import TestClient
 
+from controllayer import config, seed
 from controllayer.decision import ScriptedBackend
 from controllayer.gateway.app import create_app
 
@@ -28,18 +34,60 @@ def _no_data_dir(monkeypatch, tmp_path):
     monkeypatch.setenv("ACL_ADMIN_CACHE_SECONDS", "0")  # reads see writes at once; tests of the cache set it
 
 
+# libyaml reads and writes the same documents as safe_load/safe_dump, 20x faster.
+_LOADER = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
+_DUMPER = getattr(yaml, "CSafeDumper", yaml.SafeDumper)
+
+
+class _ParseOnce:
+    """Stands in for `yaml` inside controllayer.config: each distinct policy text goes through the real
+    safe_load once, and every later parse gets a fresh copy of that result. Hundreds of apps parse the
+    same few texts, and pure-Python YAML was otherwise most of the suite's time."""
+
+    def __init__(self):
+        self.parsed: dict[str, bytes] = {}
+
+    def safe_load(self, text: str):
+        if text not in self.parsed:
+            self.parsed[text] = pickle.dumps(yaml.safe_load(text))
+        return pickle.loads(self.parsed[text])
+
+    def __getattr__(self, name: str):
+        return getattr(yaml, name)
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _parse_each_policy_text_once():
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(config, "yaml", _ParseOnce())
+        yield
+
+
+def _shipped_policy(demo_mode: bool) -> str:
+    data = yaml.load((ROOT / "policy.yaml").read_text(), Loader=_LOADER)
+    data["identity"]["demo_mode"] = demo_mode
+    return yaml.dump(data, Dumper=_DUMPER, sort_keys=False)
+
+
+@pytest.fixture(scope="session")
+def shipped_policy() -> dict[bool, str]:
+    """The shipped policy's text with demo mode off and on."""
+    return {mode: _shipped_policy(mode) for mode in (False, True)}
+
+
 @pytest.fixture
-def policy_dir(tmp_path: Path) -> Path:
-    shutil.copy(ROOT / "policy.yaml", tmp_path / "policy.yaml")
+def policy_dir(tmp_path: Path, shipped_policy) -> Path:
+    """The shipped policy with demo mode off, so every credential is enforced (see demo_client)."""
+    (tmp_path / "policy.yaml").write_text(shipped_policy[False])
     shutil.copytree(ROOT / "feeds", tmp_path / "feeds")
     return tmp_path
 
 
 def edit_policy(policy_dir: Path, mutate) -> None:
     path = policy_dir / "policy.yaml"
-    data = yaml.safe_load(path.read_text())
+    data = yaml.load(path.read_text(), Loader=_LOADER)
     mutate(data)
-    path.write_text(yaml.safe_dump(data, sort_keys=False))
+    path.write_text(yaml.dump(data, Dumper=_DUMPER, sort_keys=False))
 
 
 @pytest.fixture
@@ -52,6 +100,15 @@ def make_client(policy_dir: Path):
         )
 
     return make
+
+
+@pytest.fixture
+def demo_client(tmp_path_factory, shipped_policy) -> TestClient:
+    """The shipped policy in demo mode (keyless callers act as alice); sends no credential of its own."""
+    d = tmp_path_factory.mktemp("demo")
+    (d / "policy.yaml").write_text(shipped_policy[True])
+    shutil.copytree(ROOT / "feeds", d / "feeds")
+    return TestClient(create_app(d / "policy.yaml", watch=False))
 
 
 @pytest.fixture
@@ -88,3 +145,46 @@ def mcp(client: TestClient, method: str, params: dict | None = None, who: str = 
         json={"jsonrpc": "2.0", "id": 7, "method": method, "params": params or {}},
         headers=KEYS.get(who, {}),
     ).json()
+
+
+@pytest.fixture(scope="session")
+def seeded_org(tmp_path_factory):
+    """`seeded_org(people, rng=1)` -> (dir, seed.build output): an org under the shipped policy, built
+    once per run per size and seed (2,000 people take seconds), shared by xdist workers through the
+    run's temp dir. Both are shared: read only, and give each app its own directory with org_copy."""
+    root = tmp_path_factory.getbasetemp()
+    if os.environ.get("PYTEST_XDIST_WORKER"):
+        root = root.parent  # the workers' basetemps sit side by side in the run's own directory
+    files = {"directory": "org.json", "history": "history.json", "state": "seed-state.json"}
+    loaded = {}
+
+    def get(people: int, rng: int = 1) -> tuple[Path, dict]:
+        d = root / f"seed{people}x{rng}"
+        if d not in loaded:
+            with open(root / f"{d.name}.lock", "w") as lock:
+                fcntl.flock(lock, fcntl.LOCK_EX)
+                if not (d / "built").exists():
+                    text = (ROOT / "policy.yaml").read_text()
+                    out = seed.build(config.parse_policy(text), people, 30, rng, time.time())
+                    (d / "data").mkdir(parents=True, exist_ok=True)
+                    (d / "policy.yaml").write_text(text)
+                    for key, name in files.items():
+                        (d / "data" / name).write_text(json.dumps(out[key]))
+                    (d / "built").touch()
+            loaded[d] = d, {key: json.loads((d / "data" / name).read_text()) for key, name in files.items()}
+        return loaded[d]
+
+    return get
+
+
+def org_copy(seeded: Path, dest: Path, state: dict | None = None) -> Path:
+    """`dest` holding the seeded org's policy and feeds, its large read-only seed files linked, and
+    data/state.json written from `state` when given; returns the policy path."""
+    (dest / "data").mkdir(parents=True)
+    shutil.copy(seeded / "policy.yaml", dest / "policy.yaml")
+    shutil.copytree(ROOT / "feeds", dest / "feeds")
+    for name in ("org.json", "history.json"):
+        (dest / "data" / name).symlink_to(seeded / "data" / name)
+    if state is not None:
+        (dest / "data" / "state.json").write_text(json.dumps(state))
+    return dest / "policy.yaml"

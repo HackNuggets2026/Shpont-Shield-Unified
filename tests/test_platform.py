@@ -54,7 +54,10 @@ def test_legacy_resources_and_pricing_load_into_the_catalog():
     assert p.catalog["ci_minutes"].class_ == "consumable" and p.catalog["ci_minutes"].unit == "minute"
     assert p.model_resource("gpt-4o-mini") == "gpt-4o-mini" and p.model_resource("llama3.2:3b") == "llama3-2"
     # The derived older views keep the lease tracker and pricing working unchanged.
-    assert p.resources["simulator"].usd_per_minute == 0.01 and p.budgets.pricing["llama3.2:*"].usd_per_compute_second
+    assert (
+        p.legacy_resources["simulator"].usd_per_minute == 0.01
+        and p.budgets.pricing["llama3.2:*"].usd_per_compute_second
+    )
     # An overlay written in the older shape still patches the catalog entry.
     p2 = parse_policy(LEGACY, "resources: { simulator: { max_concurrent_per_principal: 5 } }")
     assert p2.catalog["simulator"].lease.max_concurrent_per_principal == 5

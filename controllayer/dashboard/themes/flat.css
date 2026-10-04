@@ -1,0 +1,49 @@
+/* ?theme=flat: no contours. Surfaces are separated by tint and spacing, never by borders or
+   shadows; controls are filled, not outlined. Focus rings stay for keyboard users. */
+:root {
+  --flat-canvas: #f3f4f6;
+  --flat-surface: #ffffff;
+  --flat-fill: #eceef1;
+  --flat-fill-hover: #e2e5e9;
+  --flat-zebra: #f7f8fa;
+}
+body.color-bg-default { background: var(--flat-canvas) !important; }
+
+/* Cards and tiles: white surfaces on the grey canvas. */
+.Box, .acl-tile { border: 0 !important; border-radius: 10px !important; background: var(--flat-surface); box-shadow: none !important; }
+.Box-header { border: 0 !important; background: transparent !important; padding-bottom: 0 !important; }
+.Box-title { font-weight: 600; }
+a.acl-tile-link:hover { background: var(--flat-zebra); }
+.acl-main { background: var(--flat-canvas); }
+
+/* Navigation: active tab is a filled chip, no underline. */
+.UnderlineNav { box-shadow: none !important; border: 0 !important; background: var(--flat-canvas); }
+.UnderlineNav-item { border: 0 !important; border-radius: 6px; margin: 6px 2px; padding: 4px 10px !important; }
+.UnderlineNav-item::after { display: none !important; }
+.UnderlineNav-item[aria-current]:not([aria-current="false"]) { background: var(--flat-surface); font-weight: 600; }
+.acl-inspection { border: 0 !important; }
+
+/* Tables: no rules, zebra rows. */
+.acl-table th, .acl-table td { border: 0 !important; }
+.acl-table th { text-transform: uppercase; letter-spacing: .03em; font-size: 11px; }
+.acl-table tbody tr:nth-child(even) td { background: var(--flat-zebra); }
+.acl-table tbody tr:hover td { background: var(--flat-fill); }
+.acl-risk-row { border: 0 !important; border-radius: 6px; padding: 4px 6px; }
+.acl-risk-row:nth-child(even) { background: var(--flat-zebra); }
+.border-top, .border-bottom { border: 0 !important; }
+
+/* Controls: filled, borderless. */
+.btn, .BtnGroup-item, .form-control, .form-select { border: 0 !important; box-shadow: none !important; }
+.btn:not(.btn-primary):not(.btn-danger), .BtnGroup-item:not(.btn-primary), .form-control, .form-select { background-color: var(--flat-fill); }
+.btn:not(.btn-primary):not(.btn-danger):hover, .BtnGroup-item:not(.btn-primary):hover { background-color: var(--flat-fill-hover); }
+.BtnGroup { gap: 2px; display: inline-flex; }
+.BtnGroup-item { border-radius: 6px !important; }
+.Header .form-select, .Header .BtnGroup-item:not(.btn-primary) { background-color: rgba(255, 255, 255, .12); }
+.acl-pill { border: 0 !important; }
+.acl-pill.acl-off { background: var(--flat-fill); }
+
+/* Status surfaces: tinted, not outlined. */
+.Label, .flash, .acl-demo { border: 0 !important; }
+.Label { padding: 1px 8px; }
+.Label--secondary { background: var(--flat-fill); }
+.acl-tip { border: 0 !important; }

@@ -41,6 +41,8 @@ class Principal:
     team: str
     role: str
     authenticated: bool = True
+    kind: str = "human"  # human | agent
+    owner: str | None = None
 
 
 @dataclass
@@ -54,6 +56,21 @@ class Context:
     channel: str = "api"  # chat | mcp | sdk | dashboard
     # False for re-checks of conversation history: content is inspected, but not charged to budgets.
     metered: bool = True
+    # False for checks that are not the person's own act (playground runs, re-inspection sweeps).
+    scored: bool = True
+    # True for content the gateway fetched (model replies, MCP results and tool lists): inspected,
+    # never held against the caller, or a hostile source could frame anyone.
+    fetched: bool = False
+    # True for chat history the client re-sends every turn: served from the verdict cache and
+    # scored once. The newest message is never `resent`, so retries keep adding up.
+    resent: bool = False
+    resource: str | None = None  # catalog id when the call uses a brokered company resource
+    scope: str | None = None
+    pii_override: str | None = None  # reason given with x-pii-override
+    # Shared by all messages of one chat request so placeholders are numbered consistently.
+    mask_map: dict[str, str] | None = None
+    # PII values the caller supplied in this request: not re-redacted when the reply echoes them.
+    known_pii: frozenset[str] = frozenset()
     request_id: str = field(default_factory=lambda: uuid.uuid4().hex[:16])
     # Attribution: which menu workflow and which task (ticket, branch, run) this traffic belongs to.
     workflow: str | None = None
@@ -95,6 +112,8 @@ class Verdict:
     latency_ms: dict[str, float] = field(default_factory=dict)
     status_code: int = 200
     reason: str = ""
+    mask_map: dict[str, str] = field(default_factory=dict)  # placeholders this verdict added
+    masked: bool = False  # text contains placeholders (new or reused from the request's map)
     ts: float = field(default_factory=time.time)
 
     @property

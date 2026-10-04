@@ -181,7 +181,7 @@ def register(
         pp = policy.principal(p.id)
         day = time.strftime("%Y-%m-%d", time.gmtime())
         u = layer.ledger.usage.get(("principal", p.id, day), Usage())
-        score = layer.risk.score(p.id, policy)
+        score = layer.detections.score(p.id, policy)
         return {
             "principal": p.id,
             "team": p.team,
@@ -193,9 +193,11 @@ def register(
             "by": pp.by,
             "since": pp.since,
             "risk": score,
-            "level": layer.risk.level(score, policy),
+            "level": layer.detections.level(score, policy),
             "open_incidents": sum(
-                1 for i in layer.risk.incidents if i["principal"] == p.id and i["status"] in ("open", "acknowledged")
+                1
+                for i in layer.detections.incidents
+                if i["principal"] == p.id and i["status"] in ("open", "acknowledged")
             ),
             "today": {"requests": u.requests, "tokens": u.tokens, "usd": round(u.usd, 4)},
             "leases": len(layer.leases.held(p.id)),
@@ -241,9 +243,9 @@ def register(
             "leases_open": len(leases),
             "leases_running_usd": round(sum(x["running_usd"] for x in leases), 4),
             "zombies": sum(1 for x in leases if x["flags"]),
-            "incidents_open": sum(1 for i in layer.risk.incidents if i["status"] == "open"),
+            "incidents_open": sum(1 for i in layer.detections.incidents if i["status"] == "open"),
             "requests_pending": usage.count_requests(status="pending"),
-            "at_risk": sum(1 for s in layer.risk.scores(p).values() if s >= p.detections.response.alert),
+            "at_risk": sum(1 for s in layer.detections.scores(p).values() if s >= p.detections.response.alert),
             "org_name": p.org.name or p.name,
             "headcount": len(usage.people),
             "active": sum(1 for m in view.cached_snapshot(cache, 30)["people"] if m["usd"] > 0 or m["tokens"] > 0),
@@ -331,9 +333,9 @@ def register(
         lifted = body.get("clear") or (body.get("status") == "active" and body.get("budget_scale", 1) >= 1)
         if resp.status_code == 200 and lifted:
             # Lifting a restriction settles the incidents behind it; otherwise the next event re-applies it.
-            for i in layer.risk.incidents:
+            for i in layer.detections.incidents:
                 if i["principal"] == pid and i["status"] in ("open", "acknowledged"):
-                    layer.risk.set_status(i["id"], "resolved", f"restrictions lifted: {reason}")
+                    layer.detections.set_status(i["id"], "resolved", f"restrictions lifted: {reason}")
         return resp
 
     @app.get("/admin/principals/{pid}/events")
@@ -411,7 +413,7 @@ def register(
     def all_incidents(since: float = 0.0) -> list[dict[str, Any]]:
         """Newest first, the in-memory copy where there is one (it carries the same status, kept in step by
         set_status), with the person's department, team and name."""
-        live = {i["id"]: i for i in layer.risk.incidents}
+        live = {i["id"]: i for i in layer.detections.incidents}
         rows = []
         for i in usage.incidents(since=since, limit=1_000_000):
             i = live.get(i["id"], i)
@@ -497,7 +499,7 @@ def register(
             st_rank = {"open": 0, "acknowledged": 1}
             rows.sort(key=lambda i: (sev_rank.get(i["severity"], 3), st_rank.get(i["status"], 2), -i["ts"]))
         limit, offset = max(1, min(limit, 5000)), max(0, offset)
-        return {"incidents": rows[offset : offset + limit], "total": len(rows), "scores": layer.risk.scores(p),
+        return {"incidents": rows[offset : offset + limit], "total": len(rows), "scores": layer.detections.scores(p),
                 "levels": LEVELS}  # fmt: skip
 
     @app.get("/admin/incidents/summary")
@@ -578,7 +580,7 @@ def register(
         status = body.get("status")
         if status not in INCIDENT_STATES:
             return err(f"status must be one of {sorted(INCIDENT_STATES)}")
-        if not layer.risk.set_status(iid, status, str(body.get("note", ""))):
+        if not layer.detections.set_status(iid, status, str(body.get("note", ""))):
             return err("no such incident", 404)
         usage.log_admin(actor(request), f"incident_{status}", iid, str(body.get("note", "")))
         return {"ok": True}
@@ -767,7 +769,7 @@ def register(
         return {"by": by, "rows": rows, "overall": overall[0] if overall else None}
 
     def incident_by_id(iid: str) -> dict[str, Any] | None:
-        hit = next((i for i in layer.risk.incidents if i["id"] == iid), None)
+        hit = next((i for i in layer.detections.incidents if i["id"] == iid), None)
         return hit or next((i for i in usage.incidents(since=0, limit=10_000) if i["id"] == iid), None)
 
     @app.get("/admin/incidents/{iid}")
@@ -789,7 +791,7 @@ def register(
             timeline.append({**e, "evidence": hit})
         p = store.policy
         pid = inc["principal"]
-        score = layer.risk.score(pid, p)
+        score = layer.detections.score(pid, p)
         about = usage.admin_actions([pid, iid], limit=200)
         actions = sorted((a for a in about if a["ts"] >= inc["ts"] - 60), key=lambda a: a["ts"])
         ident = p.identity_of(pid)
@@ -801,7 +803,7 @@ def register(
                 **who_fields(pid),
                 "team": ident.team if ident else who_fields(pid)["team"],
                 "risk": score,
-                "level": layer.risk.level(score, p),
+                "level": layer.detections.level(score, p),
                 "status": p.principal(pid).status,
                 "budget_scale": p.budget_scale(pid),
             },  # fmt: skip
@@ -837,7 +839,7 @@ def register(
             "by_resource": usage.breakdown(["resource"], since, pid),
             "by_source": usage.breakdown(["source"], since, pid),
             "adherence": (usage.adherence(None, since, pid) or [None])[0],
-            "incidents": [i for i in reversed(layer.risk.incidents) if i["principal"] == pid][:50],
+            "incidents": [i for i in reversed(layer.detections.incidents) if i["principal"] == pid][:50],
             "grants": [{**g.model_dump(), "live": g.live(now)} for g in p.principal(pid).grants],
             "leases": layer.leases.snapshot(p, pid),
             "requests": usage.requests(principal=pid),
@@ -909,7 +911,7 @@ def register(
         snap = layer.ledger.snapshot(p)
         mine = [r for r in snap["scopes"] if (r["scope"], r["key"]) in (("principal", who.id), ("team", who.team))]
         today, week = _day_start(now), now - 7 * DAY
-        score = layer.risk.score(who.id, p)
+        score = layer.detections.score(who.id, p)
         leases = layer.leases.snapshot(p, who.id)
         by_workflow = usage.breakdown(["workflow"], week, who.id)
         runs = usage.breakdown(["workflow", "task"], week, who.id)
@@ -960,7 +962,7 @@ def register(
             r = p.detections.response
             out["risk"] = {
                 "score": score,
-                "level": layer.risk.level(score, p),
+                "level": layer.detections.level(score, p),
                 "thresholds": {
                     "alert": r.alert,
                     "tighten": r.tighten,
@@ -968,7 +970,7 @@ def register(
                     "half_life_minutes": p.detections.half_life_minutes,
                 },  # fmt: skip
                 "incidents": [
-                    masked_for_employee(i) for i in reversed(layer.risk.incidents) if i["principal"] == who.id
+                    masked_for_employee(i) for i in reversed(layer.detections.incidents) if i["principal"] == who.id
                 ][:20],
             }
         return out
@@ -977,7 +979,9 @@ def register(
         out = []
         for x in leases:
             if x["idle_minutes"] >= 5:
-                rate = p.resources[x["resource"]].usd_per_minute * 60 if x["resource"] in p.resources else 0
+                rate = (
+                    p.legacy_resources[x["resource"]].usd_per_minute * 60 if x["resource"] in p.legacy_resources else 0
+                )
                 out.append(
                     f"{x['resource']} {x['handle'] or x['id']} has been idle {x['idle_minutes']:.0f} min"
                     f" (${rate:.2f}/h). Stop it if you are done."
@@ -1113,9 +1117,9 @@ def register(
         if p.principal(who.id).status == "revoked":
             return err("access revoked", 401)
         resource = body.get("resource")
-        r = p.resources.get(resource) if isinstance(resource, str) else None
+        r = p.legacy_resources.get(resource) if isinstance(resource, str) else None
         if r is None:
-            return err(f"unknown resource {resource!r}; configured: {sorted(p.resources)}")
+            return err(f"unknown resource {resource!r}; configured: {sorted(p.legacy_resources)}")
         unit = body.get("unit", "minute")
         try:
             quantity = float(body.get("quantity"))

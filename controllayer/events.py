@@ -39,7 +39,7 @@ def verdict_event(ctx: Context, v: Verdict, policy: Policy) -> dict[str, Any]:
     resource = policy.model_resource(ctx.model) if ctx.model else None
     if ctx.tool:
         resource = next(iter(policy.grant_resources(ctx.tool)), None) or next(
-            (n for n, r in policy.resources.items() if any(t == ctx.tool for t in r.start_tools)), resource
+            (n for n, r in policy.legacy_resources.items() if any(t == ctx.tool for t in r.start_tools)), resource
         )
     return {
         "ts": v.ts,

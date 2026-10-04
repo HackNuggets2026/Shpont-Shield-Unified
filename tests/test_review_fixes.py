@@ -179,7 +179,7 @@ def test_a_redelivered_cloudevent_is_not_charged_twice(client):
 
 
 def _incident_on_carol(c) -> None:
-    c.app.state.layer.risk.signal("zombie_resource", "carol", "vm idle", ["lease-1"])
+    c.app.state.layer.detections.signal("zombie_resource", "carol", "vm idle", ["lease-1"])
 
 
 def test_incident_events_stay_private_when_the_policy_hides_risk(make_client):

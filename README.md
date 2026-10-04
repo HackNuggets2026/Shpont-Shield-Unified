@@ -32,42 +32,118 @@ The same pipeline runs in both directions. Prompts and tool calls are checked on
 
 ```bash
 python3.12 -m venv .venv && .venv/bin/pip install -e '.[dev]'
-make web                                # build the console (Node 20+); without it you get the old HTML dashboard
+make web                                # build the console (Node 20+); without it / says how to build it
 .venv/bin/python -m seed --data-dir data/demo           # 30 days of a 5,000-person bank
 .venv/bin/python -m controllayer --data-dir data/demo   # gateway and console on http://127.0.0.1:8787
-open http://127.0.0.1:8787/             # sign in with demo-admin-token
+open http://127.0.0.1:8787/             # the console (demo mode: no sign-in; else demo-admin-token)
 ```
 
 Other useful commands:
 
 ```bash
-.venv/bin/python -m pytest              # full self-test suite
+.venv/bin/python -m pytest              # full self-test suite, one worker per CPU
+.venv/bin/python -m pytest -n 0 -x -k people   # in-process, stop at first failure, one area
 .venv/bin/python -m controllayer --data-dir data/fresh   # same policy, empty state (or ACL_DATA_DIR)
 .venv/bin/python demo/live.py           # the live demo, beat by beat, against a running gateway
+.venv/bin/python demo/agent.py          # scripted agent: benign steps + attacks
+open 'http://127.0.0.1:8787/legacy/'    # the earlier HTML security console (/legacy/me: employee panel)
 ```
 
 `web/dist` is not committed: after pulling changes to `web/`, run `make web` again.
+
+The shipped policy runs in **demo mode** (`identity.demo_mode: true`), so nothing asks for a credential: the console, `/admin/*` and `/metrics` skip the admin token, a caller without a known API key acts as `identity.demo_principal` (alice), `/legacy/me` offers a "viewing as" switch, and risk signals name their integration in the body. A supplied API key still identifies its owner, which is how the demo agent acts as different people. **Demo mode must be off in production** (`ACL_DEMO_MODE=false`, or `demo_mode: false` in the policy); while it is on, the gateway logs a warning at startup and `/admin/summary` reports `"demo_mode": true`.
 
 By default the policy uses the `mock` upstream and the `heuristic` semantic backend. The heuristic backend is a keyword stand-in for the decision model, so everything runs on a laptop with no GPU.
 
 ## With real models
 
 ```bash
-docker compose up -d            # Ollama + pulls tev1:0.8b, nimble, llama3.2:1b + gateway
+docker compose up -d            # Ollama (tev1:0.8b, nimble, llama3.2:1b) + Privacy Filter + gateway
 ACL_LIVE=1 pytest -m live       # contract test against the real /v1/systemone
 ```
 
 Without Docker, set `ACL_SEMANTIC=ollama ACL_UPSTREAM=ollama` before starting the gateway. You can also edit `semantic.backend` / `upstream.backend` in `policy.yaml` while it runs. nimble needs about 10 GB of memory. On smaller machines, set `deep_model: null` to use the fast tier alone, or `deep_model: tev1` after `ollama pull tev1`.
 
+## Panels (earlier HTML dashboard, under `/legacy/`)
+
+The React console owns `/`. The earlier Primer HTML dashboard is kept, read-only, under `/legacy/` as a reference while its views are ported.
+
+| URL | Who | What |
+|---|---|---|
+| `/legacy/me` | Employees (their own key; in demo mode a "viewing as" switch instead) | Usage, a monitoring notice, recent activity of themselves and their agents, and **company resources**: grant or revoke each of their agents' access to company services and MCP servers, with scopes and expiry (a scope click keeps the expiry; an expired grant is renewed explicitly) |
+| `/legacy/security` (also `/legacy/`) | Security staff (`?token=`, none in demo mode) | **Overview**: spend today / 7 / 30 days against budget, spend over time, cost per model and company service, spend per person, budget use, the people who most need attention. **People**: search, filter and sort everyone (server-side paging). **Person** (`?person=<id>`): their spend by service, budget, agents and grants (one-click on/off), risk level (AUTO or an override) and recent decisions. **Risk**, **Resources** (suspend, grants), **Controls**, **Audit** (filters, exports), **Try a prompt** |
+
+The console is `controllayer/dashboard/app.js` (router, helpers, SVG charts) plus one file per view in `views/`; `/legacy/me` is `core.js`. Both are plain HTML on [Primer CSS](https://primer.style/css) (loaded from jsDelivr). Every number and chart links to the filtered list behind it. Modules, URL parameters and the `/admin/analytics/*` API are in [docs/console-contract.md](docs/console-contract.md).
+
+`python -m controllayer.seed --people 2000 --days 30` generates a synthetic company for the console: people and agents in teams with daily budgets (`data/org.json`, which `identity.directory` merges into the policy), 30 days of usage across models and company services, risk scores, alerts, grants and overrides. Restart the gateway after seeding.
+
+## Company resources for agents
+
+Security defines a catalog in `policy.yaml` (`resources:`) with who is entitled to each resource, which scopes may be granted and the longest grant allowed. Employees delegate entitled resources to their agents in `/legacy/me` (API: `/me/api/*`). Agents use them through the gateway's built-in `company` MCP server, which offers each service's own tools:
+
+| Area | Services (tools) |
+|---|---|
+| Engineering | GitHub (`github_list_issues`, `github_get_file`, `github_create_issue`, `github_merge_pull_request`), Linear, Heroku (`heroku_get_logs`, `heroku_restart_dyno`, `heroku_scale_formation`, ...), Vercel |
+| Data | PostgreSQL prod read replica (`postgres_query`: one SELECT, writes and DDL rejected), Snowflake, Supabase (`supabase_select`, `supabase_insert`), Upstash Redis, AWS S3 (`s3_get_object`, ...) |
+| Revenue | Stripe (`stripe_list_charges`, `stripe_refund`, ...), Salesforce, HubSpot, Zendesk (`zendesk_get_ticket`, `zendesk_reply`, ...) |
+| Collaboration, ops | Slack (`slack_post_message`, ...), Notion, Google Drive, Datadog, PagerDuty, Zapier (`zapier_trigger_zap`), SendGrid |
+
+That is 20 services and 55 tools (`controllayer/services.py`). Each tool needs one scope: `read`, `write`, `admin` or `exec`. `tools/list` returns only the tools the caller can use right now (an agent: its live grants and their scopes; an employee: their entitlements), plus `list_resources`. Every `tools/call` is checked against the live grant for that tool's scope, including expiry, the owner's entitlement and suspension. The gateway then performs the call and **injects the credential itself** from the variable named in the catalog (`connection.secret_env`), so agents never hold secrets. Results still pass through every content check: a card number pasted into a Zendesk ticket is redacted (blocked for finance), a planted instruction in a ticket or a Notion page is blocked, and a key leaked into a file is blocked.
+
+Two more scopes unlock no tool of their own:
+- **`pii`.** The SQL services classify sensitive columns in `services.yaml` (national IDs, emails, phones, IBANs, salaries). A caller without `pii` queries a copy in which those columns are already masked, the way a Snowflake masking policy works, so no SQL function can rebuild them: `hex(national_id)` returns the hex of `****`. The content checks still run on every answer.
+- **`external_share`.** Egress tools (`gdrive_share_file`, `sendgrid_send_email`, `zendesk_reply`, `slack_post_message`, `zapier_trigger_zap`) are checked before they run. What they would send (the shared file, the message, the payload) goes through the tool-call and tool-result checks, and the call is refused if any of it would be redacted, withheld or blocked. Sending to an address outside `company_domains` needs `external_share`.
+
+A catalog entry can also limit single scopes to some of the people entitled to the resource (`scope_entitlements`). In the shipped policy, interns can read Google Drive and Notion but not share or write, and `pii` is limited to platform (Postgres) and finance (Snowflake).
+
+The backends are deterministic mocks with realistic records (`controllayer/services.yaml`): writes answer like the real API but change nothing, and an unset credential variable falls back to a fixed demo value.
+
+## Insider risk
+
+Every finding adds points to the person's score, which decays with a 24 h half-life. An agent's points also count half against its owner. At `watch` the person gets a stricter policy (`insider_risk.watch_controls`) and full-text capture. At `restricted` everything is blocked. Other tools (a SIEM, an EDR) can raise a person's level with **external signals**, each capped, expiring and authenticated by that integration's own token. Security can override a person's level in either direction, or leave it on auto; an agent is never less restricted than its owner. Level changes, blocks while watched and selected categories (exfiltration, malware, leaked keys) raise **silent alerts** to the console, a JSONL file or a SIEM webhook (each sink sends native JSON, OCSF or ECS: `format:`). The employee's response is unchanged. Monitoring itself is disclosed (GDPR, Polish Labour Code art. 22³).
+
+A person's level, strongest rule first:
+
+1. **Override.** A level security set (`POST /admin/risk/{pid}` `{"level": "normal"|"watch"|"restricted"}`) is the level, in either direction. Scores and signals do not change it, but a rise of the auto level underneath still raises a silent alert. `auto` removes the override, and `POST /admin/risk/{pid}/reset` clears the score.
+2. **Auto.** Otherwise the higher of the score-based level and the strongest active external signal.
+3. **Owner.** An agent's level is the higher of its own and its owner's.
+
+An integration listed in `identity.integrations` (`{name: {token_env, max_level, max_ttl_hours, max_sources}}`) sends `POST /admin/risk/{pid}/signal` with `Authorization: Bearer <its token>` and `{"level"` or `"score", "ttl_seconds", "source", "reason"}`. A score maps through `insider_risk.levels`. The level is capped at `max_level`. Each source (`<integration>` or `<integration>/<source>`) holds one signal, which its next signal replaces; `normal` withdraws it. An integration can only write its own sources, and at most `max_sources` (default 8) live ones per person: past that, a new source displaces the weakest, soonest-expiring one (named in the reply as `evicted`), or is refused with 429 if every live one is stronger. Stored signals count only under the current policy: removing an integration (say its token leaked) voids its signals at once, and lowering its `max_level` or `max_ttl_hours` caps them. Signals persist in `data/state.json`, are audited, show in `/admin/risk` and the security panel (where one click dismisses them), and raise a silent alert when they lift a level. The admin token is not accepted on this endpoint, and an integration token works nowhere else. In demo mode a call without an integration token names its integration in the body (`"integration": "wazuh"`), whose caps still apply.
+
+## Contextual PII (OpenAI Privacy Filter)
+
+`services/privacy_filter` serves `openai/privacy-filter` over HTTP (`docker compose` starts it). It finds names, addresses and similar spans that regexes cannot. In chat and `/v1/messages`, those spans become placeholders (`<PRIVATE_PERSON_1>`) before the model sees them and are restored in the reply, including tool-call arguments. A restored value that comes back as history is masked again wherever it appears. Two override paths exist:
+- **User:** roles in `override_roles` send `x-pii-override: <reason>`.
+- **Model:** the decision model judges whether the PII is needed for the task.
+
+Both are audited, and neither can lift a `block`. The default `stub` backend is a tiny offline stand-in for demos.
+
 ## Integrating
 
 | Traffic | How |
 |---|---|
-| App/agent → model | Point any OpenAI client at `http://gateway:8787/v1`, using a control-layer API key as the bearer token |
+| App/agent → model | Point any OpenAI client at `http://gateway:8787/v1`, using a control-layer API key as the bearer token (optional in demo mode) |
+| Claude Code, Anthropic SDKs → model | `ANTHROPIC_BASE_URL=http://gateway:8787` with a control-layer key, or a claude.ai seat plus `x-acl-key`: [`integrations/claude-code`](integrations/claude-code) |
+| OpenCode, Continue, Cline / Roo, Aider | [`integrations/coding-agents.md`](integrations/coding-agents.md) |
 | Agent → MCP tools | Point the MCP client at `http://gateway:8787/mcp/<server>` (servers are configured in `upstream.mcp_servers`) |
+| Agent → company resources | Point the agent's MCP client at `http://gateway:8787/mcp/company` with the agent's own key |
 | Anything else | `controllayer.sdk.Guard`: `guard.enforce(text, direction)` or the `@guard.tool` decorator |
 | Ask before acting | `POST /v1/authorize` `{action, resource, context}` returns Allow/Deny for a catalogued resource, without doing anything |
 | Usage from elsewhere | `POST /v1/events` (CloudEvents 1.0, one or a batch), `POST /v1/usage` (a quantity of a resource), `POST /v1/import/focus` (a cloud bill as FOCUS CSV) |
+| Wazuh | [`integrations/wazuh`](integrations/wazuh): rules for the alert file sink, and an active response that posts risk signals back |
+
+## Anthropic Messages API (Claude Code)
+
+`POST /v1/messages` and `/v1/messages/count_tokens` speak Anthropic's format, streaming included, and apply the same controls as chat:
+
+- **Request.** Every system block, message block (text, thinking, `tool_use`, `tool_result`, images, documents, unknown types) and tool definition is inspected on every call; a `tool_result` is checked as tool output, so a planted instruction or a leaked key in a file blocks the request. Apart from image and document data the gateway cannot read (below), the only fields left uninspected are the opaque ones the upstream verifies: the `signature` of a thinking block and the `data` of a redacted thinking block, each only in a reply the gateway returned, re-sent as history. The new turn (everything after the last assistant message) is metered once for budgets and the loop guard. A token count is inspected the same way, since it sends the whole conversation upstream, but is not charged.
+- **Images and documents.** Text documents are read and inspected: plain-text and content-block sources, and base64 data with a text media type (`text/*`, JSON, XML, YAML, JavaScript), which is decoded for the checks and re-encoded if masked. URLs, titles and context are inspected too. The gateway cannot read PDF and other binary data, uploaded files (`file_id`) or content the upstream fetches from a URL: `upstream.anthropic.opaque_documents` decides on such documents (`block`, the default: a 400 naming the setting; `log`: forwarded and audited once, in the turn that adds it; `allow`) and `upstream.anthropic.opaque_images` on such images (default `allow`); an image whose inline data is not a string with an `image/*` media type counts as a document. Base64 that does not decode strictly and whole counts as unreadable.
+- **Blocks** are `400 invalid_request_error` with the policy reason and `x-should-retry: false` (Claude Code shows any 403 as a failed login); a per-minute rate limit is a retryable 429.
+- **Reply.** Each content block is checked before release: a `tool_use` is withheld if it carries a secret (the turn then ends with `end_turn`), text is redacted, and a signed thinking block is released unchanged or replaced by a notice. Placeholders are restored in text and `tool_use` input.
+- **Streaming.** The upstream stream is relayed block by block: a block's deltas are held until its `content_block_stop`, checked, then re-emitted (unchanged blocks byte for byte). `ping` events keep the connection alive meanwhile.
+- **Auth.** A control-layer key in `x-api-key` or `Authorization` names the caller, and the gateway calls upstream with the org key from `upstream.anthropic.api_key_env`. A caller that names itself with `x-acl-key: <control-layer key>` (Claude Code: `ANTHROPIC_CUSTOM_HEADERS`) has its own `Authorization` / `x-api-key` and `anthropic-beta` forwarded, so a claude.ai seat keeps working (`passthrough_auth`). That login is never logged or stored, and a control-layer key is never forwarded.
+- **Upstream.** `upstream.anthropic.backend: anthropic` (any Messages-API URL in `url`) or `mock` (canned replies; `call-tool` in a prompt yields a `tool_use`). `anthropic-*` headers, query strings and unknown body fields pass through; upstream errors return unchanged with `retry-after`, `x-should-retry` and `anthropic-ratelimit-*`. `HEAD /api/hello` answers Claude Code's probe.
+- **Budgets** count prompt-cache writes and reads as tokens, priced at 1.25x and 0.1x the input price unless `usd_per_1m_cache_write` / `usd_per_1m_cache_read` say otherwise.
 
 ## Policy
 
@@ -90,10 +166,11 @@ All controls, thresholds, allowed models, budgets and team overrides live in [`p
 | `/admin/catalog`, `/admin/grants` | The resource catalog by class, with usage, live leases and live grants |
 | `/admin/export/focus?days=30` | AI spend as a FinOps FOCUS 1.1 CSV, ready for finance tools |
 | `/admin/export/backstage` | The catalog as Backstage `kind: Resource` entities |
+| `/admin/audit/export?format=ocsf\|ecs` | The same decisions plus admin actions and insider-risk alerts as one NDJSON stream for a SIEM: [OCSF 1.9.0](https://schema.ocsf.io/1.9.0/) or ECS 9.5 (Elastic, Wazuh). Same masking; full text only where the native event has it |
 | `/admin/summary`, `/admin/events` | JSON for other tools |
 | `/metrics` | Prometheus: decisions, findings, latency per stage, spend |
 
-Admin endpoints need `x-admin-token` (or `?token=`), set with `identity.admin_token` / `ACL_ADMIN_TOKEN`.
+Outside demo mode, admin endpoints need `x-admin-token` (or `?token=`), set with `identity.admin_token` / `ACL_ADMIN_TOKEN`.
 
 ## Usage governance
 

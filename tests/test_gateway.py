@@ -1,6 +1,9 @@
 """End-to-end through the HTTP entry points: chat proxy, MCP proxy, reporting."""
 
 import json
+import re
+
+import pytest
 
 from .conftest import chat, mcp, reply
 
@@ -109,9 +112,23 @@ def test_audit_file_written(client, policy_dir):
     assert json.loads(lines[-1])["principal"] == "alice"
 
 
-def test_dashboard_served(client):
-    r = client.get("/")
-    assert r.status_code == 200 and "<html" in r.text.lower()
+@pytest.mark.parametrize("path", ["/legacy/", "/legacy/security", "/legacy/me"])
+def test_panels_served(client, path):
+    r = client.get(path)
+    assert r.status_code == 200 and "/ui/core.js" in r.text
+
+
+@pytest.mark.parametrize("path", ["/legacy/security", "/legacy/me"])
+def test_panel_is_primer_light(client, path):
+    html = client.get(path).text
+    assert html.index("primer.css") < html.index("/ui/core.css")
+    html_tag = re.search(r"<html[^>]*>", html).group(0)
+    assert 'data-color-mode="light"' in html_tag and 'data-light-theme="light"' in html_tag
+    assert "data-dark-theme" not in html_tag
+
+
+def test_panel_assets_served(client):
+    assert client.get("/legacy/ui/core.js").status_code == 200 and client.get("/legacy/ui/core.css").status_code == 200
 
 
 def test_admin_endpoints_require_token(client):

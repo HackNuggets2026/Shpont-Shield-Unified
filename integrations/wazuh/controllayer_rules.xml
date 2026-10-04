@@ -1,0 +1,70 @@
+<!--
+  AI Control Layer insider-risk alerts, read from the gateway's file sink
+  (insider_risk.sinks: {type: file, format: native | ocsf}) with <log_format>json</log_format>.
+  Wazuh's built-in JSON decoder decodes each line; nested keys are addressed with dots.
+  Rule IDs 100700-100719. Install as /var/ossec/etc/rules/controllayer_rules.xml.
+-->
+<group name="controllayer,insider_risk,">
+
+  <!-- format: native -->
+  <rule id="100700" level="3">
+    <decoded_as>json</decoded_as>
+    <field name="principal">\.+</field>
+    <field name="reason">\.+</field>
+    <field name="level">^normal$|^watch$|^restricted$</field>
+    <description>AI Control Layer: $(principal): $(reason)</description>
+    <options>no_full_log</options>
+  </rule>
+
+  <rule id="100701" level="10">
+    <if_sid>100700</if_sid>
+    <field name="reason">alert category</field>
+    <description>AI Control Layer: sensitive activity by $(principal): $(reason)</description>
+    <options>no_full_log</options>
+  </rule>
+
+  <rule id="100702" level="8">
+    <if_sid>100700</if_sid>
+    <field name="level">^watch$</field>
+    <description>AI Control Layer: $(principal) under watch: $(reason)</description>
+    <options>no_full_log</options>
+  </rule>
+
+  <rule id="100703" level="12">
+    <if_sid>100700</if_sid>
+    <field name="level">^restricted$</field>
+    <description>AI Control Layer: $(principal) restricted: $(reason)</description>
+    <options>no_full_log</options>
+  </rule>
+
+  <!-- format: ocsf (Detection Finding, class_uid 2004) -->
+  <rule id="100710" level="3">
+    <decoded_as>json</decoded_as>
+    <field name="class_uid">^2004$</field>
+    <field name="metadata.product.name">^AI Control Layer$</field>
+    <description>AI Control Layer: $(finding_info.title): $(message)</description>
+    <options>no_full_log</options>
+  </rule>
+
+  <rule id="100711" level="10">
+    <if_sid>100710</if_sid>
+    <field name="message">alert category</field>
+    <description>AI Control Layer: sensitive activity by $(unmapped.principal): $(message)</description>
+    <options>no_full_log</options>
+  </rule>
+
+  <rule id="100712" level="8">
+    <if_sid>100710</if_sid>
+    <field name="risk_level">^Medium$</field>
+    <description>AI Control Layer: $(unmapped.principal) under watch: $(message)</description>
+    <options>no_full_log</options>
+  </rule>
+
+  <rule id="100713" level="12">
+    <if_sid>100710</if_sid>
+    <field name="risk_level">^High$</field>
+    <description>AI Control Layer: $(unmapped.principal) restricted: $(message)</description>
+    <options>no_full_log</options>
+  </rule>
+
+</group>

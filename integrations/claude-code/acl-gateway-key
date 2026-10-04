@@ -1,0 +1,4 @@
+#!/bin/sh
+# apiKeyHelper: print this employee's control-layer key and nothing else.
+# Replace the line below with your secrets store (vault, 1Password CLI, macOS keychain, ...).
+exec cat "${ACL_KEY_FILE:-$HOME/.config/acl/key}"

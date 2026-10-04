@@ -5,12 +5,18 @@ from __future__ import annotations
 import hashlib
 import json
 import statistics
+import time
 from collections import Counter, deque
+from collections.abc import Callable
+from contextvars import ContextVar
 from pathlib import Path
 from typing import Any
 
 from .controls.patterns import redact
 from .types import Action, Context, Verdict
+
+# Address of the HTTP peer that caused the event, set per request by the gateway.
+client_ip: ContextVar[str | None] = ContextVar("client_ip", default=None)
 
 
 class AuditLog:
@@ -26,40 +32,52 @@ class AuditLog:
         self.shadow_hits: Counter[str] = Counter()
         self.by_principal: Counter[str] = Counter()
         self.latency: dict[str, deque[float]] = {}
+        self.notes: deque[dict[str, Any]] = deque(maxlen=ring_size)
         self.total = 0
+        self.listeners: list[Callable[[Context, Verdict, dict[str, Any]], None]] = []  # after each decision
         self._reload_tail()
 
     def _reload_tail(self) -> None:
         """Refill the event ring from the audit file, so dashboards keep recent history across restarts.
-        Counters start again from zero; the file is the complete record."""
+        Counters start again from zero; the file is the complete record. Administrative notes share
+        the file and go back to their own ring."""
         if not (self.path and self.path.exists()):
             return
         with self.path.open() as fh:
             for line in deque(fh, maxlen=self.events.maxlen):
                 try:
-                    self.events.append(json.loads(line))
+                    event = json.loads(line)
                 except ValueError:
                     continue  # a line cut short by a crash
+                if "kind" in event and "request_id" not in event:
+                    self.notes.append(event)
+                else:
+                    self.events.append(event)
 
-    def record(self, ctx: Context, v: Verdict, extra: dict[str, Any] | None = None) -> dict[str, Any]:
+    def record(
+        self, ctx: Context, v: Verdict, extra: dict[str, Any] | None = None, raw: bool = False, inspected: bool = True
+    ) -> dict[str, Any]:
+        """`inspected=False` (gates and budgets only): no detector ran, so nothing could be masked and
+        no text is stored."""
         event = {
             "ts": v.ts,
             "request_id": v.request_id,
             "channel": ctx.channel,
             "direction": ctx.direction.value,
             "principal": ctx.principal.id,
+            "owner": ctx.principal.owner,
             "team": ctx.principal.team,
             "role": ctx.principal.role,
             "model": ctx.model,
             "tool": ctx.tool,
+            "src_ip": client_ip.get(),
             "action": v.action.value,
             "status_code": v.status_code,
             "reason": v.reason,
             "policy_version": v.policy_version,
             "latency_ms": {k: round(x, 2) for k, x in v.latency_ms.items()},
             "text_sha256": hashlib.sha256(ctx.text.encode()).hexdigest(),
-            # Every detected span is masked, even when the action was only log/warn/shadow.
-            "text": None if v.action is Action.BLOCK else redact(v.text, [s for f in v.findings for s in f.spans]),
+            "text": _stored_text(ctx, v) if inspected else None,
             "findings": [
                 {
                     "control": f.control,
@@ -75,7 +93,7 @@ class AuditLog:
             ],
             **(extra or {}),
         }
-        if self.store_raw_text:
+        if self.store_raw_text or raw:
             event["raw_text"] = ctx.text
         self.total += 1
         self.events.append(event)
@@ -88,6 +106,17 @@ class AuditLog:
                 self.shadow_hits[f"{f.control}/{f.category}:{f.proposed.value}"] += 1
         for stage, ms in v.latency_ms.items():
             self.latency.setdefault(stage, deque(maxlen=1000)).append(ms)
+        if self.path:
+            with self.path.open("a") as fh:
+                fh.write(json.dumps(event) + "\n")
+        for listener in self.listeners:
+            listener(ctx, v, event)
+        return event
+
+    def note(self, kind: str, actor: str, **details: Any) -> dict[str, Any]:
+        """Administrative events (grants, revocations, watch changes) on the same trail as decisions."""
+        event = {"ts": time.time(), "kind": kind, "actor": actor, "src_ip": client_ip.get(), **details}
+        self.notes.append(event)
         if self.path:
             with self.path.open("a") as fh:
                 fh.write(json.dumps(event) + "\n")
@@ -104,3 +133,13 @@ class AuditLog:
                 "max": round(s[-1], 2),
             }
         return out
+
+
+def _stored_text(ctx: Context, v: Verdict) -> str | None:
+    """Every detected span masked, even when the action was only log/warn/shadow. Spans index into
+    the original text, not the verdict's already redacted one."""
+    if v.action is Action.BLOCK:
+        return None
+    if any(f.action is Action.REDACT and not f.spans for f in v.findings):
+        return v.text  # withheld as a whole: nothing to mask precisely
+    return redact(ctx.text, [s for f in v.findings for s in f.spans])

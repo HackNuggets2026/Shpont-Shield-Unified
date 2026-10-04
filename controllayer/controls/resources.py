@@ -22,7 +22,7 @@ from dataclasses import asdict, dataclass
 from fnmatch import fnmatch
 from typing import Any
 
-from ..config import Policy, Resource
+from ..config import LegacyResource, Policy
 from ..types import Action, Context, Direction, Finding, Principal
 from ..usage import UsageStore
 from .budget import BudgetLedger
@@ -187,7 +187,7 @@ class LeaseTracker:
             return []
         out: list[Finding] = []
         declared = ctx.workflow if ctx.workflow_source == "declared" else None
-        for name, r in policy.resources.items():
+        for name, r in policy.legacy_resources.items():
             if not _any(ctx.tool, r.start_tools):
                 continue
             held = len(self.held(ctx.principal.id, name))
@@ -201,7 +201,7 @@ class LeaseTracker:
 
     def after_call(self, ctx: Context, policy: Policy, server: str, args: dict, result_text: str) -> None:
         tool, now = ctx.tool or "", time.time()
-        for name, r in policy.resources.items():
+        for name, r in policy.legacy_resources.items():
             if _any(tool, r.start_tools):
                 self._open(ctx, name, r, server, result_text, now)
             elif _any(tool, r.stop_all_tools):
@@ -217,7 +217,7 @@ class LeaseTracker:
                     lease["last_activity"] = now
                     self.store.save_lease(lease)
 
-    def _open(self, ctx: Context, name: str, r: Resource, server: str, result_text: str, now: float) -> None:
+    def _open(self, ctx: Context, name: str, r: LegacyResource, server: str, result_text: str, now: float) -> None:
         handle = None
         if r.handle:
             m = re.search(r.handle.pattern, result_text)
@@ -252,7 +252,7 @@ class LeaseTracker:
                 workflow=ctx.workflow,
             )
 
-    def _target(self, principal: str, name: str, r: Resource, args: dict) -> dict | None:
+    def _target(self, principal: str, name: str, r: LegacyResource, args: dict) -> dict | None:
         held = self.held(principal, name)
         if r.handle and isinstance(args.get(r.handle.arg), str):
             return next((x for x in held if x["handle"] == args[r.handle.arg]), None)
@@ -265,7 +265,7 @@ class LeaseTracker:
             return None
         now = now or time.time()
         minutes = max(0.0, (now - lease["started"]) / 60)
-        r = policy.resources.get(lease["resource"])
+        r = policy.legacy_resources.get(lease["resource"])
         usd = minutes * (r.usd_per_minute if r else 0.0)
         lease.update(ended=now, end_reason=reason, usd=round(usd, 6))
         self.store.save_lease(lease)
@@ -292,7 +292,7 @@ class LeaseTracker:
         now = now or time.time()
         reclaim = []
         for lease in list(self.open.values()):
-            r = policy.resources.get(lease["resource"])
+            r = policy.legacy_resources.get(lease["resource"])
             if r is None:
                 continue
             new: list[str] = []
@@ -322,14 +322,14 @@ class LeaseTracker:
 
     def reclaim_at(self, lease: dict, policy: Policy) -> float | None:
         """When a flagged lease of an auto-reclaimed resource gets stopped, else None."""
-        r = policy.resources.get(lease["resource"])
+        r = policy.legacy_resources.get(lease["resource"])
         if r is None or not r.auto_reclaim or not lease.get("flagged_at"):
             return None
         return lease["flagged_at"] + r.reclaim_after_minutes * 60
 
     def reclaim_request(self, lease: dict, policy: Policy) -> dict | None:
         """The MCP call that stops a lease's resource, or None when there is no way to address it."""
-        r = policy.resources.get(lease["resource"])
+        r = policy.legacy_resources.get(lease["resource"])
         if not r or not r.stop_tools or any(c in r.stop_tools[0] for c in "*?["):
             return None
         args = {r.handle.arg: lease["handle"]} if r.handle and lease["handle"] else {}
@@ -346,7 +346,7 @@ class LeaseTracker:
         for lease in self.open.values():
             if principal and lease["principal"] != principal:
                 continue
-            r = policy.resources.get(lease["resource"])
+            r = policy.legacy_resources.get(lease["resource"])
             minutes = (now - lease["started"]) / 60
             out.append(
                 {
