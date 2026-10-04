@@ -178,3 +178,19 @@ def test_bad_classification_values_are_rejected(policy_dir):
     text = (policy_dir / "policy.yaml").read_text()
     with pytest.raises(ValueError):
         parse_policy(text.replace("max_classification: internal", "max_classification: secret", 1))
+
+
+# ---- policy-load warnings ---------------------------------------------------------------------------
+
+
+def test_entity_above_its_mode_is_warned_at_load(policy_dir, caplog):
+    edit_policy(policy_dir, lambda p: p["pii"]["entities"].update(credit_card="block"))
+    with caplog.at_level("WARNING", logger="controllayer.config"):
+        c = TestClient(create_app(policy_dir / "policy.yaml", watch=False), headers={"x-admin-token": ADMIN})
+    assert any("pii.entities.credit_card" in r.getMessage() for r in caplog.records)
+    warnings = c.get("/admin/policy").json()["warnings"]
+    assert any(w.startswith("pii.entities.credit_card: block acts as redact") for w in warnings), warnings
+
+
+def test_shipped_policy_has_no_capped_entities(client):
+    assert client.get("/admin/policy").json()["warnings"] == []

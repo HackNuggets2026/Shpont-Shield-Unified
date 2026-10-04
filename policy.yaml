@@ -134,7 +134,7 @@ secrets:
     credentials_in_url: redact
 
 pii:
-  mode: redact
+  mode: redact     # caps every entity below: `credit_card: block` still only redacts until this says block
   directions: [input, output, tool_result, tool_call]
   entities:
     credit_card: redact

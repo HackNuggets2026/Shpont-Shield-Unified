@@ -1100,12 +1100,29 @@ def parse_policy(text: str, overlay: str | None = None, base_dir: Path | None = 
     return policy
 
 
+def policy_warnings(policy: Policy) -> list[str]:
+    """Settings that load but do not do what they say: an entity asking for more than its control's mode
+    allows (`pii.entities.credit_card: block` under `pii.mode: redact` only redacts)."""
+    out = []
+    for name in ("pii", "secrets"):
+        cfg: PatternControl = getattr(policy, name)
+        for entity, action in cfg.entities.items():
+            if action.rank > cfg.mode.rank:
+                out.append(
+                    f"{name}.entities.{entity}: {action.value} acts as {cfg.mode.value} because {name}.mode is "
+                    f"{cfg.mode.value} (the mode caps every entity); set {name}.mode: {action.value} to enforce it"
+                )
+    return out
+
+
 def _warn_demo(policy: Policy) -> None:
     if policy.identity.demo_mode:
         log.warning(
             "DEMO MODE: no authentication anywhere; keyless callers act as %r. Never run this in production.",
             policy.identity.demo_principal,
         )
+    for w in policy_warnings(policy):
+        log.warning("policy: %s", w)
 
 
 class PolicyStore:

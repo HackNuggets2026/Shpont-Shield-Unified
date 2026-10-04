@@ -23,7 +23,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, Res
 from fastapi.staticfiles import StaticFiles
 
 from .. import audit, export, resources, selftest, servertiming
-from ..config import PolicyStore
+from ..config import PolicyStore, policy_warnings
 from ..controls import decoys
 from ..controls.access import authenticate, by_principal, identify
 from ..controls.patterns import remask, unmask
@@ -1064,7 +1064,13 @@ def create_app(
         data = p.model_dump(mode="json", by_alias=True)
         data["identity"]["api_keys"] = {k[:4] + "…": v for k, v in data["identity"]["api_keys"].items()}
         data["identity"]["admin_token"] = "set" if p.identity.admin_token else None
-        return {"version": p.version, "reloads": store.reloads, "last_error": store.last_error, "policy": data}
+        return {
+            "version": p.version,
+            "reloads": store.reloads,
+            "last_error": store.last_error,
+            "warnings": policy_warnings(p),
+            "policy": data,
+        }
 
     @app.post("/admin/try")
     async def try_as(request: Request):
