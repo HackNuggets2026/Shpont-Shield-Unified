@@ -489,6 +489,63 @@ export const admin = {
   actions: (target?: string) => get<AdminAction[]>(`${A}/actions${qs({ target })}`),
 };
 
+// ---- playground ---------------------------------------------------------------------------
+
+export type TryDirection = "input" | "output" | "tool_call" | "tool_result" | "tool_description";
+
+export interface TryRequest {
+  principal: string;
+  direction: TryDirection;
+  text?: string;
+  model?: string;
+  tool?: string;
+  arguments?: Record<string, unknown>;
+}
+
+export interface TryFinding {
+  control: string;
+  category: string;
+  action: Decision;
+  proposed: Decision;
+  tier: string;
+  score: number;
+  detail: string;
+  shadow: boolean;
+}
+
+/** POST /admin/try: the guard's verdict for one message, as that person, unmetered (channel dashboard). */
+export interface TryResult {
+  request_id: string;
+  action: Decision;
+  reason: string;
+  /** What would be forwarded (redactions applied); empty when refused. */
+  text: string;
+  policy_version: string;
+  /** Milliseconds per stage: gates, budget, deterministic (control:secrets, control:pii, control:signatures), semantic... total. */
+  latency_ms: Record<string, number>;
+  findings: TryFinding[];
+  /** The HTTP status the gateway answered with (403/429/401 when refused). */
+  status: number;
+}
+
+/** A refusal is still a verdict, so this resolves for any status that carries one (and never signs the admin out). */
+export async function tryAs(body: TryRequest): Promise<TryResult> {
+  if (PREVIEW) throw new ApiError(403, "The playground needs the gateway; run the project locally to try prompts.");
+  let resp: Response;
+  try {
+    resp = await fetch(`${A}/try`, {
+      method: "POST",
+      headers: { accept: "application/json", "content-type": "application/json", ...authHeaders(creds) },
+      body: JSON.stringify(body),
+    });
+  } catch (e) {
+    throw new ApiError(0, `cannot reach the gateway (${e instanceof Error ? e.message : String(e)})`);
+  }
+  const data: unknown = await resp.json().catch(() => null);
+  if (data && typeof data === "object" && "action" in data) return { ...(data as Omit<TryResult, "status">), status: resp.status };
+  throw new ApiError(resp.status, errorMessage(data, `${resp.status} ${resp.statusText}`));
+}
+
 /** Downloads an admin export (needs the token header, so it cannot be a plain link). */
 export async function downloadExport(path: string, filename: string) {
   if (PREVIEW) throw new ApiError(403, "Exports need the gateway; run the project locally to download them.");

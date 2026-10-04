@@ -2,7 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { admin } from "../../api";
 import { Shell, type NavItem } from "../../components/Shell";
 import { GlobalSearch, useOrg } from "../../components/org";
-import { IconAlert, IconBox, IconBuilding, IconFlow, IconGauge, IconInbox, IconLock, IconShield } from "../../components/icons";
+import { IconAlert, IconBox, IconBuilding, IconFlow, IconGauge, IconInbox, IconLock, IconShield, IconTerminal } from "../../components/icons";
 
 export function ConsoleLayout() {
   const ov = useQuery({ queryKey: ["admin", "overview"], queryFn: admin.overview, refetchInterval: 10_000 });
@@ -16,6 +16,7 @@ export function ConsoleLayout() {
     { to: "/console/security", label: "Security", icon: <IconAlert />, badge: ov.data?.incidents_open, badgeTone: "bad" },
     { to: "/console/traps", label: "Traps", icon: <IconLock />, badge: traps.data?.open, badgeTone: "bad" },
     { to: "/console/controls", label: "Controls", icon: <IconShield /> },
+    { to: "/console/playground", label: "Playground", icon: <IconTerminal /> },
     { to: "/console/resources", label: "Resources", icon: <IconBox />, badge: ov.data?.zombies, badgeTone: "warn" },
     { to: "/console/requests", label: "Requests", icon: <IconInbox />, badge: ov.data?.requests_pending, badgeTone: "warn" },
   ];
