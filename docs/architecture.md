@@ -87,7 +87,7 @@ Commercial models are priced per 1M input/output tokens; Anthropic prompt-cache 
 |---|---|
 | LLM01 Prompt injection | `prompt_injection` semantic control on input, tool_result and tool_description; jailbreak signatures; tool-poisoning signature |
 | LLM02 Sensitive information disclosure | secrets + PII detectors in both directions; `confidential_output`; `data_exfiltration` |
-| LLM03 Supply chain | signature feed: pickle opcodes, `weights_only=False`, `trust_remote_code`, poisoned MCP tools |
+| LLM03 Supply chain | signature feed: pickle opcodes, `weights_only=False`, `trust_remote_code` (blocked on input and tool calls), CVE-2025-32434 (`torch.load` before 2.6), CVE-2024-3660 (Keras Lambda, `safe_mode=False`), poisoned MCP tools |
 | LLM05 Improper output handling | output-direction checks; markdown-image exfiltration and shell-payload signatures |
 | LLM06 Excessive agency | tool RBAC per role; irreversible tools blocked; SSRF signature on tool calls |
 | LLM07 System prompt leakage | `data_exfiltration` (reveal hidden instructions); output checks |

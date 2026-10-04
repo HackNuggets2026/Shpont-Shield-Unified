@@ -1,5 +1,5 @@
 {
-  "feed_version": "2026-10-03.1",
+  "feed_version": "2026-10-04.1",
   "source": "acme-secops/ai-threat-intel (sample; replace with your managed feed URL)",
   "signatures": [
     {
@@ -14,13 +14,14 @@
     },
     {
       "id": "SIG-HF-RCODE-002",
-      "name": "trust_remote_code on unvetted model repository",
+      "name": "trust_remote_code on a model load (runs the repository's own Python)",
       "reference": "HF supply-chain advisories",
       "category": "supply_chain",
-      "pattern": "trust_remote_code\\s*=\\s*True",
-      "directions": ["output", "tool_call"],
+      "pattern": "trust_remote_code[\"']?\\s*[=:]\\s*[\"']?true\\b|--trust-remote-code\\b",
+      "flags": "i",
+      "directions": ["input", "tool_call"],
       "severity": "high",
-      "action": "warn"
+      "action": "block"
     },
     {
       "id": "SIG-RAY-003",
@@ -94,6 +95,36 @@
       "directions": ["output", "tool_result"],
       "severity": "high",
       "action": "block"
+    },
+    {
+      "id": "SIG-TORCH-CVE-010",
+      "name": "torch.load before PyTorch 2.6 (code execution even with weights_only=True)",
+      "reference": "CVE-2025-32434",
+      "category": "unsafe_deserialization",
+      "pattern": "torch\\.load\\([^)]*\\)[\\s\\S]{0,2000}?\\btorch\\s*(?:==|<=|~=|<|\\s)\\s*v?(?:1\\.\\d+|2\\.[0-5])(?:\\.\\d+)*(?!\\.?\\d)|\\btorch\\s*(?:==|<=|~=|<|\\s)\\s*v?(?:1\\.\\d+|2\\.[0-5])(?:\\.\\d+)*(?!\\.?\\d)[\\s\\S]{0,2000}?torch\\.load\\(",
+      "directions": ["input", "tool_call", "tool_result"],
+      "severity": "critical",
+      "action": "block"
+    },
+    {
+      "id": "SIG-KERAS-CVE-011",
+      "name": "Keras Lambda layer or safe_mode=False on model load (code injection)",
+      "reference": "CVE-2024-3660",
+      "category": "unsafe_deserialization",
+      "pattern": "safe_mode\\s*=\\s*False|class_name[\"']?\\s*[:\\n]\\s*[\"']?Lambda\\b",
+      "directions": ["input", "tool_call", "tool_result"],
+      "severity": "critical",
+      "action": "block"
+    },
+    {
+      "id": "SIG-HF-RCODE-012",
+      "name": "Model reply recommends trust_remote_code",
+      "reference": "HF supply-chain advisories",
+      "category": "supply_chain",
+      "pattern": "trust_remote_code\\s*=\\s*True|--trust-remote-code\\b",
+      "directions": ["output"],
+      "severity": "medium",
+      "action": "warn"
     }
   ]
 }
