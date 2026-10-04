@@ -2,7 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { admin } from "../../api";
 import { Shell, type NavItem } from "../../components/Shell";
 import { GlobalSearch, useOrg } from "../../components/org";
-import { IconActivity, IconAlert, IconBox, IconBuilding, IconFlow, IconGauge, IconInbox, IconLock, IconShield, IconTerminal } from "../../components/icons";
+import { IconActivity, IconAlert, IconBox, IconBuilding, IconCheck, IconFlow, IconGauge, IconInbox, IconLock, IconShield, IconTerminal } from "../../components/icons";
 import { IconBug } from "../../components/icons";
 
 export function ConsoleLayout() {
@@ -20,6 +20,7 @@ export function ConsoleLayout() {
     { to: "/console/attacks", label: "Attacks", icon: <IconBug /> },
     { to: "/console/controls", label: "Controls", icon: <IconShield /> },
     { to: "/console/playground", label: "Playground", icon: <IconTerminal /> },
+    { to: "/console/tests", label: "Tests", icon: <IconCheck /> },
     { to: "/console/resources", label: "Resources", icon: <IconBox />, badge: ov.data?.zombies, badgeTone: "warn" },
     { to: "/console/requests", label: "Requests", icon: <IconInbox />, badge: ov.data?.requests_pending, badgeTone: "warn" },
   ];

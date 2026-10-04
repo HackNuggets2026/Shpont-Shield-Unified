@@ -755,3 +755,98 @@ export interface PersonRisk {
   incidents: Incident[];
   history: { ts: number; score: number }[];
 }
+
+// ---- self-test (Console > Tests) -----------------------------------------------------------------
+
+export interface SelfTestStep {
+  principal: string | null;
+  authenticated: boolean;
+  direction: string;
+  model: string | null;
+  tool: string | null;
+  arguments: unknown;
+  text: string;
+  why: string;
+  expect: Decision[];
+  control: string | null;
+  known_gap: boolean;
+  actual: Decision | "error";
+  reason: string;
+  controls: string[];
+  findings: { control: string; category: string; action: string; shadow: boolean }[];
+  error: string | null;
+  passed: boolean;
+  latency_ms: number;
+}
+export interface SelfTestScenario {
+  id: string;
+  title: string;
+  why: string;
+  known_gap: boolean;
+  passed: boolean;
+  steps: SelfTestStep[];
+}
+export interface SelfTestSummary {
+  scenarios: number;
+  scenarios_passed: number;
+  steps: number;
+  passed: number;
+  failed: number;
+  known_gaps: number;
+  regressions: number;
+}
+export interface SelfTestRegression {
+  scenario: string;
+  title: string;
+  step: number;
+  why: string;
+  expect: Decision[];
+  actual: string;
+  reason: string;
+}
+export interface SelfTestRun {
+  run_id: string;
+  trigger: "manual" | "auto" | string;
+  policy_version: string;
+  prev_version: string | null;
+  started_at: number;
+  duration_ms: number;
+  error: string | null;
+  summary: SelfTestSummary;
+  regressions: SelfTestRegression[];
+  note: string;
+  scenarios: SelfTestScenario[];
+}
+export interface SelfTestStatus {
+  auto: boolean;
+  debounce_seconds: number;
+  running: boolean;
+  pending: { from: string; since: number } | null;
+  policy_version: string;
+  scenarios_file: string;
+}
+export type SelfTestHistoryRow = Pick<SelfTestRun, "run_id" | "trigger" | "policy_version" | "prev_version" | "started_at" | "summary" | "note">;
+export interface PytestCase {
+  nodeid: string;
+  control_id: string | null;
+  kind: "positive" | "negative" | "other";
+  title: string;
+  outcome: "passed" | "failed" | "skipped" | "xfailed" | "xpassed" | "error";
+  duration_ms: number;
+  message: string;
+}
+export interface PytestReport {
+  generated_at: string;
+  python: string;
+  exit_status: number;
+  summary: { passed: number; failed: number; skipped: number; xfailed: number; xpassed: number; errors: number; total: number; duration_s: number };
+  tests: PytestCase[];
+}
+
+export const selftest = {
+  latest: () => get<{ status: SelfTestStatus; result: SelfTestRun | null }>(`${A}/selftest/latest`),
+  history: () => get<{ runs: SelfTestHistoryRow[] }>(`${A}/selftest/history`),
+  run: () => post<SelfTestRun>(`${A}/selftest/run`, {}),
+  pytest: () => get<{ report: PytestReport | null; path: string; junit: boolean }>(`${A}/selftest/pytest`),
+  junit: () => get<string>(`${A}/selftest/junit.xml`),
+};

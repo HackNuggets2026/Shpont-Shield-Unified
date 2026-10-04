@@ -15,6 +15,7 @@ import { TrapsPage } from "./pages/console/Traps";
 import { AttacksPage } from "./pages/console/Attacks";
 import { ControlsPage } from "./pages/console/Controls";
 import { Playground } from "./pages/console/Playground";
+import { TestsPage } from "./pages/console/Tests";
 import { IncidentPage } from "./pages/console/Incident";
 import { Resources } from "./pages/console/Resources";
 import { Requests } from "./pages/console/Requests";
@@ -60,6 +61,7 @@ export function App() {
         <Route path="attacks" element={<AttacksPage />} />
         <Route path="controls" element={<ControlsPage />} />
         <Route path="playground" element={<Playground />} />
+        <Route path="tests" element={<TestsPage />} />
         <Route path="incidents/:id" element={<IncidentPage />} />
         <Route path="resources" element={<Resources />} />
         <Route path="requests" element={<Requests />} />
