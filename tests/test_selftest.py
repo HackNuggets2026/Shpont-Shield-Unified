@@ -40,7 +40,6 @@ def test_shipped_scenarios_load_and_cover_the_controls():
     assert {"secrets", "pii", "signatures", "prompt_injection", "tool_access", "model_allowlist"} <= controls
 
 
-@pytest.mark.kind("positive")
 def test_run_passes_on_the_shipped_policy(tests_client):
     r = tests_client.post("/admin/selftest/run")
     assert r.status_code == 200
@@ -70,7 +69,6 @@ def test_a_run_spends_no_budget_and_opens_no_incident(tests_client):
     assert tests_client.get("/admin/incidents").json().get("incidents", []) == []
 
 
-@pytest.mark.kind("negative")
 def test_policy_change_reports_regressions(tests_client, policy_dir: Path):
     app = tests_client.app
     first = tests_client.post("/admin/selftest/run").json()

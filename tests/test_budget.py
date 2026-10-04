@@ -1,5 +1,7 @@
 """Budget and resource governance: rate limits, token/cost budgets for commercial and local models, loop guard."""
 
+import pytest
+
 from .conftest import chat
 
 
@@ -10,12 +12,16 @@ def _limits(**kw):
     return mutate
 
 
+@pytest.mark.control("budget")
+@pytest.mark.kind("positive")
 def test_rate_limit_per_team(make_client):
     c = make_client(mutate=_limits(requests_per_minute=3))
     codes = [chat(c, f"question {i}").status_code for i in range(5)]
     assert codes == [200, 200, 200, 429, 429]
 
 
+@pytest.mark.control("budget")
+@pytest.mark.kind("positive")
 def test_token_budget_blocks_once_spent(make_client):
     c = make_client(mutate=_limits(tokens_per_day=60))
     assert chat(c, "x" * 100).status_code == 200  # ~25 in + reply tokens recorded
@@ -24,6 +30,8 @@ def test_token_budget_blocks_once_spent(make_client):
     assert "token_budget" in r.json()["error"]["message"]
 
 
+@pytest.mark.control("budget")
+@pytest.mark.kind("positive")
 def test_cost_budget_commercial_pricing(make_client):
     # mock-model is priced at $1/1M input + $2/1M output tokens
     c = make_client(mutate=_limits(usd_per_day=0.0001))
@@ -33,6 +41,7 @@ def test_cost_budget_commercial_pricing(make_client):
     assert "cost_budget" in r.json()["error"]["message"]
 
 
+@pytest.mark.control("budget")
 def test_local_model_cost_uses_compute_seconds(make_client):
     c = make_client(
         mutate=lambda p: (
@@ -46,6 +55,7 @@ def test_local_model_cost_uses_compute_seconds(make_client):
     assert row["usd"] > 0 and row["compute_seconds"] > 0
 
 
+@pytest.mark.control("budget")
 def test_usage_is_attributed_to_principal_team_and_global(client):
     chat(client, "hello world")
     scopes = {(s["scope"], s["key"]): s for s in client.get("/admin/summary").json()["budgets"]["scopes"]}
@@ -55,12 +65,16 @@ def test_usage_is_attributed_to_principal_team_and_global(client):
     assert scopes[("team", "interns")]["requests"] == 0
 
 
+@pytest.mark.control("loop_guard")
+@pytest.mark.kind("positive")
 def test_runaway_loop_is_cut(client):
     codes = [chat(client, "same prompt again").status_code for _ in range(7)]
     assert codes[:5] == [200] * 5
     assert codes[5:] == [429, 429]
 
 
+@pytest.mark.control("budget")
+@pytest.mark.kind("negative")
 def test_shadow_budget_reports_but_allows(make_client):
     def mutate(p):
         p["budgets"]["shadow"] = True
@@ -72,6 +86,8 @@ def test_shadow_budget_reports_but_allows(make_client):
     assert any(k.startswith("budget/rate_limit") for k, _ in shadow)
 
 
+@pytest.mark.control("budget")
+@pytest.mark.kind("positive")
 def test_mcp_tool_calls_are_rate_limited(make_client):
     from .conftest import mcp
 
@@ -82,11 +98,15 @@ def test_mcp_tool_calls_are_rate_limited(make_client):
     assert codes == [False, False, True]
 
 
+@pytest.mark.control("budget")
+@pytest.mark.kind("negative")
 def test_cost_limit_is_inclusive(make_client):
     c = make_client(mutate=_limits(usd_per_day=0.0))
     assert chat(c, "free?").status_code == 429
 
 
+@pytest.mark.control("loop_guard")
+@pytest.mark.kind("negative")
 def test_tool_only_turns_are_not_mistaken_for_a_loop(client):
     from .conftest import KEYS
 
@@ -108,6 +128,7 @@ def test_tool_only_turns_are_not_mistaken_for_a_loop(client):
     assert codes == [200] * 7
 
 
+@pytest.mark.control("budget")
 def test_tool_only_turns_are_still_metered(make_client):
     from .conftest import KEYS
 

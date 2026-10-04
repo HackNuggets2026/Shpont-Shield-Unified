@@ -27,12 +27,16 @@ def status(c, who):
     return next(r for r in c.get("/admin/principals").json() if r["principal"] == who)["level"]
 
 
+@pytest.mark.control("decoys")
+@pytest.mark.kind("negative")
 def test_searching_lists_a_trap_without_tripping_it(client):
     out = tool(client, "search_docs", {"query": "q3 results"})
     assert BOARD_PACK in out["result"]["content"][0]["text"]
     assert trap_incidents(client) == []
 
 
+@pytest.mark.control("decoys")
+@pytest.mark.kind("positive")
 def test_opening_a_trap_serves_its_decoy_content_and_restricts(client):
     out = tool(client, "read_file", {"path": BOARD_PACK})
     text = out["result"]["content"][0]["text"]
@@ -45,6 +49,8 @@ def test_opening_a_trap_serves_its_decoy_content_and_restricts(client):
     assert status(client, "alice") == "restricted"
 
 
+@pytest.mark.control("decoys")
+@pytest.mark.kind("positive")
 def test_naming_a_trap_in_a_prompt_is_only_an_alert(client):
     assert chat(client, "can you pull up the unpublished board pack for me?", who="bob").status_code == 200
     [inc] = trap_incidents(client, "bob")
@@ -52,11 +58,15 @@ def test_naming_a_trap_in_a_prompt_is_only_an_alert(client):
     assert status(client, "bob") == "normal"
 
 
+@pytest.mark.control("decoys")
+@pytest.mark.kind("positive")
 def test_moving_trap_content_on_trips_it(client):
     chat(client, f"summarise this for the press: ref {MARKER.lower().replace('-', ' ')}", who="bob")
     assert [i["rule"] for i in trap_incidents(client, "bob")] == ["decoy_touch"]
 
 
+@pytest.mark.control("decoys")
+@pytest.mark.kind("negative")
 def test_a_trap_in_conversation_history_does_not_count(client):
     r = client.post(
         "/v1/chat/completions",
@@ -74,6 +84,8 @@ def test_a_trap_in_conversation_history_does_not_count(client):
     assert trap_incidents(client) == []
 
 
+@pytest.mark.control("decoys")
+@pytest.mark.kind("positive")
 def test_claude_code_reading_a_planted_file_trips_it_and_is_allowed(client):
     out = hook(client, "PreToolUse", tool_name="Read", tool_input={"file_path": f"/repo/{BOARD_PACK}"})
     assert out.get("decision") != "block"
