@@ -208,7 +208,7 @@ function ControlTable({ s, edit, busy }: { s: ControlsSummary; edit: Edit; busy:
             return (
               <Fragment key={c.name}>
                 <tr className={cx(!c.enabled && "opacity-60")}>
-                  <td className="max-w-[320px]">
+                  <td className="w-[300px]">
                     <button
                       type="button"
                       onClick={() => setOpen(isOpen ? null : c.name)}
@@ -220,7 +220,7 @@ function ControlTable({ s, edit, busy }: { s: ControlsSummary; edit: Edit; busy:
                         <span className="font-medium text-ink group-hover:underline">{title(c.name)}</span>{" "}
                         <span className="text-xs text-muted">{KIND_LABEL[c.kind]}</span>
                         {(c.description || BLURB[c.name]) && (
-                          <span className="block truncate text-xs text-muted">{c.description ?? BLURB[c.name]}</span>
+                          <span className="block max-w-[260px] truncate text-xs text-muted" title={c.description ?? BLURB[c.name]}>{c.description ?? BLURB[c.name]}</span>
                         )}
                       </span>
                     </button>
@@ -369,7 +369,7 @@ function Latency({ s }: { s: ControlsSummary }) {
           {stages.map(([k, v]) => (
             <li key={k} className="text-xs">
               <div className="mb-1 flex justify-between gap-2">
-                <span className="truncate text-ink2">{k.replace(/_/g, " ")}</span>
+                <span className="truncate text-ink2">{k.startsWith("control:") ? `${title(k.slice(8))} check` : k.replace(/_/g, " ")}</span>
                 <span className="shrink-0 tabular-nums text-muted">
                   <b className="font-medium text-ink">{v.p50}</b> / {v.p95} ms
                 </span>

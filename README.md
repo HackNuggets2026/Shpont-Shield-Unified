@@ -153,7 +153,7 @@ All controls, thresholds, allowed models, budgets and team overrides live in [`p
 - **`shadow: true`** evaluates a control and reports what it *would* have done, without acting. Use it to roll out a new control, or to monitor employees without interfering.
 - **Semantic controls are data.** Each entry under `semantic_controls` is one question to the decision model, with probability thresholds (`noul`) or per-category actions (`choice`). To add a guardrail, add an entry; no code is needed.
 - **Teams** can override any control, merged key by key.
-- **Hot reload:** edits apply within about 1 s. An invalid edit is rejected, the previous policy stays live, and the error shows on the dashboard.
+- **Hot reload:** edits apply within about 1 s. An invalid edit is rejected, the previous policy stays live, and the error shows as a banner on the console's Controls page. The same page edits each control live (on/off, mode, shadow, threshold, or a strict/balanced/permissive profile) through the admin overlay, so edits survive a restart.
 
 ## Reporting
 
@@ -168,6 +168,7 @@ All controls, thresholds, allowed models, budgets and team overrides live in [`p
 | `/admin/export/backstage` | The catalog as Backstage `kind: Resource` entities |
 | `/admin/audit/export?format=ocsf\|ecs` | The same decisions plus admin actions and insider-risk alerts as one NDJSON stream for a SIEM: [OCSF 1.9.0](https://schema.ocsf.io/1.9.0/) or ECS 9.5 (Elastic, Wazuh). Same masking; full text only where the native event has it |
 | `/admin/summary`, `/admin/events` | JSON for other tools |
+| `PATCH /admin/controls/{name}`, `/admin/controls/profile` | Edit one control live (`enabled`, `mode`, `shadow`, `threshold`) or apply a strict/balanced/permissive profile; written to the admin overlay, an invalid value returns 400 with the validation message |
 | `/metrics` | Prometheus: decisions, findings, latency per stage, spend |
 
 Outside demo mode, admin endpoints need `x-admin-token` (or `?token=`), set with `identity.admin_token` / `ACL_ADMIN_TOKEN`.
