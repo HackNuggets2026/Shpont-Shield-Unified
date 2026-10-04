@@ -6,12 +6,22 @@ restarts), so a bad value is refused with the validation message and never reach
 
 from __future__ import annotations
 
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
-from ..config import ConfidentialityControl, ControlBase, ExfiltrationControl, PiiModelControl, Policy, PolicyStore, SemanticControl, parse_policy
+from ..config import (
+    ConfidentialityControl,
+    ControlBase,
+    ExfiltrationControl,
+    PiiModelControl,
+    Policy,
+    PolicyStore,
+    SemanticControl,
+    parse_policy,
+)
 from ..types import Action
 
 PATTERN = ("secrets", "pii", "pii_model", "signatures", "exfiltration", "confidentiality", "tool_access")
@@ -71,7 +81,11 @@ def control_rows(p: Policy, audit: Any) -> list[dict[str, Any]]:
         rows.append(
             {
                 "name": n,
-                "kind": "semantic" if isinstance(c, SemanticControl) else "context" if n == "pii_model" else "deterministic",
+                "kind": "semantic"
+                if isinstance(c, SemanticControl)
+                else "context"
+                if n == "pii_model"
+                else "deterministic",
                 "enabled": c.enabled,
                 "mode": c.mode.value,
                 "shadow": c.shadow,

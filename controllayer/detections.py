@@ -74,7 +74,9 @@ class RiskEngine:
             return round(self.risk.score(policy, principal, now), 1)
         now = now or time.time()
         hl = policy.insider_risk.half_life_hours * 3600
-        return round(sum(i["weight"] * 0.5 ** ((now - i["ts"]) / hl) for i in self.of(principal) if i["status"] in _LIVE), 1)
+        return round(
+            sum(i["weight"] * 0.5 ** ((now - i["ts"]) / hl) for i in self.of(principal) if i["status"] in _LIVE), 1
+        )
 
     def scores(self, policy: Policy) -> dict[str, float]:
         pids = set(self._by_pid) | (set(self.risk._scores) if self.risk is not None else set())

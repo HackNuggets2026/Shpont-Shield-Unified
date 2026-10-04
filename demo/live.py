@@ -86,9 +86,7 @@ def main() -> None:
         time.sleep(0.3)
         rows = http.get("/admin/people", params={"q": who}, headers=admin).json()["rows"]
         c = next((p for p in rows if p["principal"] == who), {})
-        print(
-            f"   >> {who}: risk score {c.get('risk')}, level {c.get('level')}, budget x{c.get('budget_scale')}"
-        )
+        print(f"   >> {who}: risk score {c.get('risk')}, level {c.get('level')}, budget x{c.get('budget_scale')}")
 
     beat("1. Labelled work through the gateway", "Overview -> live activity")
     chat(

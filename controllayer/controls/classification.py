@@ -27,9 +27,7 @@ def classify(text: str, policy: Policy) -> tuple[str, str | None, list[Span]]:
     """(classification, topic id, matched spans) of the highest-level topic the text mentions."""
     best: tuple[str, str | None, list[Span]] = ("public", None, [])
     for tid, topic in policy.confidentiality.topics.items():
-        spans = [
-            Span(m.start(), m.end(), f"topic:{tid}") for k in topic.keywords for m in _compiled(k).finditer(text)
-        ]
+        spans = [Span(m.start(), m.end(), f"topic:{tid}") for k in topic.keywords for m in _compiled(k).finditer(text)]
         if spans and LEVEL[topic.classification] > LEVEL[best[0]]:
             best = (topic.classification, tid, spans)
     return best

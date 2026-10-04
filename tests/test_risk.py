@@ -332,9 +332,7 @@ def test_auto_level_climbing_under_an_override_still_alerts(client):
     assert score(client, "alice")["level"] == "normal"  # the override holds
     reasons = [a["reason"] for a in client.get("/admin/alerts").json()["alerts"]]
     # The third block crosses watch (30 points plus the secret_paste incident's 10).
-    assert (
-        "auto level normal -> watch, held at normal by security override; alert category: aws_access_key" in reasons
-    )
+    assert "auto level normal -> watch, held at normal by security override; alert category: aws_access_key" in reasons
 
 
 def test_owner_drift_through_an_agent_alerts_on_the_owner(client):

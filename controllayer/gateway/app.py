@@ -244,9 +244,7 @@ def create_app(
             return await call_next(request)
         rec = servertiming.start()
         response = await call_next(request)
-        response.headers.update(
-            servertiming.headers(rec, store.policy.version, response.status_code, response.headers)
-        )
+        response.headers.update(servertiming.headers(rec, store.policy.version, response.status_code, response.headers))
         return response
 
     def upstream() -> UpstreamClient:

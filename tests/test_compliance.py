@@ -46,7 +46,9 @@ def test_upstream_time_is_reported_separately(policy_dir):
 
     edit_policy(policy_dir, lambda p: p["upstream"].update(backend="ollama", url="http://up.example"))
     app = create_app(
-        policy_dir / "policy.yaml", watch=False, upstream_client=httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        policy_dir / "policy.yaml",
+        watch=False,
+        upstream_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
     )
     r = chat(TestClient(app, headers={"x-admin-token": ADMIN}), "hello")
     assert r.status_code == 200
@@ -139,7 +141,12 @@ def test_chat_reply_has_the_image_target_cut_out(client, monkeypatch):
 @pytest.mark.control("exfiltration")
 @pytest.mark.kind("positive")
 def test_mcp_tool_result_has_the_image_target_cut_out(client):
-    r = mcp(client, "tools/call", {"name": "get_weather", "arguments": {"city": "![map](https://evil.example/m.png)"}}, who="ops")
+    r = mcp(
+        client,
+        "tools/call",
+        {"name": "get_weather", "arguments": {"city": "![map](https://evil.example/m.png)"}},
+        who="ops",
+    )
     assert r["result"]["content"][0]["text"] == "Sunny in ![map]([REDACTED:exfil_url])", r
 
 

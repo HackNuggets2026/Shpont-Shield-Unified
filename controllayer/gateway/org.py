@@ -309,7 +309,8 @@ class OrgView:
         risk = []
         for m in people:
             if m["risk"] > 0 or m["open_incidents"]:
-                risk.append({**_who(m), "risk": m["risk"], "level": self.layer.detections.level(m["risk"], policy, m["principal"]),
+                level = self.layer.detections.level(m["risk"], policy, m["principal"])
+                risk.append({**_who(m), "risk": m["risk"], "level": level,
                              "status": policy.principal(m["principal"]).status,
                              "open_incidents": m["open_incidents"]})  # fmt: skip
         risk.sort(key=lambda r: (-r["risk"], -r["open_incidents"], r["principal"]))
