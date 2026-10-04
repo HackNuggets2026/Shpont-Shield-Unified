@@ -252,13 +252,13 @@ def test_repeated_mcp_requests_each_count(client):
             headers=KEYS["alice"],
             json={"jsonrpc": "2.0", "id": 1, "method": "resources/read", "params": {"uri": KEY}},
         )
-    assert score(client, "alice")["score"] == 30
+    assert score(client, "alice")["score"] == 40  # 3 blocks, plus the secret_paste incident (10)
 
 
 def test_retries_in_newest_message_fields_each_count(client):
     for _ in range(3):
         _send(client, [{"role": "user", "content": "hi", "name": KEY}])
-    assert score(client, "alice")["score"] == 30
+    assert score(client, "alice")["score"] == 40  # 3 blocks, plus the secret_paste incident (10)
 
 
 def _conversation(client, turns, model="mock-model"):
@@ -331,8 +331,9 @@ def test_auto_level_climbing_under_an_override_still_alerts(client):
         guard(client, f"key AKIAIOSFODNN7EXAMP{i}A")
     assert score(client, "alice")["level"] == "normal"  # the override holds
     reasons = [a["reason"] for a in client.get("/admin/alerts").json()["alerts"]]
+    # The third block crosses watch (30 points plus the secret_paste incident's 10).
     assert (
-        reasons[0] == "auto level normal -> watch, held at normal by security override; alert category: aws_access_key"
+        "auto level normal -> watch, held at normal by security override; alert category: aws_access_key" in reasons
     )
 
 
@@ -375,3 +376,17 @@ def test_level_click_keeps_the_reason_on_file(client):
     assert score(client, "alice")["manual"]["reason"] == "case 42"
     client.post("/admin/risk/alice", json={"level": "watch", "reason": "case 43"})
     assert score(client, "alice")["manual"]["reason"] == "case 43"
+
+
+def test_person_risk_detail_joins_findings_and_incidents(client):
+    for i in range(3):  # 3 blocks and a secret_paste incident
+        guard(client, f"key AKIAIOSFODNN7EXAMP{i}A")
+    d = client.get("/admin/risk/alice").json()
+    assert d["from_findings"] == 30 and d["from_incidents"] == 10 and d["score"] == 40
+    assert d["level"] == d["computed"] == "watch" and d["manual"] is None
+    assert d["incidents"][0]["rule"] == "secret_paste" and d["levels"] == {"watch": 30, "restricted": 120}
+    assert d["history"][-1]["score"] == 40 and d["alerts"]
+    client.post("/admin/risk/alice", json={"level": "auto", "reset_score": True})
+    d = client.get("/admin/risk/alice").json()
+    assert d["score"] == 0 and d["level"] == "normal" and d["reset_at"]
+    assert client.get("/admin/risk/nobody-known").status_code == 404

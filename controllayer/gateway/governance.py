@@ -193,7 +193,7 @@ def register(
             "by": pp.by,
             "since": pp.since,
             "risk": score,
-            "level": layer.detections.level(score, policy),
+            "level": layer.detections.level(score, policy, p.id),
             "open_incidents": sum(
                 1
                 for i in layer.detections.incidents
@@ -245,7 +245,7 @@ def register(
             "zombies": sum(1 for x in leases if x["flags"]),
             "incidents_open": sum(1 for i in layer.detections.incidents if i["status"] == "open"),
             "requests_pending": usage.count_requests(status="pending"),
-            "at_risk": sum(1 for s in layer.detections.scores(p).values() if s >= p.detections.response.alert),
+            "at_risk": sum(1 for s in layer.detections.scores(p).values() if s >= p.insider_risk.levels.watch),
             "org_name": p.org.name or p.name,
             "headcount": len(usage.people),
             "active": sum(1 for m in view.cached_snapshot(cache, 30)["people"] if m["usd"] > 0 or m["tokens"] > 0),
@@ -592,11 +592,10 @@ def register(
         r = d.response
         return {
             "enabled": d.enabled,
-            "half_life_minutes": d.half_life_minutes,
+            "half_life_hours": store.policy.insider_risk.half_life_hours,
+            "levels": store.policy.insider_risk.levels.model_dump(),
             "response": {
-                "alert": r.alert,
-                "tighten": r.tighten,
-                "quarantine": r.quarantine,
+                "restrict_rules": r.restrict_rules,
                 "tighten_budget_scale": r.tighten_budget_scale,
                 "auto": r.auto,
             },  # fmt: skip
@@ -803,7 +802,7 @@ def register(
                 **who_fields(pid),
                 "team": ident.team if ident else who_fields(pid)["team"],
                 "risk": score,
-                "level": layer.detections.level(score, p),
+                "level": layer.detections.level(score, p, pid),
                 "status": p.principal(pid).status,
                 "budget_scale": p.budget_scale(pid),
             },  # fmt: skip
@@ -959,15 +958,14 @@ def register(
         if pp.status == "quarantined":
             out["quarantine"] = {"tools": p.quarantine.tools, "budget_scale": p.quarantine.budget_scale}
         if p.privacy.show_risk_to_employee:
-            r = p.detections.response
+            lv = p.insider_risk.levels
             out["risk"] = {
                 "score": score,
-                "level": layer.detections.level(score, p),
+                "level": layer.detections.level(score, p, who.id),
                 "thresholds": {
-                    "alert": r.alert,
-                    "tighten": r.tighten,
-                    "quarantine": r.quarantine,
-                    "half_life_minutes": p.detections.half_life_minutes,
+                    "watch": lv.watch,
+                    "restricted": lv.restricted,
+                    "half_life_hours": p.insider_risk.half_life_hours,
                 },  # fmt: skip
                 "incidents": [
                     masked_for_employee(i) for i in reversed(layer.detections.incidents) if i["principal"] == who.id

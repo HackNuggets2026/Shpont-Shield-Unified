@@ -1113,6 +1113,63 @@ def create_app(
             "levels": store.policy.insider_risk.levels.model_dump(),
         }
 
+    def _known(pid: str) -> bool:
+        """A key holder, or a person in the directory (seeded people have no key of their own)."""
+        return any(k.principal == pid for k in store.policy.identity.api_keys.values()) or pid in layer.usage.people
+
+    @app.get("/admin/risk/{pid}")
+    async def risk_person(pid: str):
+        """One person's insider risk: the score and what makes it up, the level and where it comes from,
+        external signals, recent alerts and incidents, and the score over the last 7 days."""
+        if not _known(pid):
+            return JSONResponse({"error": f"unknown principal {pid!r}"}, status_code=404)
+        policy, risk, now = store.policy, layer.risk, time.time()
+        day = now - 86400
+        hl = policy.insider_risk.half_life_hours * 3600
+        incidents = sorted(layer.detections.of(pid), key=lambda i: -i["ts"])
+        blocks = layer.usage._q(
+            "SELECT ts FROM events WHERE principal=? AND ts>=? AND decision='block' AND kind!='incident'",
+            (pid, now - 7 * 86400),
+        )
+        weight = policy.insider_risk.weights.get(Action.BLOCK, 10)
+        live = [i for i in incidents if i["status"] in ("open", "acknowledged") and i["ts"] > risk._reset_at(pid)]
+        since = risk._reset_at(pid)
+
+        def at(t: float) -> float:  # an estimate from blocks and live incidents (other findings are not kept)
+            pts = [(r["ts"], weight) for r in blocks if since < r["ts"] <= t]
+            pts += [(i["ts"], i["weight"]) for i in live if i["ts"] <= t]
+            return sum(w * 0.5 ** ((t - ts) / hl) for ts, w in pts)
+
+        history = [{"ts": now - h * 3600, "score": round(at(now - h * 3600), 1)} for h in range(168, 0, -4)]
+        history.append({"ts": now, "score": round(risk.score(policy, pid, now), 1)})
+        manual = layer.state.watch.get(pid)
+        try:
+            principal = risk.principal(policy, pid)
+            own = {"level": risk.level(policy, principal), "auto": risk.level(policy, principal, manual=False)}
+        except StopIteration:  # no key: their own level is all there is
+            own = {"level": risk.own_level(policy, pid), "auto": risk.own_level(policy, pid, manual=False)}
+        return {
+            "principal": pid,
+            "score": round(risk.score(policy, pid, now), 1),
+            "from_findings": round(risk.finding_score(policy, pid, now), 1),
+            "from_incidents": round(risk.incident_points(policy, pid, now), 1),
+            "computed": risk.computed_level(policy, pid),
+            "manual": manual,
+            **own,
+            "signals": [{"source": src, **sig} for src, sig in sorted(risk.signals(policy, pid).items())],
+            "levels": policy.insider_risk.levels.model_dump(),
+            "half_life_hours": policy.insider_risk.half_life_hours,
+            "reset_at": since or None,
+            "last_24h": {
+                "blocks": sum(1 for r in blocks if r["ts"] >= day),
+                "incidents": sum(1 for i in incidents if i["ts"] >= day),
+                "traps": sum(1 for i in incidents if i["ts"] >= day and i["rule"] == "decoy_touch"),
+            },
+            "alerts": [a for a in reversed(risk.alerts) if a["principal"] == pid][:20],
+            "incidents": incidents[:20],
+            "history": history,
+        }
+
     @app.post("/admin/risk/{pid}")
     async def risk_set(pid: str, request: Request):
         """Override the score-based level (`auto` clears the override), optionally resetting the score."""
@@ -1120,7 +1177,7 @@ def create_app(
         level = body.get("level")
         if level not in ("auto", "normal", "watch", "restricted"):
             raise BadRequest("level must be auto, normal, watch or restricted")
-        if not any(k.principal == pid for k in store.policy.identity.api_keys.values()):
+        if not _known(pid):
             return JSONResponse({"error": f"unknown principal {pid!r}"}, status_code=404)
         # A click without a reason keeps the one already on file.
         reason = str(body.get("reason") or "") or (layer.state.watch.get(pid) or {}).get("reason", "")
@@ -1257,7 +1314,7 @@ def create_app(
     @app.post("/admin/risk/{pid}/reset")
     async def risk_reset(pid: str):
         """Clear a principal's score, e.g. after a review found nothing."""
-        if not any(k.principal == pid for k in store.policy.identity.api_keys.values()):
+        if not _known(pid):
             return JSONResponse({"error": f"unknown principal {pid!r}"}, status_code=404)
         layer.risk.reset(pid)
         layer.audit.note("risk_reset", "security", principal=pid)

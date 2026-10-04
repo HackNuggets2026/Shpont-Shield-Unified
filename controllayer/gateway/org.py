@@ -30,7 +30,7 @@ TEAM_SORTS = ("usd", "usd_prev", "usd_per_active", "adherence", "adherence_prev"
               "incidents_open", "headcount", "active", "tokens", "checks", "interventions", "claude_code_users",
               "claude_code_usd", "name")  # fmt: skip
 PEOPLE_SORTS = ("risk", "usd", "tokens", "name")
-STATUSES = ("active", "quarantined", "revoked", "limited")
+STATUSES = ("active", "quarantined", "revoked", "limited", "watch", "restricted")  # the last two: insider-risk level
 
 
 # Aggregate GETs answered from the cache (the whole response body, per query string).
@@ -162,13 +162,13 @@ class OrgView:
 
     def risk(self, policy: Policy) -> tuple[dict[str, float], dict[str, int], set[str]]:
         """Scores, open incidents per person (all time), and the people at risk: a risk score at or above the
-        alert threshold (the same definition as the overview's `at_risk`)."""
+        watch threshold (the same definition as the overview's `at_risk`)."""
         scores = self.layer.detections.scores(policy)
         open_: dict[str, int] = defaultdict(int)
         for r in self.usage._q("SELECT principal, COUNT(*) n FROM incidents WHERE status='open' GROUP BY principal"):
             open_[r["principal"]] = r["n"]
-        alert = policy.detections.response.alert
-        at_risk = {p for p, s in scores.items() if s >= alert}
+        watch = policy.insider_risk.levels.watch
+        at_risk = {p for p, s in scores.items() if s >= watch}
         return scores, open_, at_risk
 
     # ---- per unit ---------------------------------------------------------------------------
@@ -309,7 +309,7 @@ class OrgView:
         risk = []
         for m in people:
             if m["risk"] > 0 or m["open_incidents"]:
-                risk.append({**_who(m), "risk": m["risk"], "level": self.layer.detections.level(m["risk"], policy),
+                risk.append({**_who(m), "risk": m["risk"], "level": self.layer.detections.level(m["risk"], policy, m["principal"]),
                              "status": policy.principal(m["principal"]).status,
                              "open_incidents": m["open_incidents"]})  # fmt: skip
         risk.sort(key=lambda r: (-r["risk"], -r["open_incidents"], r["principal"]))
@@ -480,7 +480,10 @@ def register(app: FastAPI, store: PolicyStore, layer: ControlLayer, cached, prin
                 continue
             if needle and not any(needle in (x or "").lower() for x in (m["principal"], m["name"], m["email"])):
                 continue
-            if status:
+            if status in ("watch", "restricted"):
+                if layer.risk.own_level(p, m["principal"]) != status:
+                    continue
+            elif status:
                 pp = p.principal(m["principal"])
                 limited = pp.status == "active" and p.budget_scale(m["principal"]) < 1
                 if not (limited if status == "limited" else pp.status == status):

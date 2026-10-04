@@ -1,9 +1,11 @@
-"""Security detections over usage and verdicts, a decaying risk score per principal, and graduated responses.
+"""Security detections over usage and verdicts: rules that open incidents.
 
 Each rule is code with its parameters in `policy.yaml` (`detections.rules`). A firing rule opens an
-incident with a weight; a principal's risk score is the sum of their open incidents' weights, halving
-every `half_life_minutes`. Crossing `response.tighten` cuts their budgets, crossing `response.quarantine`
-limits them to read-only tools. Responses only ever escalate on their own; an admin relaxes them.
+incident with a weight. There is one risk score per person, kept by the insider-risk engine
+(`controllayer/risk.py`): a live incident adds its weight to it and decays on that engine's half-life,
+so incidents move people along the same ladder (normal, watch, restricted). Rules listed in
+`detections.response.restrict_rules` (opening a trap) set the person to restricted at once; only an
+admin lifts it.
 """
 
 from __future__ import annotations
@@ -34,7 +36,7 @@ _NOT_PROBING = {
 }
 _EXFIL_CONTROLS = {"data_exfiltration", "confidential_output"}
 _LIVE = ("open", "acknowledged")
-LEVELS = ("none", "alert", "tighten", "quarantine")
+LEVELS = ("normal", "watch", "restricted")
 
 
 def severity(weight: float) -> str:
@@ -48,6 +50,10 @@ class RiskEngine:
         self.incidents: list[dict[str, Any]] = list(
             reversed(store.incidents(since=time.time() - 7 * 86400, limit=5000))
         )
+        self._by_pid: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        for i in self.incidents:
+            self._by_pid[i["principal"]].append(i)
+        self.risk: Any = None  # the insider-risk engine that keeps the one score (set by the layer)
         self._recent: dict[tuple[str, str], deque[float]] = defaultdict(deque)
         self._last_fired: dict[tuple[str, str], float] = {}
         self._clients: dict[str, set[str]] = defaultdict(set)
@@ -59,31 +65,28 @@ class RiskEngine:
 
     # ---- scoring -----------------------------------------------------------------
 
+    def of(self, principal: str) -> list[dict[str, Any]]:
+        return self._by_pid.get(principal, [])
+
     def score(self, principal: str, policy: Policy, now: float | None = None) -> float:
+        """The person's one risk score (findings and incidents), as the insider-risk engine keeps it."""
+        if self.risk is not None:
+            return round(self.risk.score(policy, principal, now), 1)
         now = now or time.time()
-        hl = policy.detections.half_life_minutes * 60
-        return round(
-            sum(
-                i["weight"] * 0.5 ** ((now - i["ts"]) / hl)
-                for i in self.incidents
-                if i["principal"] == principal and i["status"] in _LIVE
-            ),
-            1,
-        )
+        hl = policy.insider_risk.half_life_hours * 3600
+        return round(sum(i["weight"] * 0.5 ** ((now - i["ts"]) / hl) for i in self.of(principal) if i["status"] in _LIVE), 1)
 
     def scores(self, policy: Policy) -> dict[str, float]:
-        return {p: self.score(p, policy) for p in {i["principal"] for i in self.incidents}}
+        pids = set(self._by_pid) | (set(self.risk._scores) if self.risk is not None else set())
+        return {p: self.score(p, policy) for p in pids}
 
-    @staticmethod
-    def level(score: float, policy: Policy) -> str:
-        r = policy.detections.response
-        return (
-            "quarantine"
-            if score >= r.quarantine
-            else "tighten"
-            if score >= r.tighten
-            else ("alert" if score >= r.alert else "none")
-        )
+    def level(self, score: float, policy: Policy, principal: str | None = None) -> str:
+        """The level on the insider-risk ladder: given a principal, their effective level (a security
+        override or an external signal included); otherwise what the score alone gives."""
+        if principal is not None and self.risk is not None:
+            return self.risk.own_level(policy, principal)
+        lv = policy.insider_risk.levels
+        return "restricted" if score >= lv.restricted else "watch" if score >= lv.watch else "normal"
 
     def set_status(self, iid: str, status: str, note: str = "") -> bool:
         if not self.store.set_incident(iid, status, note):
@@ -115,6 +118,9 @@ class RiskEngine:
                 # Opening a trap or moving its content on is deliberate; naming it in a prompt is curiosity.
                 rule = "decoy_mention" if f.category.endswith(":mentioned") else "decoy_touch"
                 self._fire(rule, pid, f.detail, [v.request_id])
+
+        if ctx.fetched:
+            return  # data a tool returned to an agent says nothing about the agent's intent
 
         if v.blocked:
             blocker = next(f for f in v.findings if f.action is Action.BLOCK)
@@ -267,6 +273,7 @@ class RiskEngine:
         }
         self.store.add_incident(inc)
         self.incidents.append(inc)
+        self._by_pid[pid].append(inc)
         for fn in self.listeners:
             fn(inc)
         self.store.add_event(
@@ -284,28 +291,17 @@ class RiskEngine:
             }
         )
         log.warning("incident %s %s: %s", rule, pid, detail)
-        self._respond(pid, policy, now)
+        self._respond(pid, policy, now, rule)
 
-    def _respond(self, pid: str, policy: Policy, now: float) -> None:
+    def _respond(self, pid: str, policy: Policy, now: float, rule: str) -> None:
+        """The score itself moves the person to watch and restricted. A rule in `restrict_rules`
+        (opening a trap) restricts them at once and holds them there until an admin lifts it."""
         resp = policy.detections.response
-        score = self.score(pid, policy, now)
-        level = self.level(score, policy)
-        pp = policy.principal(pid)
-        patch: dict[str, Any] | None = None
-        if level == "quarantine" and pp.status == "active":
-            patch = {"status": "quarantined"}
-        elif level == "tighten" and pp.status == "active" and pp.budget_scale > resp.tighten_budget_scale:
-            patch = {"budget_scale": resp.tighten_budget_scale}
-        if patch is None:
+        if rule not in resp.restrict_rules or self.risk is None:
             return
-        reason = f"risk score {score} reached {level} ({getattr(resp, level):.0f})"
+        reason = "high-severity incident: restricted at once"
         if not resp.auto:
-            self.store.log_admin("auto:detections", f"recommend_{level}", pid, reason, patch)
+            self.store.log_admin("auto:detections", "recommend_restrict", pid, reason, {"level": "restricted"})
             return
-        patch |= {"reason": reason, "by": "auto:detections", "since": now}
-        try:
-            self.policies.write_overlay({"principals": {pid: patch}})
-        except ValueError as e:
-            log.error("automatic %s of %s failed: %s", level, pid, e)
-            return
-        self.store.log_admin("auto:detections", level, pid, reason, patch)
+        if self.risk.restrict(pid, reason, "auto:detections"):
+            self.store.log_admin("auto:detections", "restrict", pid, reason, {"level": "restricted"})

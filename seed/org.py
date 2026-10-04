@@ -631,10 +631,10 @@ class OrgSeeder:
         self.incident(t + 240, tightened, "exfiltration", "data_exfiltration/upload_external (block)", "open", policy,
                       evidence=tried[-1:])  # fmt: skip
         restrict = overlay["principals"]
-        reason = "risk score 62.1 reached tighten (60)"
-        restrict[tightened.id] = {"budget_scale": 0.25, "reason": reason, "by": "auto:detections", "since": t + 241}
-        self.store.log_admin("auto:detections", "tighten", tightened.id, reason, {"budget_scale": 0.25}, ts=t + 241)
-        # Restrictions admins set by hand: limited budgets, one revoked key, one quarantined contractor.
+        reason = "under watch after probing and an exfiltration attempt"
+        restrict[tightened.id] = {"budget_scale": 0.25, "reason": reason, "by": "dana", "since": t + 241}
+        self.store.log_admin("dana", "tighten", tightened.id, reason, {"budget_scale": 0.25}, ts=t + 241)
+        # Restrictions admins set by hand: limited budgets, one revoked key, one restricted contractor.
         for m in self.pick_people(3, ("ENG", "DAT")):
             why = "monthly spend 4x the team median; agreed to cap while reviewing the agent setup"
             ts = now - rng.uniform(1, 12) * DAY
@@ -649,8 +649,8 @@ class OrgSeeder:
         why = "contractor connected an unapproved MCP server to prod tooling"
         self.incident(ts - 600, m, "unapproved_mcp_server", "connected to MCP server 'scraper-mcp'", "acknowledged",
                       policy, note="contract under review")  # fmt: skip
-        restrict[m.id] = {"status": "quarantined", "reason": why, "by": "dana", "since": ts}
-        self.store.log_admin("dana", "quarantine", m.id, why, {"status": "quarantined"}, ts=ts)
+        overlay.setdefault("_risk_holds", {})[m.id] = {"level": "restricted", "reason": why, "at": ts, "by": "dana"}
+        self.store.log_admin("dana", "restrict", m.id, why, {"level": "restricted"}, ts=ts)
         self.flush()
 
     def access(self, policy, overlay: dict) -> None:

@@ -87,8 +87,8 @@ def test_people_search(org):
     assert [x["principal"] for x in alice] == ["alice"] and alice[0]["department"] == "Engineering"
     by_mail = c.get("/api/admin/people", params={"q": "ALICE@acme"}).json()["rows"]
     assert by_mail[0]["principal"] == "alice"
-    q = c.get("/api/admin/people", params={"status": "quarantined"}).json()
-    assert {"frank"} <= {x["principal"] for x in q["rows"]} and all(x["status"] == "quarantined" for x in q["rows"])
+    q = c.get("/api/admin/people", params={"status": "restricted"}).json()
+    assert {"frank"} <= {x["principal"] for x in q["rows"]} and all(x["level"] == "restricted" for x in q["rows"])
     limited = c.get("/api/admin/people", params={"status": "limited"}).json()["rows"]
     assert limited and all(x["budget_scale"] < 1 and x["status"] == "active" for x in limited)
     fin = c.get("/api/admin/people", params={"department": "Finance", "sort": "usd", "limit": 5}).json()
@@ -104,7 +104,7 @@ def test_outliers(org):
     o = c.get("/api/admin/outliers", params={"days": 14, "limit": 5}).json()
     assert set(o) == {"cost", "risk", "growth"}
     assert o["cost"] and all(x["ratio"] >= 3 and x["usd"] >= 3 * x["team_median"] - 0.01 for x in o["cost"])
-    assert o["risk"][0]["principal"] == "frank" and o["risk"][0]["level"] == "quarantine"
+    assert o["risk"][0]["principal"] == "frank" and o["risk"][0]["level"] == "restricted"
     assert all(x["growth"] > 0 for x in o["growth"])
     eng = c.get("/api/admin/outliers", params={"department": "Engineering"}).json()
     assert all(x["department"] == "Engineering" for k in ("cost", "risk", "growth") for x in eng[k])
@@ -213,7 +213,7 @@ def test_incidents_summary(org):
     depts = {d["department"]: d for d in s["by_department"]}
     assert depts["Engineering"]["open"] >= 4 and depts["Engineering"]["people_at_risk"] >= 1
     assert len(s["trend"]["days"]) == 14 and sum(s["trend"]["opened"]) > 0 and sum(s["trend"]["closed"]) > 0
-    assert s["auto_actions_24h"] >= 2  # frank tightened then quarantined
+    assert s["auto_actions_24h"] >= 1  # frank restricted by the trap, the contractor by dana
 
 
 def test_leases_summary_and_filters(org):

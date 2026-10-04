@@ -797,14 +797,13 @@ detections:
     permission_bypass: { weight: 30, window_minutes: 60 }                 # --dangerously-skip-permissions
     unapproved_mcp_server: { weight: 25, window_minutes: 60, tools: [demo, argent, github, "acme-*"] }
     rejected_edit_storm: { weight: 15, count: 5, window_minutes: 10 }     # an agent pushing past "no"
-    decoy_touch: { weight: 100, window_minutes: 60 }     # opened a trap or moved its content on: quarantine at once
+    decoy_touch: { weight: 100, window_minutes: 60 }     # opened a trap or moved its content on: restricted at once
     decoy_mention: { weight: 30, window_minutes: 60 }    # asked for a trap by name: an alert, maybe just curiosity
+  # Incidents add their weight to the person's insider-risk score (insider_risk: watch 30, restricted 120).
   response:
-    auto: true
-    alert: 30
-    tighten: 60                # budgets drop to 25%
-    quarantine: 80             # read-only tools, 10% budget; only an admin lifts it
-    tighten_budget_scale: 0.25
+    auto: true                 # off: only recommend
+    restrict_rules: [decoy_touch]  # restricted at once (every request blocked); only an admin lifts it
+    tighten_budget_scale: 0.25 # what "Tighten budget" applies to someone under watch
 
 # principals:                  # usually written by the admin dashboard into admin_overlay
 #   carol: { status: quarantined, reason: "investigating incident 4f2a" }

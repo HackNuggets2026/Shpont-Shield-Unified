@@ -9,7 +9,7 @@ Beats (the console tab to show is in brackets):
   3. Simulators: the cap holds, usage is metered per minute        [Resources: leases]
   4. Access grants: prod data needs a grant; approve it            [Requests, then Resources: grants]
   5. A trap: mallory opens the "unpublished" board pack            [Security: Traps, then mallory's page]
-  6. An insider escalates: probing, exfiltration -> quarantine     [Security, then carol's person page]
+  6. An insider escalates: probing, exfiltration -> restricted     [Security, then carol's person page]
 """
 
 from __future__ import annotations
@@ -87,7 +87,7 @@ def main() -> None:
         rows = http.get("/admin/people", params={"q": who}, headers=admin).json()["rows"]
         c = next((p for p in rows if p["principal"] == who), {})
         print(
-            f"   >> {who}: risk {c.get('risk')} ({c.get('level')}), {c.get('status')}, budget x{c.get('budget_scale')}"
+            f"   >> {who}: risk score {c.get('risk')}, level {c.get('level')}, budget x{c.get('budget_scale')}"
         )
 
     beat("1. Labelled work through the gateway", "Overview -> live activity")
@@ -130,7 +130,7 @@ def main() -> None:
     tool("mallory", "search_docs", {"query": "q3 board results"}, wf="data_analysis")  # listing it is harmless
     status("mallory")
     tool("mallory", "read_file", {"path": "finance/board-pack-Q3-2026-UNPUBLISHED.pdf"}, wf="data_analysis")
-    status("mallory")  # quarantined at once; she saw an ordinary file
+    status("mallory")  # restricted at once (every request blocked); she saw an ordinary file
     tool("mallory", "send_email", {"to": "m.brandt@mail.example", "body": "Q3 numbers, ref ACME-BP-Q3-7F2K"},
          wf="data_analysis")  # fmt: skip
 
@@ -143,7 +143,7 @@ def main() -> None:
     for token in ("ghp_" + "a1" * 18, "ghp_" + "b2" * 18, "ghp_" + "c3" * 18):
         chat("carol", f"why does git push fail with token {token}")
     status("carol")
-    tool("carol", "boot_simulator", wf="ui_qa")
+    tool("carol", "boot_simulator", wf="ui_qa")  # restricted: every request is blocked until an admin lifts it
     print(f"\n   console:  {args.gateway}/   (admin token {args.admin_token})")
     print(f"   carol:    {args.gateway}/console/people/carol")
 

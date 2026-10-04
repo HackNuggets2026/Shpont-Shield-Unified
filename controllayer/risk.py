@@ -10,7 +10,7 @@ import math
 import time
 from collections import OrderedDict, deque
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import httpx
 
@@ -41,11 +41,34 @@ class RiskEngine:
         self.sink_errors: deque[str] = deque(maxlen=50)
         self._tasks: set[asyncio.Task] = set()
         self._scored: OrderedDict[tuple[str, str, str], None] = OrderedDict()
+        # Detection incidents (controllayer/detections.py) feed the same score: each live incident adds
+        # its rule weight, decaying on this engine's half-life. Set by the layer: pid -> incidents.
+        self.incidents_of: Callable[[str], list[dict[str, Any]]] | None = None
 
-    def score(self, policy: Policy, pid: str, now: float | None = None) -> float:
+    def _reset_at(self, pid: str) -> float:
+        return self.state.data.get("risk_reset", {}).get(pid, 0.0)
+
+    def incident_points(self, policy: Policy, pid: str, now: float | None = None) -> float:
+        """Live incidents since the last reset, each its weight decayed to `now`."""
+        if self.incidents_of is None:
+            return 0.0
+        now = now or time.time()
+        hl = policy.insider_risk.half_life_hours * 3600
+        since = self._reset_at(pid)
+        return sum(
+            i["weight"] * math.pow(0.5, max(0.0, now - i["ts"]) / hl)
+            for i in self.incidents_of(pid)
+            if i["status"] in ("open", "acknowledged") and i["ts"] > since
+        )
+
+    def finding_score(self, policy: Policy, pid: str, now: float | None = None) -> float:
         s, at = self._scores.get(pid, (0.0, 0.0))
         now = now or time.time()
         return s * math.pow(0.5, (now - at) / 3600 / policy.insider_risk.half_life_hours)
+
+    def score(self, policy: Policy, pid: str, now: float | None = None) -> float:
+        """Points from findings plus points from detection incidents, both halving every half-life."""
+        return self.finding_score(policy, pid, now) + self.incident_points(policy, pid, now)
 
     def computed_level(self, policy: Policy, pid: str) -> str:
         s, lv = self.score(policy, pid), policy.insider_risk.levels
@@ -103,14 +126,27 @@ class RiskEngine:
         return max(found, key=LEVELS.index)
 
     def reset(self, pid: str) -> None:
+        """Zero the score: findings so far are forgotten and incidents until now stop counting
+        (they stay on file for review)."""
         self._scores.pop(pid, None)
+        self.state.data.setdefault("risk_reset", {})[pid] = time.time()
+        self.state.save()
+
+    def restrict(self, pid: str, reason: str, by: str) -> bool:
+        """Hold a principal at restricted (blocks every request) until security sets them back to auto.
+        Returns False when they were already held there."""
+        if (self.state.watch.get(pid) or {}).get("level") == "restricted":
+            return False
+        self.state.watch[pid] = {"level": "restricted", "reason": reason, "at": time.time(), "by": by}
+        self.state.save()
+        return True
 
     def restore_score(self, pid: str, score: float, at: float) -> None:
         """A score as it stood at `at` (seeded history); it decays from then on."""
         self._scores[pid] = (score, at)
 
     def _add(self, policy: Policy, pid: str, points: float, now: float) -> None:
-        self._scores[pid] = (self.score(policy, pid, now) + points, now)
+        self._scores[pid] = (self.finding_score(policy, pid, now) + points, now)
 
     def observe(self, policy: Policy, ctx: Context, v: Verdict, level_before: str) -> None:
         cfg = policy.insider_risk
@@ -235,6 +271,7 @@ class RiskEngine:
         pids = (
             set(self._scores) | set(self.state.watch) | {pid for pid in self.state.signals if self.signals(policy, pid)}
         )
+        pids |= {k.principal for k in policy.identity.api_keys.values() if self.incident_points(policy, k.principal)}
         rows = []
         for k in policy.identity.api_keys.values():
             if k.principal not in pids:

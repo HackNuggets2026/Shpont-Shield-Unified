@@ -713,10 +713,14 @@ class DetectionRule(_Strict):
 
 class RiskResponse(_Strict):
     auto: bool = True  # off: only alert and recommend
-    alert: float = 30
-    tighten: float = 60  # budget_scale drops to tighten_budget_scale
-    quarantine: float = 90
+    # Rules whose incident restricts the person at once (blocks every request until an admin lifts it).
+    restrict_rules: list[str] = Field(default_factory=lambda: ["decoy_touch"])
+    # The budget scale admins apply with "Tighten budget" while someone is under watch.
     tighten_budget_scale: float = Field(0.25, ge=0)
+    # Retired: levels come from insider_risk.levels now. Accepted so older overlays still load.
+    alert: float | None = None
+    tighten: float | None = None
+    quarantine: float | None = None
 
 
 class Detections(_Strict):

@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from controllayer.config import PolicyStore
+from controllayer.state import StateStore
 from controllayer.controls.budget import BudgetLedger
 from controllayer.detections import severity as incident_severity
 from controllayer.events import Ingestor
@@ -479,15 +480,19 @@ class Seeder:
                       evidence=[trap])  # fmt: skip
         self.incident(now - 14 * 60, "frank", "probing", "3+ blocked attempts, latest access_grant/grant_required",
                       "open", evidence=[*attempts, mail, *refused])  # fmt: skip
-        # Detections responded on their own: tighten after the exfiltration, quarantine the moment he opened the trap.
+        # The exfiltration put him under watch and an admin tightened his budget; opening the trap restricted
+        # him at once (every request blocked until an admin lifts it).
         auto = "auto:detections"
-        quarantined = "risk score 196.8 reached quarantine (80)"
-        self.store.log_admin(auto, "tighten", "frank", "risk score 72.4 reached tighten (60)",
-                             {"budget_scale": 0.25}, ts=t_exfil + 1)  # fmt: skip
-        self.store.log_admin(auto, "quarantine", "frank", quarantined, {"status": "quarantined"}, ts=t_trap + 2)
+        restricted = "high-severity incident: restricted at once"
+        self.store.log_admin(dana, "tighten", "frank", "under watch after the exfiltration attempt",
+                             {"budget_scale": 0.25}, ts=t_exfil + 60)  # fmt: skip
         self.overlay["principals"].setdefault("frank", {}).update(
-            status="quarantined", budget_scale=0.25, reason=quarantined, by=auto, since=t_trap + 2,
+            budget_scale=0.25, reason="under watch after the exfiltration attempt", by=dana, since=t_exfil + 60,
         )  # fmt: skip
+        self.store.log_admin(auto, "restrict", "frank", restricted, {"level": "restricted"}, ts=t_trap + 2)
+        self.overlay.setdefault("_risk_holds", {})["frank"] = {
+            "level": "restricted", "reason": restricted, "at": t_trap + 2, "by": auto,
+        }  # fmt: skip
         self.store.log_admin(dana, "view_events", "frank", "reviewing the exfiltration incident", ts=now - 6 * 60)
 
     def running_now(self) -> None:
@@ -563,7 +568,12 @@ def seed(
     except BaseException:
         store.db.execute("ROLLBACK")
         raise
+    holds = s.overlay.pop("_risk_holds", {})
     policies.write_overlay(s.overlay)
+    if holds:  # insider-risk levels held by security or by a trap (the gateway's runtime state)
+        state = StateStore(policies.data_path("data/state.json"))
+        state.watch.update(holds)
+        state.save()
     window = now - days * DAY
     totals = store._q("SELECT COUNT(*) n, COALESCE(SUM(usd), 0) usd FROM usage WHERE metered=1 AND ts>=?", (window,))[0]
     return {

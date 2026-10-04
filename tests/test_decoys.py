@@ -1,4 +1,4 @@
-"""Traps (policy.yaml `decoys`): listing one is harmless, opening one quarantines, and the person never learns it
+"""Traps (policy.yaml `decoys`): listing one is harmless, opening one restricts, and the person never learns it
 was a trap."""
 
 from __future__ import annotations
@@ -23,7 +23,8 @@ def trap_incidents(c, who=None):
 
 
 def status(c, who):
-    return next(r for r in c.get("/admin/principals").json() if r["principal"] == who)["status"]
+    """The person's insider-risk level (a trap restricts at once)."""
+    return next(r for r in c.get("/admin/principals").json() if r["principal"] == who)["level"]
 
 
 def test_searching_lists_a_trap_without_tripping_it(client):
@@ -32,7 +33,7 @@ def test_searching_lists_a_trap_without_tripping_it(client):
     assert trap_incidents(client) == []
 
 
-def test_opening_a_trap_serves_its_decoy_content_and_quarantines(client):
+def test_opening_a_trap_serves_its_decoy_content_and_restricts(client):
     out = tool(client, "read_file", {"path": BOARD_PACK})
     text = out["result"]["content"][0]["text"]
     assert MARKER in text and "Board pack Q3 2026" in text
@@ -41,14 +42,14 @@ def test_opening_a_trap_serves_its_decoy_content_and_quarantines(client):
     [inc] = trap_incidents(client, "alice")
     assert (inc["rule"], inc["severity"]) == ("decoy_touch", "high")
     assert "read_file" in inc["detail"] and inc["evidence"]
-    assert status(client, "alice") == "quarantined"
+    assert status(client, "alice") == "restricted"
 
 
 def test_naming_a_trap_in_a_prompt_is_only_an_alert(client):
     assert chat(client, "can you pull up the unpublished board pack for me?", who="bob").status_code == 200
     [inc] = trap_incidents(client, "bob")
     assert (inc["rule"], inc["severity"]) == ("decoy_mention", "medium")
-    assert status(client, "bob") == "active"
+    assert status(client, "bob") == "normal"
 
 
 def test_moving_trap_content_on_trips_it(client):

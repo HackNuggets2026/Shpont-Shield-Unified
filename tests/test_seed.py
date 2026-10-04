@@ -32,7 +32,7 @@ def test_gateway_runs_on_a_seeded_month(policy_dir, tmp_path):
     c = TestClient(create_app(policy_dir / "policy.yaml", watch=False, data_dir=data), headers={"x-admin-token": ADMIN})
     people = {r["principal"]: r for r in c.get("/api/admin/principals").json()}
     assert len(people) >= 12
-    assert people["frank"]["status"] == "quarantined" and people["frank"]["level"] == "quarantine"
+    assert people["frank"]["level"] == "restricted" and people["frank"]["budget_scale"] == 0.25
     open_rules = {i["rule"] for i in c.get("/api/admin/incidents", params={"status": "open"}).json()["incidents"]}
     assert {"exfiltration", "probing"} <= open_rules
     inc = next(

@@ -59,9 +59,11 @@ class ControlLayer:
         sync_directory(self.usage, p)
         self.ledger = BudgetLedger(self.usage)
         self.leases = LeaseTracker(self.usage, self.ledger)
-        # Two risk views: `detections` (behaviour rules over the usage store, incidents, automatic responses)
-        # and `risk` (insider-risk levels from findings and external signals).
+        # One risk score per person, kept by `risk` (findings, external signals, levels normal < watch <
+        # restricted); `detections` opens incidents from behaviour rules, and each adds its weight to it.
         self.detections = DetectionEngine(self.usage, store)
+        self.detections.risk = self.risk
+        self.risk.incidents_of = self.detections.of
         self.leases.on_signal = self.detections.signal
         self.ingestor = Ingestor(self.usage, self.ledger, store)
         self.ingestor.listeners.append(self.detections.observe_event)
