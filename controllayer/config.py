@@ -308,6 +308,15 @@ class PiiModelControl(ControlBase):
         return "off" if v is False else v
 
 
+DEFAULT_CUES = (
+    r"\b(instruct|instrukc|instrucc|anweisung|polecen|prompt|rules?\b|guidelines?|guidance|polic(y|ies)|told\b)",
+    r"\b(system|previous|prior\b|earlier|above\b|poprzedni|vorherig|ignor|zignoruj|forget|disregard|override)",
+    r"\b(bypass|pretend|role|act as|you are (now|no longer)|from (now|here) on|obey|developer mode|jailbreak|dan\b)",
+    r"\b(unrestricted|uncensored|reveal|hidden|secret|confidential|configur|setup|verbatim|restriction|filter)",
+    r"\b(guardrail|safety|assistant|ai\b|agents?\b|password|credential|exfiltrat)",
+)
+
+
 class SemanticClassifier(_Strict):
     """Local CPU classifier (`backend: classifier`, or `auto` when its files are present)."""
 
@@ -316,6 +325,12 @@ class SemanticClassifier(_Strict):
     controls: list[str] = Field(default_factory=lambda: ["prompt_injection"])
     threshold: Probability = 0.9  # P(injection) at or above this triggers the control's mode
     min_chars: int = Field(24, ge=0)  # shorter inputs (and shorter JSON strings) keep the keyword answer
+    # The model also fires on people sharing their own data ("My card is 4111 ..., book the flight"). A score
+    # over the threshold applies the control's mode only when the text talks to or about the AI's instructions
+    # (one of these regexes, case-insensitive, on the decoded text); otherwise it is capped at `uncued`.
+    # An empty list turns the check off.
+    cues: list[str] = Field(default_factory=lambda: list(DEFAULT_CUES))
+    uncued: Action = Action.WARN
     threads: int = Field(2, ge=1)
     download: bool = True  # `backend: classifier` fetches the model on first use; `auto` never downloads
 

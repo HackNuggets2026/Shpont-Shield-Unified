@@ -26,6 +26,7 @@ class Answer:
     confidence: float = 1.0
     source: str | None = None  # "classifier" | "keyword" when not a decision model
     threshold: float | None = None  # set by the classifier: p >= threshold triggers the control's mode
+    uncued: str | None = None  # set by the classifier when the text has no instruction cue: the action cap
 
 
 @dataclass
@@ -214,9 +215,17 @@ class ClassifierBackend:
         segs = self.segments(text) if ours else []
         if segs:
             p = await asyncio.to_thread(self._score, segs)
+            cues = self.cfg.cues
+            plain = semantic_model.normalize(text)
+            cued = not cues or any(re.search(c, plain, re.I) for c in cues)
             for n in ours:
                 result.answers[n] = Answer(
-                    "noul", p, confidence=_noul_confidence(p), source="classifier", threshold=self.cfg.threshold
+                    "noul",
+                    p,
+                    confidence=_noul_confidence(p),
+                    source="classifier",
+                    threshold=self.cfg.threshold,
+                    uncued=None if cued else str(self.cfg.uncued),
                 )
         return result
 

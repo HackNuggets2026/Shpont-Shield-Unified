@@ -60,7 +60,9 @@ def _hints(controls: dict[str, SemanticControl]) -> dict[str, list[str]]:
 
 def _proposed(c: SemanticControl, a: Answer) -> Action:
     if c.type == "noul" and a.threshold is not None:  # classifier: one cut-off, the control's own mode
-        return c.mode if a.p >= a.threshold else Action.ALLOW
+        if a.p < a.threshold:
+            return Action.ALLOW
+        return c.mode.cap(Action(a.uncued)) if a.uncued else c.mode
     if c.type == "noul":
         return c.thresholds.action_for(a.p)
     return c.actions.get(a.choice or "", Action.ALLOW)
@@ -150,6 +152,8 @@ class SemanticGuard:
             label = f"p={a.p:.2f}" if c.type == "noul" else f"{a.choice} p={a.p:.2f}"
             if a.source == "classifier":
                 label = f"classifier {label} (threshold {a.threshold:.2f})"
+                if a.uncued:
+                    label += f", no instruction cue: at most {a.uncued}"
             elif a.source == "keyword":
                 label = f"keyword {label}"
             out.append(

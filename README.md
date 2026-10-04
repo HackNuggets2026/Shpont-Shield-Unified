@@ -85,7 +85,7 @@ Measured on the red-team corpus (23 injection attacks, 30 benign prompts, plus t
 | Keyword fallback | 12 / 23 | 0 / 30 | ~0.2 ms |
 | Classifier, P >= 0.9 | 23 / 23 | 2 / 30 | 27 ms p50, 41 ms p95 (2 CPU threads) |
 
-The two false positives were a short JSON tool result (now skipped) and "Which test card numbers does the payment sandbox accept?". The corpus is small and self-written: a strong signal, not a benchmark.
+The two false positives were a short JSON tool result (now skipped) and "Which test card numbers does the payment sandbox accept?". The model also fires on people sharing their own data ("My card is 4111 1111 1111 1111, please book the flight" scores 1.00). So a hit applies the control's mode only when the text talks to or about the AI's instructions (`semantic.classifier.cues`: ignore, instructions, system prompt, role, reveal, ... in any of a few languages); without a cue it is capped at `uncued: warn`, and the card is redacted by PII instead of blocked as an injection. The corpus is small and self-written: a strong signal, not a benchmark.
 
 ## Console
 
