@@ -979,8 +979,10 @@ def _merge(base: dict, patch: dict, delete_none: bool = False) -> None:
             base[k] = v
 
 
-# What the admin overlay may touch: restrictions and limits, never identity, upstreams or detectors.
+# What the admin overlay may touch: restrictions, limits and the guardrail controls' switches and
+# thresholds (console Controls page), never identity or upstreams.
 OVERLAY_KEYS = {"principals", "menu", "budgets", "catalog", "resources", "detections", "quarantine"}
+OVERLAY_KEYS |= {"pii", "pii_model", "secrets", "signatures", "tool_access", "semantic_controls"}
 
 
 _ENV = re.compile(r"\$\{(\w+)(?::-([^}]*))?\}")

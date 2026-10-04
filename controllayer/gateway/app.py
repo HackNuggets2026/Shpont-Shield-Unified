@@ -32,7 +32,7 @@ from ..decision import DecisionBackend
 from ..engine import ControlLayer, flatten
 from ..risk import LEVELS, integration_of
 from ..types import Action, Context, Direction, Verdict
-from . import anthropic, broker, catalog, console_api, governance, hooks, ingest, mcp_demo, otel
+from . import anthropic, broker, catalog, console_api, controls_api, governance, hooks, ingest, mcp_demo, otel
 from .upstream import UpstreamClient
 
 # The built console (web/: make web). Absent: / says how to build it.
@@ -865,32 +865,7 @@ def create_app(
     async def summary():
         a = layer.audit
         p = store.policy
-        controls = [
-            {
-                "name": n,
-                "kind": "deterministic",
-                "enabled": c.enabled,
-                "mode": c.mode.value,
-                "shadow": c.shadow,
-                "hits": a.controls.get(n, 0),
-            }
-            for n, c in (
-                ("secrets", p.secrets),
-                ("pii", p.pii),
-                ("signatures", p.signatures),
-                ("tool_access", p.tool_access),
-            )
-        ] + [
-            {
-                "name": n,
-                "kind": "semantic",
-                "enabled": c.enabled,
-                "mode": c.mode.value,
-                "shadow": c.shadow,
-                "hits": a.controls.get(n, 0),
-            }
-            for n, c in p.semantic_controls.items()
-        ]
+        controls = controls_api.control_rows(p, a)
         return {
             "policy": {"name": p.name, "version": p.version, "reloads": store.reloads, "last_error": store.last_error},
             "demo_mode": p.identity.demo_mode,
@@ -1325,6 +1300,7 @@ def create_app(
     ingest.register(app, store, layer, _api_key)
     otel.register(app, store, layer, _api_key)
     hooks.register(app, store, layer, _api_key, _json_object)
+    controls_api.register(app, store, layer, _json_object)
 
     @app.middleware("http")
     async def api_prefix(request: Request, call_next):
