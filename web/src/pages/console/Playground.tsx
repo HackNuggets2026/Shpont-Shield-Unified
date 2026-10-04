@@ -1,14 +1,15 @@
 // Playground: send one prompt, reply, tool call or tool description through the guard as any person or agent,
 // and see every control's decision, what would be forwarded and where the time went. Unmetered and audited
 // as channel "dashboard": a run never costs the person budget or risk points.
-import { useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useMutation, useQuery } from "@tanstack/react-query";
 import { admin, tryAs, type PrincipalRow, type TryDirection, type TryRequest, type TryResult } from "../../api";
 import { DecisionPill, decisionTone } from "../../components/pills";
 import { Button, Card, Empty, ErrorBox, Mono, PageHeader, Pill, TONE_COLOR, cx, type Tone } from "../../components/ui";
 import { IconBolt, IconClock, IconTerminal, IconX } from "../../components/icons";
 import { ago } from "../../lib/format";
+import { org } from "../../orgApi";
 
 const DIRECTIONS: { value: TryDirection; label: string; hint: string }[] = [
   { value: "input", label: "Prompt (input)", hint: "what a person or agent sends to a model" },
@@ -99,11 +100,10 @@ interface QuickPick {
 function quickPicks(rows: PrincipalRow[]): QuickPick[] {
   const active = rows.filter((r) => r.status === "active");
   const byRisk = (a: PrincipalRow, b: PrincipalRow) => b.risk - a.risk;
-  const clean =
-    active.find((r) => r.principal === "alice" && r.level === "none" && !r.open_incidents) ??
-    active.filter((r) => r.level === "none" && !r.open_incidents).sort((a, b) => a.risk - b.risk)[0];
-  const watch = active.filter((r) => r.level !== "none" && r.level !== "quarantine").sort(byRisk)[0];
-  const restricted = rows.filter((r) => r.status === "quarantined" || r.status === "revoked" || r.level === "quarantine").sort(byRisk)[0];
+  const calm = (r: PrincipalRow) => r.level === "normal" && !r.open_incidents && r.budget_scale >= 1;
+  const clean = active.find((r) => r.principal === "alice" && calm(r)) ?? active.filter(calm).sort((a, b) => a.risk - b.risk)[0];
+  const watch = active.filter((r) => r.level === "watch").sort(byRisk)[0];
+  const restricted = rows.filter((r) => r.level === "restricted" || r.status !== "active").sort(byRisk)[0];
   const out: QuickPick[] = [];
   if (clean) out.push({ label: "No concerns", tone: "good", p: clean });
   if (watch) out.push({ label: "On watch", tone: "warn", p: watch });
@@ -112,13 +112,13 @@ function quickPicks(rows: PrincipalRow[]): QuickPick[] {
 }
 
 function personTone(p: PrincipalRow): Tone {
-  if (p.status !== "active" || p.level === "quarantine") return "bad";
-  return p.level === "none" ? "good" : "warn";
+  if (p.status !== "active" || p.level === "restricted") return "bad";
+  return p.level === "normal" ? "good" : "warn";
 }
 
 function personState(p: PrincipalRow): string {
   if (p.status !== "active") return p.status;
-  return p.level === "none" ? "no concerns" : `${p.level} · risk ${Math.round(p.risk)}`;
+  return p.level === "normal" ? "no concerns" : `${p.level} · risk ${Math.round(p.risk)}`;
 }
 
 /** Catalog model globs as concrete names a person could ask for ("llama3.2:*" becomes "llama3.2:latest"). */
@@ -143,9 +143,20 @@ export function Playground() {
   const [shown, setShown] = useState<Run | null>(() => loadHistory()[0] ?? null);
   const box = useRef<HTMLTextAreaElement>(null);
 
+  // The datalist and the "who is this" line search the whole directory (the at-risk list is capped at 200).
+  const term = useDebounced(principal.trim(), 250);
+  const search = useQuery({
+    queryKey: ["admin", "people", "playground", term],
+    queryFn: () => org.people({ q: term, limit: 20 }),
+    enabled: term.length > 0,
+    staleTime: 30_000,
+    placeholderData: keepPreviousData,
+  });
   const rows = useMemo(() => people.data ?? [], [people.data]);
   const picks = useMemo(() => quickPicks(rows), [rows]);
-  const who = rows.find((r) => r.principal === principal);
+  const found: PrincipalRow[] = search.data?.rows ?? [];
+  const options = found.length ? found : rows;
+  const who = found.find((r) => r.principal === principal.trim()) ?? rows.find((r) => r.principal === principal.trim());
   const models = useMemo(() => {
     const globs = (catalog.data?.classes.consumable ?? []).filter((c) => c.category === "ai_model").flatMap((c) => c.models);
     return globs.length ? modelNames(globs) : FALLBACK_MODELS;
@@ -240,7 +251,7 @@ export function Playground() {
                   spellCheck={false}
                 />
                 <datalist id="playground-people">
-                  {rows.map((r) => (
+                  {options.map((r) => (
                     <option key={r.principal} value={r.principal}>
                       {`${r.team} · ${r.role} · ${personState(r)}`}
                     </option>
@@ -276,7 +287,7 @@ export function Playground() {
                         {personState(who)}
                       </Pill>
                     </span>
-                  ) : people.isLoading ? (
+                  ) : people.isLoading || search.isFetching || term !== principal.trim() ? (
                     "Loading people…"
                   ) : (
                     "Unknown id: the guard will treat the request as unauthenticated."
@@ -592,9 +603,9 @@ function Redacted({ text }: { text: string }) {
 }
 
 const STAGES: { key: string; label: string; sub?: boolean }[] = [
-  { key: "gates", label: "Gates (auth, model, tool, grants)" },
+  { key: "gates", label: "Gates" },
   { key: "budget", label: "Budgets" },
-  { key: "deterministic", label: "Deterministic checks" },
+  { key: "deterministic", label: "Deterministic" },
   { key: "control:secrets", label: "secrets", sub: true },
   { key: "control:pii", label: "pii", sub: true },
   { key: "control:signatures", label: "signatures", sub: true },
@@ -639,4 +650,13 @@ function Latency({ l }: { l: Record<string, number> }) {
 function ms(v: number | undefined): string {
   if (v === undefined || v === null) return "n/a";
   return v < 1 ? `${v.toFixed(2)} ms` : v < 100 ? `${v.toFixed(1)} ms` : `${Math.round(v)} ms`;
+}
+
+function useDebounced<T>(value: T, ms: number): T {
+  const [v, setV] = useState(value);
+  useEffect(() => {
+    const t = setTimeout(() => setV(value), ms);
+    return () => clearTimeout(t);
+  }, [value, ms]);
+  return v;
 }
