@@ -48,7 +48,12 @@ def test_stats_buckets_by_time():
     now = 10_000.0
     events = [
         {"ts": now - 5, "action": "allow", "findings": [], "latency_ms": {"total": 1.0}},
-        {"ts": now - 65, "action": "block", "reason": "r", "findings": [{"control": "c", "category": "k", "action": "block"}]},
+        {
+            "ts": now - 65,
+            "action": "block",
+            "reason": "r",
+            "findings": [{"control": "c", "category": "k", "action": "block"}],
+        },
         {"ts": now - 9999, "action": "allow", "findings": []},  # outside the window
     ]
     s = stats(events, 120, 60, now)
@@ -61,11 +66,16 @@ def test_export_honours_filters(client):
     traffic(client)
     blocked = client.get("/admin/audit/export", params={"format": "jsonl", "action": "block"}).text.splitlines()
     assert blocked and all(json.loads(line)["action"] == "block" for line in blocked)
-    rows = list(csv.DictReader(io.StringIO(client.get("/admin/audit/export", params={"format": "csv", "q": "weather"}).text)))
+    rows = list(
+        csv.DictReader(io.StringIO(client.get("/admin/audit/export", params={"format": "csv", "q": "weather"}).text))
+    )
     assert rows == [] or all(r["action"] for r in rows)
     allowed = client.get("/admin/audit/export", params={"format": "csv", "action": "allow"}).text
     assert "block" not in {r["action"] for r in csv.DictReader(io.StringIO(allowed))}
-    ocsf = [json.loads(x) for x in client.get("/admin/audit/export", params={"format": "ocsf", "action": "block"}).text.splitlines()]
+    ocsf = [
+        json.loads(x)
+        for x in client.get("/admin/audit/export", params={"format": "ocsf", "action": "block"}).text.splitlines()
+    ]
     assert len(ocsf) == len(blocked)
     assert client.get("/admin/audit/export", params={"format": "jsonl", "control": "nope"}).text == ""
     future = client.get("/admin/audit/export", params={"since": time.time() + 60}).text
