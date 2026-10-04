@@ -723,9 +723,38 @@ export interface ControlsSummary {
   top_categories: [string, number][];
   shadow_would_have: [string, number][];
   latency_ms: Record<string, LatencyStat>;
+  budgets: BudgetsToday;
+}
+
+/** Today's budget ledger from /admin/summary: one row per scope that has a limit or use today. */
+export interface BudgetsToday {
+  day: string;
+  scopes: BudgetScope[];
+  models: { model: string; requests: number; tokens: number; usd: number; compute_seconds: number }[];
+}
+
+type PolicyLimits = { requests_per_minute: number | null; tokens_per_day: number | null; usd_per_day: number | null };
+/** GET /admin/policy: the active policy (keys masked), as data and as YAML, with its load warnings. */
+export interface PolicyView {
+  version: string;
+  reloads: number;
+  last_error: string | null;
+  warnings: string[];
+  yaml: string;
+  policy: {
+    name: string;
+    budgets: {
+      enabled: boolean;
+      shadow: boolean;
+      per_principal: PolicyLimits;
+      per_team: Record<string, PolicyLimits>;
+      loop_guard: { max_identical_calls: number; window_seconds: number };
+    };
+  } & Record<string, unknown>;
 }
 
 export const controlsApi = {
+  policy: () => get<PolicyView>(`${A}/policy`),
   summary: () => get<ControlsSummary>(`${A}/summary`),
   edit: (name: string, body: Partial<{ enabled: boolean; mode: ControlMode; shadow: boolean; threshold: number }>) =>
     request<Ok>("PATCH", `${A}/controls/${encodeURIComponent(name)}`, body),

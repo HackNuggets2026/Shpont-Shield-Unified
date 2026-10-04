@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any
 
 import httpx
+import yaml
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -46,6 +47,8 @@ from . import (
     redteam,
 )
 from .upstream import UpstreamClient
+
+_YAML_DUMPER = getattr(yaml, "CSafeDumper", yaml.SafeDumper)
 
 # The built console (web/: make web). Absent: / says how to build it.
 WEB_DIST = Path(__file__).resolve().parents[2] / "web" / "dist"  # ACL_WEB_DIST overrides
@@ -1071,6 +1074,8 @@ def create_app(
             "last_error": store.last_error,
             "warnings": policy_warnings(p),
             "policy": data,
+            # The same policy as YAML for the read-only view (keys masked as above).
+            "yaml": yaml.dump(data, Dumper=_YAML_DUMPER, sort_keys=False, allow_unicode=True, width=120),
         }
 
     @app.post("/admin/try")

@@ -4,8 +4,9 @@
 import { Fragment, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { controlsApi, type ControlMode, type ControlProfile, type ControlRow, type ControlsSummary } from "../../api";
-import { Card, Dot, Empty, Mono, PageHeader, Pill, Q, Segmented, TableWrap, Toggle, cx, type Tone } from "../../components/ui";
+import { controlsApi, type BudgetScope, type ControlMode, type ControlProfile, type ControlRow, type ControlsSummary, type PolicyView } from "../../api";
+import { Card, Dot, Empty, Meter, Mono, PageHeader, Pill, Q, Segmented, TableWrap, Toggle, cx, type Tone } from "../../components/ui";
+import { tokens as fmtTokens, usd } from "../../lib/format";
 import { IconAlert, IconChevronRight, IconX } from "../../components/icons";
 
 const MODES: ControlMode[] = ["allow", "log", "warn", "redact", "block"];
@@ -37,6 +38,7 @@ export function ControlsPage() {
   const qc = useQueryClient();
   const q = useQuery({ queryKey: ["admin", "controls", "summary"], queryFn: controlsApi.summary, refetchInterval: 10_000 });
   const prof = useQuery({ queryKey: ["admin", "controls", "profile"], queryFn: controlsApi.profile, refetchInterval: 30_000 });
+  const pol = useQuery({ queryKey: ["admin", "controls", "policy"], queryFn: controlsApi.policy, refetchInterval: 30_000 });
   const [error, setError] = useState<string | null>(null);
   const refresh = () => qc.invalidateQueries({ queryKey: ["admin", "controls"] });
   const onError = (e: unknown) => {
@@ -108,8 +110,12 @@ export function ControlsPage() {
               >
                 <ControlTable s={s} busy={edit.isPending || profile.isPending} edit={(name, body) => edit.mutate({ name, body })} />
               </Card>
-              <Latency s={s} />
+              <div className="space-y-4">
+                <Latency s={s} />
+                <BudgetsToday s={s} policy={pol.data} />
+              </div>
             </div>
+            {pol.data && <PolicyFile p={pol.data} />}
           </>
         )}
       </Q>
@@ -389,6 +395,124 @@ function Latency({ s }: { s: ControlsSummary }) {
             </span>
           </li>
         </ul>
+      )}
+    </Card>
+  );
+}
+
+/** How full a scope is: the larger of its token and dollar shares (0 when it has no limit). */
+function fill(r: BudgetScope): number {
+  return Math.max(r.tokens_limit ? r.tokens / r.tokens_limit : 0, r.usd_limit ? r.usd / r.usd_limit : 0);
+}
+
+const SCOPE_LABEL: Record<string, string> = { global: "Whole company", team: "Team", principal: "Person" };
+
+function BudgetsToday({ s, policy }: { s: ControlsSummary; policy?: PolicyView }) {
+  const [all, setAll] = useState(false);
+  const rows = (s.budgets?.scopes ?? []).filter((r) => r.tokens_limit || r.usd_limit).sort((a, b) => fill(b) - fill(a));
+  const shown = all ? rows : rows.slice(0, 6);
+  const b = policy?.policy.budgets;
+  const rpm = b?.per_principal.requests_per_minute;
+  return (
+    <Card
+      title="Budgets today"
+      subtitle={s.budgets ? `Used against each limit on ${s.budgets.day} (UTC), fullest first` : "Today"}
+      actions={b && !b.enabled ? <Pill tone="warn">off</Pill> : b?.shadow ? <Pill tone="info">shadow</Pill> : undefined}
+    >
+      {rows.length === 0 ? (
+        <Empty title="No limits in use" hint="Scopes with a daily limit appear here." />
+      ) : (
+        <ul className="space-y-2.5">
+          {shown.map((r) => {
+            const f = fill(r);
+            const byUsd = r.usd_limit != null && (!r.tokens_limit || r.usd / r.usd_limit >= r.tokens / r.tokens_limit);
+            return (
+              <li key={`${r.scope}:${r.key}`} className="text-xs">
+                <div className="mb-1 flex justify-between gap-2">
+                  <span className="min-w-0 truncate text-ink2">
+                    {r.scope === "global" ? SCOPE_LABEL.global : (
+                      <>
+                        <span className="text-muted">{SCOPE_LABEL[r.scope] ?? r.scope}</span> {r.key}
+                      </>
+                    )}
+                  </span>
+                  <span className={cx("shrink-0 tabular-nums", f >= 1 ? "font-medium text-bad" : "text-muted")}>
+                    {byUsd ? (
+                      <>
+                        <b className="font-medium text-ink">{usd(r.usd)}</b> / {usd(r.usd_limit)}
+                      </>
+                    ) : (
+                      <>
+                        <b className="font-medium text-ink">{fmtTokens(r.tokens)}</b> / {fmtTokens(r.tokens_limit)} tok
+                      </>
+                    )}
+                  </span>
+                </div>
+                <Meter value={byUsd ? r.usd : r.tokens} max={byUsd ? r.usd_limit : r.tokens_limit} />
+              </li>
+            );
+          })}
+        </ul>
+      )}
+      {rows.length > 6 && (
+        <button type="button" onClick={() => setAll((v) => !v)} className="mt-2 text-xs text-accent hover:underline">
+          {all ? "Show fewer" : `Show all ${rows.length}`}
+        </button>
+      )}
+      {b && (
+        <p className="mt-3 border-t border-line/60 pt-2.5 text-[11px] leading-relaxed text-muted">
+          {rpm ? (
+            <>
+              Rate limit <b className="text-ink2">{rpm}/min</b> per person
+            </>
+          ) : (
+            "No per-person rate limit"
+          )}
+          {Object.entries(b.per_team)
+            .filter(([, l]) => l.requests_per_minute)
+            .map(([t, l]) => `, ${t} ${l.requests_per_minute}/min`)
+            .join("")}
+          . Loop guard allows <b className="text-ink2">{b.loop_guard.max_identical_calls}</b> identical calls within{" "}
+          {b.loop_guard.window_seconds} s and stops the next.
+        </p>
+      )}
+    </Card>
+  );
+}
+
+function PolicyFile({ p }: { p: PolicyView }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <Card
+      title="Policy file"
+      subtitle={
+        <>
+          <Mono>{p.policy.name}</Mono> version <Mono>{p.version}</Mono>, reloaded {p.reloads} times. Read-only; API keys and the admin token are
+          masked.
+        </>
+      }
+      actions={
+        <>
+          {p.warnings.length > 0 && <Pill tone="warn">{p.warnings.length === 1 ? "1 warning" : `${p.warnings.length} warnings`}</Pill>}
+          <button type="button" onClick={() => setOpen((v) => !v)} aria-expanded={open} className="inline-flex items-center gap-1 text-xs text-accent hover:underline">
+            <IconChevronRight className={cx("transition-transform", open && "rotate-90")} />
+            {open ? "Hide" : "Show YAML"}
+          </button>
+        </>
+      }
+    >
+      {p.warnings.length > 0 && (
+        <ul className="mb-2 space-y-1 text-xs text-warn">
+          {p.warnings.map((w) => (
+            <li key={w} className="flex items-start gap-1.5">
+              <IconAlert className="mt-0.5 shrink-0" />
+              <span className="min-w-0 break-words">{w}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+      {open && (
+        <pre className="max-h-[32rem] overflow-auto rounded-xl bg-ink/[0.04] p-3 font-mono text-[11px] leading-relaxed text-ink2">{p.yaml}</pre>
       )}
     </Card>
   );

@@ -206,3 +206,12 @@ def test_store_raw_text_toggle_applies_on_reload(client, policy_dir):
     client.post("/admin/policy/reload")
     chat(client, "raw please 4111 1111 1111 1111")
     assert "raw please 4111 1111 1111 1111" in client.get("/admin/audit/export").text
+
+
+def test_policy_view_has_yaml_without_keys(client):
+    import yaml
+
+    body = client.get("/admin/policy").json()
+    text = body["yaml"]
+    assert yaml.safe_load(text)["version"] == body["version"]
+    assert "dev-alice-key" not in text and "demo-admin-token" not in text
