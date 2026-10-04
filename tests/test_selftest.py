@@ -88,17 +88,19 @@ def test_policy_change_reports_regressions(tests_client, policy_dir: Path):
 def test_auto_run_after_a_policy_reload_is_debounced(tests_client, policy_dir: Path):
     app = tests_client.app
     st = app.state.selftest
-    st.debounce = 0.2
+    st.debounce = 60  # the timer never fires by itself here; the test fires it, so load cannot race it
     before = app.state.store.policy.version
     edit_policy(policy_dir, lambda d: d["models"]["allowed"].append("mistral:*"))
     app.state.store.reload()
+    first = st._timer
     edit_policy(policy_dir, lambda d: d["models"]["allowed"].append("phi3:*"))
     app.state.store.reload()  # a second edit inside the window restarts it: one run, not two
+    assert first is not st._timer and first.finished.is_set()  # cancelled
     assert st.pending == {"from": before, "since": pytest.approx(time.time(), abs=5)}
     assert tests_client.get("/admin/selftest/latest").json()["status"]["pending"]["from"] == before
-    _wait(lambda: st.latest() is not None and st.pending is None)
-    time.sleep(0.3)
-    assert len(st.history) == 1
+    st._timer.cancel()
+    st._fire()
+    assert st.pending is None and len(st.history) == 1
     res = st.latest()
     assert res["trigger"] == "auto"
     assert res["prev_version"] == before
