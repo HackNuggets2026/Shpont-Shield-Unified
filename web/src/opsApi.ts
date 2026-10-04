@@ -61,8 +61,8 @@ export interface IncidentSummary {
   by_department: { department: string; open: number; total: number; people_at_risk: number }[];
   trend: { days: string[]; opened: number[]; closed: number[] };
   auto_actions_24h: number;
-  /** Not in the contract yet: open incidents per severity. */
-  by_severity?: Record<string, number>;
+  /** Incidents per severity: `open` counts every open incident, `window` those raised in the window. */
+  by_severity?: { open: Record<string, number>; window: Record<string, number> };
   /** Not in the contract yet: rule × department counts for the heatmap. */
   by_rule_department?: { rule: string; department: string; open: number; total: number }[];
 }

@@ -5,17 +5,15 @@ import { admin } from "../../api";
 import { ops, type IncidentFilters } from "../../opsApi";
 import { ActivityFeed } from "../../components/ActivityFeed";
 import { AdminLog } from "../../components/AdminLog";
-import { Sparkline } from "../../components/charts";
 import { LevelPill, PersonStatusPill } from "../../components/pills";
 import { Card, Empty, ErrorBox, Kpi, Loading, PageHeader, Pill, Q, Segmented, Select, cx } from "../../components/ui";
-import { IconAlert, IconRadar, IconShield, IconUsers } from "../../components/icons";
+import { IconAlert } from "../../components/icons";
 import { DepartmentSelect, OrgLine, Pager, SearchBox, TeamSelect, useDepartments, useUrlFilters } from "../../components/opsKit";
 import { IncidentsTable } from "../../components/security/IncidentsTable";
 import { OpenedClosedChart } from "../../components/security/OpenedClosedChart";
 import { RiskMeter } from "../../components/security/RiskMeter";
 import { RuleDeptHeatmap, type Cell } from "../../components/security/RuleDeptHeatmap";
 import { countC } from "../../lib/compact";
-import { pct } from "../../lib/format";
 import { detectionPolicy, isAuto, ruleLabel, RULES } from "../../lib/security";
 
 type StatusFilter = "active" | "open" | "acknowledged" | "resolved" | "dismissed" | "all";
@@ -77,7 +75,7 @@ export function Security() {
   const [mode, setMode] = useState<"open" | "total">("open");
 
   const summary = useQuery({ queryKey: ["admin", "incidents", "summary", 30], queryFn: () => ops.incidentSummary(30), refetchInterval: 10_000 });
-  const openBySev = useOpenBySeverity(summary.data?.by_severity);
+  const openBySev = useOpenBySeverity(summary.data?.by_severity?.open);
   const matrix = useMatrix(summary.data?.by_rule_department, summary.isSuccess || summary.isError);
   const outliers = useQuery({
     queryKey: ["admin", "outliers", "risk", 20],
@@ -85,23 +83,6 @@ export function Security() {
     refetchInterval: 10_000,
   });
   const { q: org } = useDepartments();
-  const restricted = useQuery({
-    queryKey: ["admin", "people", "restricted-counts"],
-    queryFn: async () => {
-      const st = ["quarantined", "revoked", "limited"] as const;
-      const n = await Promise.all(
-        st.map((s) =>
-          ops
-            .people({ status: s, limit: 1 })
-            .then((r) => r.total)
-            .catch(() => null),
-        ),
-      );
-      return Object.fromEntries(st.map((s, i) => [s, n[i]])) as Record<(typeof st)[number], number | null>;
-    },
-    refetchInterval: 15_000,
-  });
-  const adherence = useQuery({ queryKey: ["admin", "adherence", "day", 30], queryFn: () => ops.adherenceByDay(30), refetchInterval: 30_000 });
   const acts = useQuery({ queryKey: ["admin", "actions", "all"], queryFn: () => admin.actions(), refetchInterval: 10_000 });
   const pol = useQuery({ queryKey: ["admin", "policy", "detections"], queryFn: detectionPolicy, staleTime: 60_000 });
 
@@ -128,22 +109,13 @@ export function Security() {
     const c = { open: sum("open"), acknowledged: sum("acknowledged"), resolved: sum("resolved"), dismissed: sum("dismissed"), all: sum("total") };
     return { ...c, active: c.open + c.acknowledged } as Record<StatusFilter, number>;
   }, [s]);
-  const openTotal = statusCounts?.open ?? (openBySev ? SEVERITIES.reduce((a, k) => a + (openBySev[k] ?? 0), 0) : undefined);
+  const openTotal = openBySev ? SEVERITIES.reduce((a, k) => a + (openBySev[k] ?? 0), 0) : statusCounts?.open;
   const atRisk = s ? s.by_department.reduce((a, d) => a + (d.people_at_risk ?? 0), 0) : (org.data?.totals.people_at_risk ?? undefined);
   const rules = useMemo(() => {
     const known = new Set([...(s?.by_rule.map((r) => r.rule) ?? []), ...Object.keys(RULES)]);
     return [...known].sort((a, b) => ruleLabel(a).localeCompare(ruleLabel(b)));
   }, [s]);
   const th = pol.data?.response ?? null;
-  const now = Date.now() / 1000;
-  const autos24 = (acts.data ?? []).filter((a) => isAuto(a) && now - a.ts < 86400);
-  const autoKinds = Object.entries(autos24.reduce<Record<string, number>>((m, a) => ({ ...m, [a.action]: (m[a.action] ?? 0) + 1 }), {})).sort(
-    (a, b) => b[1] - a[1],
-  );
-  const adh = adherence.data;
-  const adhTrend = (adh?.rows ?? []).filter((r) => r.total > 0).sort((a, b) => a.key.localeCompare(b.key));
-  const rs = restricted.data;
-  const restrictedTotal = rs ? (rs.quarantined ?? 0) + (rs.revoked ?? 0) + (rs.limited ?? 0) : null;
 
   const toTable = () => requestAnimationFrame(() => tableRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }));
   const pickCell = (rule: string, department: string) => {
@@ -163,7 +135,7 @@ export function Security() {
         subtitle="AI usage that looks like an attack, across the whole organization: by rule and department first, then the incidents that need a human."
       />
 
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <Kpi
           label="Open incidents"
           icon={<IconAlert />}
@@ -188,60 +160,6 @@ export function Security() {
               ))}
               {statusCounts && statusCounts.acknowledged > 0 && <span className="text-[11px]">+{countC(statusCounts.acknowledged)} acknowledged</span>}
             </span>
-          }
-        />
-        <Kpi
-          label="People at risk"
-          icon={<IconUsers />}
-          tone={rs?.quarantined ? "bad" : atRisk ? "warn" : undefined}
-          value={atRisk === undefined ? "…" : countC(atRisk)}
-          sub={
-            restrictedTotal === null ? (
-              "past the alert level"
-            ) : restrictedTotal === 0 ? (
-              "past the alert level · nobody restricted"
-            ) : (
-              <span>
-                restricted now:{" "}
-                {[
-                  rs!.quarantined && `${countC(rs!.quarantined)} quarantined`,
-                  rs!.revoked && `${countC(rs!.revoked)} revoked`,
-                  rs!.limited && `${countC(rs!.limited)} limited`,
-                ]
-                  .filter(Boolean)
-                  .join(" · ")}
-              </span>
-            )
-          }
-        />
-        <Kpi
-          label="Auto-responses, 24h"
-          icon={<IconRadar />}
-          tone={s?.auto_actions_24h ? "serious" : undefined}
-          value={s ? countC(s.auto_actions_24h) : "…"}
-          sub={
-            autoKinds.length
-              ? autoKinds
-                  .slice(0, 3)
-                  .map(([k, n]) => `${n} ${k.replace(/_/g, " ")}`)
-                  .join(" · ")
-              : "Nothing needed doing"
-          }
-        />
-        <Kpi
-          label="Policy adherence, 30d"
-          icon={<IconShield />}
-          tone={adh?.overall?.adherence != null && adh.overall.adherence < 0.95 ? "warn" : undefined}
-          value={adh ? pct(adh.overall?.adherence ?? null) : "…"}
-          sub={
-            adhTrend.length > 1 ? (
-              <span className="block">
-                <Sparkline values={adhTrend.map((r) => r.adherence ?? 1)} height={22} color="var(--s3)" />
-                <span>of {countC(adh?.overall?.total ?? 0)} checks needed no intervention</span>
-              </span>
-            ) : (
-              "checks that needed no intervention"
-            )
           }
         />
       </div>

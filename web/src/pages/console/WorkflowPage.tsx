@@ -14,7 +14,7 @@ import { Empty, ErrorBox, Loading, Skeleton, Toggle, Wash, cx } from "../../comp
 import { IconAlert, IconKey, IconLock, IconServer, IconUsers } from "../../components/icons";
 import { Panel, WfBadge, wfPath } from "../../components/wf/bits";
 import { CostPerRun } from "../../components/wf/CostPerRun";
-import { ago, count, minutes as fmtMinutes, money, pctAuto, titleCase, unitMoney, usd } from "../../lib/format";
+import { ago, count, minutes as fmtMinutes, money, pctAuto, titleCase, usd } from "../../lib/format";
 import { ruleLabel, SEVERITY_RANK, STATUS_RANK } from "../../lib/security";
 import { resourceWord, wfLabel, wfMeta } from "../../lib/workflows";
 import { useIncidentTags, useWorkflowBoard, useWorkflowByDeptSeries, useWorkflowTeams, type WfRow } from "../../lib/wfData";
@@ -303,16 +303,6 @@ function Settings({ wf }: { wf: Workflow }) {
 
 // ---- page --------------------------------------------------------------------------------------------
 
-function Stat({ label, value, sub }: { label: string; value: ReactNode; sub?: ReactNode }) {
-  return (
-    <div className="min-w-0 soft-card rounded-2xl px-4 py-3">
-      <div className="text-[11px] font-medium uppercase tracking-wide text-muted">{label}</div>
-      <div className="mt-1 truncate text-xl font-semibold tracking-tight text-ink">{value}</div>
-      {sub && <div className="mt-0.5 truncate text-xs text-muted">{sub}</div>}
-    </div>
-  );
-}
-
 export function WorkflowPage() {
   const { name = "" } = useParams();
   const b = useWorkflowBoard();
@@ -387,14 +377,12 @@ export function WorkflowPage() {
         </div>
       </div>
 
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
-        <Stat label="Spend, 30 days" value={money(r.usd)} sub={<><Delta cur={r.trend.recent} prev={r.trend.earlier} className="text-[11px]" title="Last 14 days vs the 14 before" /> 2 wks · {pctAuto(r.usd / (total || 1))} of all</>} />
-        <Stat label="Runs" value={count(r.runs)} sub={`${count(r.requests)} model & tool calls`} />
-        <Stat label="Typical run" value={unitMoney(r.p50)} sub="half cost less" />
-        <Stat label="Expensive run" value={unitMoney(r.p90)} sub="1 in 10 costs more" />
-        <Stat label="Adherence" value={pctAuto(r.adherence)} sub={`${count(r.blocked)} blocked`} />
-        <Stat label="Running now" value={Object.keys(r.wf.resources).length ? machines : "—"} sub={Object.keys(r.wf.resources).length ? Object.keys(r.wf.resources).map(resourceWord).join(", ") : "uses no machines"} />
-      </div>
+      <p className="tnum -mt-3 flex flex-wrap items-center gap-x-1.5 text-xs text-muted">
+        <span className="font-medium text-ink2">{money(r.usd)}</span> in 30 days
+        <Delta cur={r.trend.recent} prev={r.trend.earlier} className="text-[11px]" title="Last 14 days vs the 14 before" />
+        <span>· {pctAuto(r.usd / (total || 1))} of all AI spend · {count(r.runs)} runs · {pctAuto(r.adherence)} adherence, {count(r.blocked)} blocked</span>
+        {Object.keys(r.wf.resources).length > 0 && <span>· {machines} running now</span>}
+      </p>
 
       <div className="grid gap-5 lg:grid-cols-3">
         <div className="min-w-0 space-y-5 lg:col-span-2">

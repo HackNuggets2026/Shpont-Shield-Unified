@@ -1,66 +1,28 @@
 import { useState, type ReactNode } from "react";
 import { Link, useParams } from "react-router-dom";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
-import { org, orgPath, type OrgUnit, type UnitRow } from "../../orgApi";
-import { BarList, Sparkline, StackedChart } from "../../components/charts";
+import { org, orgPath, type OrgUnit } from "../../orgApi";
+import { BarList, StackedChart } from "../../components/charts";
 import { useWorkflowColors, WfName, wfLabel } from "../../lib/workflows";
 import { Breadcrumbs, DeptDot, Delta, OutliersList, Pager, UnitTable, useDeptColors } from "../../components/org";
-import { Card, ErrorBox, Loading, Meter, PageHeader, Pill, Q, Segmented, TableWrap, cx } from "../../components/ui";
-import { count, money, pctAuto, share, unitMoney, usd } from "../../lib/format";
+import { Card, ErrorBox, Loading, PageHeader, Pill, Q, Segmented, TableWrap, cx } from "../../components/ui";
+import { count, money, share, usd } from "../../lib/format";
 import { PEOPLE_PAGE, PeopleTable, usePeoplePage } from "./People";
 import { WINDOWS } from "./Overview";
 
-function Tile({ label, value, children, tone }: { label: string; value: ReactNode; children?: ReactNode; tone?: "bad" | "warn" }) {
-  return (
-    <div className="h-full soft-card rounded-2xl p-4">
-      <div className="text-xs font-medium text-muted">{label}</div>
-      <div className={cx("tnum mt-1.5 text-2xl font-semibold tracking-tight", tone === "bad" ? "text-bad" : tone === "warn" ? "text-warn" : "text-ink")}>{value}</div>
-      {children && <div className="mt-1.5 space-y-1 text-xs text-muted">{children}</div>}
-    </div>
-  );
-}
-
-function Tiles({ m, trend, orgUsd }: { m: UnitRow; trend: (number | null)[]; orgUsd?: number }) {
-  const t = trend.map((v) => v ?? 1);
-  return (
-    <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
-      <Tile label="Spend" value={money(m.usd)}>
-        <div>
-          <Delta cur={m.usd} prev={m.usd_prev} /> vs previous period ({money(m.usd_prev)})
-        </div>
-        {orgUsd ? <div>{share(m.usd / orgUsd)} of the organization</div> : null}
-      </Tile>
-      <Tile label="Policy adherence" value={pctAuto(m.adherence)} tone={(m.adherence ?? 1) < 0.95 ? "warn" : undefined}>
-        {t.length > 1 && (
-          <div className="-mx-1" title="Daily adherence">
-            <Sparkline values={t} color="var(--s3)" height={22} min={Math.min(0.9, ...t)} />
-          </div>
-        )}
-        <div>
-          {count(m.interventions)} interventions in {count(m.checks)} checks
-        </div>
-      </Tile>
-      <Tile label="People at risk" value={count(m.people_at_risk)} tone={m.people_at_risk ? "warn" : undefined}>
-        <div className={m.incidents_open ? "font-medium text-bad" : undefined}>{count(m.incidents_open)} open incidents</div>
-      </Tile>
-      <Tile label="Spend per active person" value={unitMoney(m.usd_per_active)}>
-        <Meter value={m.active} max={m.headcount || 1} tone="accent" />
-        <div>
-          {count(m.active)} of {count(m.headcount)} active ({share(m.headcount ? m.active / m.headcount : null)}) · Claude Code {count(m.claude_code_users)}
-        </div>
-      </Tile>
-    </div>
-  );
-}
-
 /** One chart card; the table view of the same window (workflows with cost per run, resources) is one toggle away. */
-function SpendCard({ u, days }: { u: OrgUnit; days: number }) {
+function SpendCard({ u, days, orgUsd }: { u: OrgUnit; days: number; orgUsd?: number }) {
   const [view, setView] = useState<"chart" | "workflows">("chart");
   const colors = useWorkflowColors();
   return (
     <Card
       title={`Spend by workflow, last ${days} days`}
-      subtitle={`${money(u.metrics.usd)} in total`}
+      subtitle={
+        <span className="tnum">
+          {money(u.metrics.usd)} in total <Delta cur={u.metrics.usd} prev={u.metrics.usd_prev} /> vs the previous {days} days
+          {orgUsd ? ` · ${share(u.metrics.usd / orgUsd)} of the organization` : ""}
+        </span>
+      }
       actions={
         <Segmented
           value={view}
@@ -197,6 +159,8 @@ export function OrgUnitPage({ kind }: { kind: "department" | "team" }) {
                 kind === "department" ? `${count(u.teams.length || u.metrics.teams || 0)} teams` : null,
                 `${count(u.metrics.headcount)} people`,
                 `${count(u.metrics.active)} active`,
+                u.metrics.incidents_open ? `${count(u.metrics.incidents_open)} open incidents` : null,
+                u.metrics.people_at_risk ? `${count(u.metrics.people_at_risk)} at risk` : null,
                 u.metrics.top_workflow ? `top workflow ${u.metrics.top_workflow}` : null,
               ]
                 .filter(Boolean)
@@ -216,10 +180,9 @@ export function OrgUnitPage({ kind }: { kind: "department" | "team" }) {
       <Q q={q} rows={10}>
         {(u) => (
           <div className={cx("space-y-5", q.isPlaceholderData && "opacity-60")}>
-            <Tiles m={u.metrics} trend={u.adherence_trend.values} orgUsd={orgQ.data?.totals.usd} />
             <div className="grid gap-4 xl:grid-cols-3">
               <div className="xl:col-span-2">
-                <SpendCard u={u} days={days} />
+                <SpendCard u={u} days={days} orgUsd={orgQ.data?.totals.usd} />
               </div>
               <Card title="Outliers" subtitle={`Individuals in this ${kind} worth a look`} flush className="h-full">
                 <OutliersList

@@ -8,7 +8,7 @@ import { Delta, UnitTable, useDeptColors, useOrg } from "../../components/org";
 import { SeverityPill } from "../../components/pills";
 import { Card, Empty, ErrorBox, Meter, PageHeader, Q, Segmented, Skeleton, TONE_COLOR, Wash, cx } from "../../components/ui";
 import { useWorkflowColors, wfLabel } from "../../lib/workflows";
-import { ago, count, money, pctAuto, share, times, unitMoney } from "../../lib/format";
+import { ago, count, money, share, times, unitMoney } from "../../lib/format";
 
 export const WINDOWS: { value: string; label: string }[] = [
   { value: "7", label: "7d" },
@@ -39,7 +39,7 @@ export function useCcValue(days: number, f: { department?: string; team?: string
   });
 }
 
-/** A big number with one line of context. Four of these are the whole story. */
+/** A big number with one line of context: spend against budget and open incidents, each linking to where it is acted on. */
 function Tile({
   label,
   value,
@@ -84,8 +84,8 @@ function Tiles() {
   if (o.isError) return <ErrorBox error={o.error} retry={() => o.refetch()} />;
   if (!o.data || !ov.data)
     return (
-      <div className="grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-4">
-        {Array.from({ length: 4 }, (_, i) => (
+      <div className="grid gap-3 sm:grid-cols-2 sm:gap-4">
+        {Array.from({ length: 2 }, (_, i) => (
           <Skeleton key={i} className="h-[136px] rounded-2xl" />
         ))}
       </div>
@@ -95,12 +95,13 @@ function Tiles() {
   const budget = v.global_usd_per_day ? v.global_usd_per_day * daysInMonth() : null;
   const over = budget ? v.spend.month_forecast > budget : false;
   return (
-    <div className="grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-4">
+    <div className="grid gap-3 sm:grid-cols-2 sm:gap-4">
       <Tile
         label="AI spend, month to date"
         value={money(v.spend.month_to_date)}
         tone={over ? "bad" : undefined}
         wash={over ? "bad" : "accent"}
+        to="/console/controls"
         aside={ts.data && <Sparkline values={ts.data.totals.slice(0, -1)} color="rgb(var(--accent))" height={36} min={0} />}
       >
         {budget ? <Meter value={v.spend.month_forecast} max={budget} /> : null}
@@ -112,25 +113,15 @@ function Tiles() {
           Last {DAYS} days {money(t.usd)} <Delta cur={t.usd} prev={t.usd_prev} />
         </div>
       </Tile>
-      <Tile label="Policy adherence" value={pctAuto(t.adherence)} tone={(t.adherence ?? 1) < 0.95 ? "warn" : undefined} wash={(t.adherence ?? 1) < 0.95 ? "warn" : "good"} to="/console/security">
-        <div>
-          {count(t.interventions)} interventions in {count(t.checks)} checks
-        </div>
-      </Tile>
       <Tile
-        label="People at risk"
-        value={count(t.people_at_risk)}
-        tone={t.people_at_risk ? "warn" : undefined}
+        label="Open incidents"
+        value={count(t.incidents_open)}
+        tone={t.incidents_open ? "bad" : undefined}
         wash={t.incidents_open ? "bad" : "good"}
-        to={orgPath.people({ sort: "risk" })}
+        to="/console/security"
       >
-        <div className={t.incidents_open ? "font-medium text-bad" : undefined}>
-          {count(t.incidents_open)} open incident{t.incidents_open === 1 ? "" : "s"}
-        </div>
-      </Tile>
-      <Tile label="Spend per active person" value={unitMoney(t.usd_per_active)} wash="cc" to={orgPath.root}>
-        <div>
-          {count(o.data.active)} of {count(o.data.headcount)} people used AI ({share(o.data.active / Math.max(o.data.headcount, 1))})
+        <div className={t.people_at_risk ? "font-medium text-warn" : undefined}>
+          {count(t.people_at_risk)} {t.people_at_risk === 1 ? "person" : "people"} past the alert level
         </div>
       </Tile>
     </div>

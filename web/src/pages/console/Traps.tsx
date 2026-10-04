@@ -5,8 +5,7 @@ import { admin } from "../../api";
 import { orgPath } from "../../orgApi";
 import { IncidentStatusPill } from "../../components/pills";
 import { TrapCard } from "../../components/security/Traps";
-import { Card, Empty, Kpi, PageHeader, Pill, Q, TableWrap } from "../../components/ui";
-import { IconAlert, IconLock, IconUsers } from "../../components/icons";
+import { Card, Empty, PageHeader, Pill, Q, TableWrap } from "../../components/ui";
 import { ago } from "../../lib/format";
 import { ruleLabel } from "../../lib/security";
 
@@ -20,13 +19,6 @@ export function TrapsPage() {
         title="Traps"
         subtitle="Decoys planted where people and agents look. Nothing legitimate ever touches one, so opening it quarantines at once. Asking for one by name is an alert. The person only ever sees “restricted material”."
       />
-
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <Kpi label="Traps planted" value={d ? d.decoys.length : "…"} icon={<IconLock />} />
-        <Kpi label="Touches, all time" value={d ? d.touches : "…"} tone={d?.touches ? "bad" : undefined} icon={<IconAlert />} />
-        <Kpi label="People caught" value={d ? d.caught : "…"} sub="opened a trap, not just asked" tone={d?.caught ? "bad" : undefined} icon={<IconUsers />} />
-        <Kpi label="Need review" value={d ? d.open : "…"} sub="open or acknowledged" tone={d?.open ? "warn" : undefined} />
-      </div>
 
       <Q q={q} rows={4}>
         {(x) =>
@@ -44,7 +36,7 @@ export function TrapsPage() {
         }
       </Q>
 
-      <Card title="Every touch" subtitle="Newest first. Open one for its evidence: the exact call or prompt." flush>
+      <Card title="Every touch" subtitle={`Newest first. Open one for its evidence: the exact call or prompt.${d?.open ? ` ${d.open} still need review.` : ""}`} flush>
         <Q q={q} rows={6}>
           {(x) =>
             x.events.length === 0 ? (

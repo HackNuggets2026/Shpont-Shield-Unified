@@ -4,7 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { admin, type Workflow } from "../../api";
 import { ReasonDialog } from "../../components/Dialog";
 import { TierPill } from "../../components/pills";
-import { Card, Empty, ErrorBox, PageHeader, Pill, Q, Stat, TableWrap, Toggle } from "../../components/ui";
+import { Card, Empty, ErrorBox, PageHeader, Pill, Q, TableWrap, Toggle } from "../../components/ui";
 import { count, money, share, tokens, unitMoney, usd } from "../../lib/format";
 import { org } from "../../orgApi";
 import { useDeptColors } from "../../components/org";
@@ -129,7 +129,6 @@ export function Workflows() {
     return out;
   }, [byDept.data]);
   const totalSpend = Object.values(spend30).reduce((a, b) => a + b, 0);
-  const totalRuns = (menu.data?.workflows ?? []).reduce((a, w) => a + w.measured.runs, 0);
   const totalCommits = (value.data?.rows ?? []).reduce((a, r) => a + r.commits, 0);
   const totalCc = (value.data?.rows ?? []).reduce((a, r) => a + r.claude_code_usd, 0);
   // Commits Claude Code reports without a workflow label cannot be priced per workflow; below half coverage a
@@ -146,17 +145,10 @@ export function Workflows() {
       <Q q={menu} rows={8}>
         {(m) => (
           <div className="space-y-6">
-            <div className="soft-card grid grid-cols-2 gap-4 rounded-2xl px-5 py-4 sm:grid-cols-3 xl:grid-cols-6">
-              <Stat label="Workflows" value={`${m.workflows.filter((w) => w.enabled).length} enabled / ${m.workflows.length}`} />
-              <Stat label="Need approval" value={m.workflows.filter((w) => w.approval !== "none").length} />
-              <Stat label="Runs, 30 days" value={count(totalRuns)} />
-              <Stat label="Spend, 30 days" value={money(totalSpend)} />
-              <Stat label="Claude Code $ / commit" value={totalCommits ? `${unitMoney(totalCc / totalCommits)} · ${count(totalCommits)} commits` : "—"} />
-              <Stat
-                label="Labels"
-                value={`${m.require_label ? "required" : "optional"} · ${m.classify_unlabeled ? "unlabeled auto-classified" : "unlabeled kept"}`}
-              />
-            </div>
+            <p className="-mt-3 text-xs text-muted">
+              Workflow labels are {m.require_label ? "required" : "optional"}; unlabeled traffic is {m.classify_unlabeled ? "classified automatically" : "kept as unlabeled"}.
+              {totalCommits ? ` Claude Code costs ${unitMoney(totalCc / totalCommits)} per commit over ${count(totalCommits)} commits.` : ""}
+            </p>
 
             <MenuGrid />
 

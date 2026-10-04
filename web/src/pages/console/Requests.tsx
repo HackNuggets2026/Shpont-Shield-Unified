@@ -4,8 +4,8 @@ import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-quer
 import { admin, type AccessRequest, type CatalogItem, type PrincipalRow, type Workflow } from "../../api";
 import { ReasonDialog } from "../../components/Dialog";
 import { PersonStatusPill, RequestStatusPill, SensitivityPill, TierPill } from "../../components/pills";
-import { Button, Card, Empty, Kpi, PageHeader, Pill, Q, Segmented, TableWrap, cx, type Tone } from "../../components/ui";
-import { IconAlert, IconCheck, IconClock, IconInbox, IconX } from "../../components/icons";
+import { Button, Card, Empty, PageHeader, Pill, Q, Segmented, TableWrap, cx, type Tone } from "../../components/ui";
+import { IconCheck, IconX } from "../../components/icons";
 import { DepartmentSelect, OrgLine, Pager, useUrlFilters } from "../../components/opsKit";
 import { displayName, ops, type OrgRequest } from "../../opsApi";
 import { age, countC } from "../../lib/compact";
@@ -177,7 +177,6 @@ export function Requests() {
   const queue = useMemo(() => (pending.data?.rows ?? []).filter((r) => r.status === "pending" && match(r)).sort((a, b) => a.ts - b.ts), [pending.data, kind, department]); // eslint-disable-line react-hooks/exhaustive-deps
   const decided = (history.data?.rows ?? []).filter((r) => r.status !== "pending" && match(r)).sort((a, b) => (b.decided_at ?? b.ts) - (a.decided_at ?? a.ts));
   const pendingTotal = pending.data?.total ?? (!kind && !department ? (overview.data?.requests_pending ?? null) : null);
-  const oldest = queue[0];
   const staleCount = queue.filter((r) => now - r.ts > STALE).length;
 
   // Drop selections that left the queue (decided elsewhere, filtered out).
@@ -228,19 +227,6 @@ export function Requests() {
         subtitle="Employees ask for workflows that need approval, more budget, or time-boxed access to sensitive resources."
       />
 
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <Kpi label="Waiting" icon={<IconInbox />} value={pendingTotal !== null ? countC(pendingTotal) : queue.length ? `${queue.length}${pending.data?.hasMore ? "+" : ""}` : pending.isPending ? "…" : "0"} sub={kind || department ? "matching the filters" : "across the organization"} />
-        <Kpi
-          label="Oldest waiting"
-          icon={<IconClock />}
-          tone={oldest && now - oldest.ts > STALE ? "warn" : undefined}
-          value={oldest ? age(oldest.ts, now) : "—"}
-          sub={oldest ? `${displayName(oldest)} · ${KIND[oldest.kind]?.label ?? oldest.kind}` : "nothing waiting"}
-        />
-        <Kpi label="Waiting over a day" icon={<IconAlert />} tone={staleCount ? "warn" : undefined} value={countC(staleCount)} sub={pending.data?.hasMore ? "on this page" : "in the queue"} />
-        <Kpi label="Decided" icon={<IconCheck />} value={history.data ? `${countC(history.data.total ?? decided.length)}${history.data.total === null && history.data.hasMore ? "+" : ""}` : "…"} sub="history below" />
-      </div>
-
       <div className="flex flex-wrap items-center gap-2">
         <Segmented<KindFilter> value={kind} onChange={(v) => f.set({ kind: v })} options={KINDS} />
         <DepartmentSelect value={department} onChange={(v) => f.set({ department: v })} />
@@ -288,7 +274,11 @@ export function Requests() {
       <Card
         title={
           <span>
-            Waiting for a decision <span className="font-normal text-muted">· oldest first</span>
+            Waiting for a decision{" "}
+            <span className="tnum font-normal text-muted">
+              · {pendingTotal !== null ? countC(pendingTotal) : `${queue.length}${pending.data?.hasMore ? "+" : ""}`}
+              {staleCount > 0 && <span className="text-warn"> · {countC(staleCount)} over a day</span>} · oldest first
+            </span>
           </span>
         }
         flush
