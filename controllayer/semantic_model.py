@@ -106,12 +106,42 @@ def _collapse(run: str) -> str:
     return " ".join(w.replace(" ", "") for w in words)
 
 
+# Cyrillic and Greek letters that look Latin ("Rеvеаl" with Cyrillic е and а), and leetspeak digits.
+_CONFUSABLE = str.maketrans(
+    "аеорсухіјѕһԁӏАВЕКМНОРСТХУοαειντυκρΟΑΒΕΙΚΜΝΡΤΧΥΖ",
+    "aeopcyxijshdlABEKMHOPCTXYoaeivtukpOABEIKMNPTXYZ",
+)
+_LEET = str.maketrans("013457@$", "oieastas")
+_WORD = re.compile(r"\S+")
+
+
+def _unmask(text: str) -> str | None:
+    """Words that mix Latin letters with look-alikes or leet digits, spelled out; None when there are none.
+    Words in one script only (Polish, Russian, plain numbers) are left alone."""
+
+    def fix(m: re.Match) -> str:
+        w = m.group()
+        if not re.search(r"[A-Za-z]", w):
+            return w
+        if any(ord(ch) > 0x36F for ch in w):
+            w = w.translate(_CONFUSABLE)
+        if re.search(r"[013457@$]", w) and not re.search(r"[0-9a-fA-F]{12}", w):  # hashes and ids stay
+            w = w.translate(_LEET)
+        return w
+
+    out = _WORD.sub(fix, text)
+    return out if out != text else None
+
+
 def normalize(text: str) -> str:
-    """The text with zero-width characters removed and NFKC applied, plus decoded base64 blobs and
-    collapsed letter-spaced runs appended on their own lines. Unchanged when nothing is hidden."""
+    """The text with zero-width characters removed and NFKC applied, plus decoded base64 blobs,
+    collapsed letter-spaced runs and look-alike or leet words spelled out, appended on their own lines.
+    Unchanged when nothing is hidden."""
     clean = unicodedata.normalize("NFKC", _INVISIBLE.sub("", text))
     extra = [d for m in _B64.finditer(clean) if (d := _decode_b64(m.group()))]
     extra += [_collapse(m.group()) for m in _SPACED.finditer(clean)]
+    if unmasked := _unmask(clean):
+        extra.append(unmasked)
     return "\n".join([clean, *extra]) if extra else clean
 
 

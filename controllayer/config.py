@@ -314,6 +314,7 @@ DEFAULT_CUES = (
     r"\b(bypass|pretend|role|act as|you are (now|no longer)|from (now|here) on|obey|developer mode|jailbreak|dan\b)",
     r"\b(unrestricted|uncensored|reveal|hidden|secret|confidential|configur|setup|verbatim|restriction|filter)",
     r"\b(guardrail|safety|assistant|ai\b|agents?\b|password|credential|exfiltrat)",
+    r"\b(important|before using|tools?\b|ssh|id_rsa)",  # poisoned tool descriptions
 )
 
 
