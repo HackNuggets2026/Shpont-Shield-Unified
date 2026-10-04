@@ -98,7 +98,7 @@ class Finding:
     score: float = 1.0
     detail: str = ""
     spans: list[Span] = field(default_factory=list)
-    tier: str = "deterministic"  # deterministic | fast | deep
+    tier: str = "deterministic"  # deterministic | fast | deep (Ollama) | semantic (classifier) | keyword
     shadow: bool = False
 
 

@@ -62,7 +62,14 @@ upstream:
     opaque_images: allow             # image data (base64, files, URLs): block | log | allow
 
 semantic:
-  backend: ${ACL_SEMANTIC:-heuristic}   # ollama (real decision models) | heuristic (offline keyword stand-in) | "off"
+  # auto: the CPU classifier below when downloaded, else the keyword fallback | classifier (downloads on
+  # first use) | ollama (decision models) | heuristic (keyword stand-in only) | "off"
+  backend: ${ACL_SEMANTIC:-auto}
+  classifier:              # pip install -e '.[classifier]' && python -m controllayer.semantic_model download
+    model: protectai/deberta-v3-base-prompt-injection-v2   # Apache-2.0, ONNX, ~27 ms on 2 CPU threads
+    controls: [prompt_injection]   # other semantic controls keep the keyword fallback
+    threshold: 0.9         # P(injection) at or above this applies the control's mode
+    min_chars: 24          # shorter inputs and JSON strings are not scored (the model over-fires on them)
   url: ${OLLAMA_URL:-http://localhost:11434}
   fast_model: tev1:0.8b    # tier 1: every request
   deep_model: nimble       # tier 2: only answers the fast model was unsure about

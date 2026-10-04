@@ -177,7 +177,7 @@
     return `<div class="d-flex flex-wrap f6 mb-3" style="gap:6px 20px">
       ${item("policy", `<b>${h.esc(s.policy.name)}</b> <span class="text-mono">${h.esc(s.policy.version)}</span> ${h.muted(plural(s.policy.reloads, "reload"))}`)}
       ${item("feed", `<span class="text-mono">${h.esc(s.feed.version)}</span> ${h.muted(plural(s.feed.signatures, "signature"))} ${s.feed.errors.length ? h.badge("bad", plural(s.feed.errors.length, "error"), s.feed.errors.join("; ")) : h.badge("ok", "loaded")}`)}
-      ${item("semantic", `${h.esc(s.semantic.backend)}: <span class="text-mono">${h.esc(s.semantic.fast_model)} → ${h.esc(s.semantic.deep_model ?? "-")}</span> ${h.badge(s.semantic.fail_mode === "closed" ? "ok" : "warn", "fails " + s.semantic.fail_mode)}`)}
+      ${item("semantic", `${h.esc(s.semantic.backend)}${s.semantic.model ? `: <span class="text-mono">${h.esc(s.semantic.model)}${s.semantic.deep_model ? " → " + h.esc(s.semantic.deep_model) : ""}</span>` : ""} ${h.badge(s.semantic.fail_mode === "closed" ? "ok" : "warn", "fails " + s.semantic.fail_mode)}`)}
       ${item("overhead", lat ? `p50 <b>${lat.p50} ms</b> · p95 ${lat.p95} ms` : h.muted("no traffic yet"))}
       ${item("by stage", Object.entries(s.latency_ms).filter(([k]) => k !== "total").map(([k, v]) => `${h.esc(k)} ${v.p50}/${v.p95}`).join(" · ") || "-")}
     </div>`;

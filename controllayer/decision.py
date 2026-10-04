@@ -1,12 +1,20 @@
-"""Clients for decision models (Ollama /v1/systemone: nimble, tev1) behind one interface."""
+"""Clients for decision models (Ollama /v1/systemone: nimble, tev1; a local CPU classifier) behind one interface."""
 
 from __future__ import annotations
 
+import asyncio
+import logging
 import re
+import threading
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 import httpx
+
+from . import semantic_model
+
+log = logging.getLogger("controllayer.decision")
 
 
 @dataclass
@@ -16,6 +24,8 @@ class Answer:
     choice: str | None = None
     probabilities: dict[str, float] = field(default_factory=dict)
     confidence: float = 1.0
+    source: str | None = None  # "classifier" | "keyword" when not a decision model
+    threshold: float | None = None  # set by the classifier: p >= threshold triggers the control's mode
 
 
 @dataclass
@@ -43,12 +53,21 @@ def _noul_confidence(p: float) -> float:
 
 class OllamaSystemOne:
     name = "ollama"
+    escalates = True
 
     def __init__(self, url: str, timeout: float, keep_alive: str, client: httpx.AsyncClient | None = None):
         self.url = url.rstrip("/") + "/v1/systemone"
         self.timeout = timeout
         self.keep_alive = keep_alive
         self.client = client or httpx.AsyncClient()
+
+    def describe(self, policy: Any = None) -> dict:
+        e = getattr(policy, "semantic", None)
+        return {
+            "backend": "ollama",
+            "model": getattr(e, "fast_model", None),
+            "deep_model": getattr(e, "deep_model", None),
+        }
 
     async def decide(self, model, state, questions, hints) -> DecisionResult:
         body = {"model": model, "state": state, "questions": questions, "keep_alive": self.keep_alive}
@@ -96,15 +115,20 @@ class HeuristicBackend:
     """Keyword stand-in for machines that cannot run a decision model. Not a real classifier."""
 
     name = "heuristic"
+    escalates = False
+
+    def describe(self, policy: Any = None) -> dict:
+        return {"backend": KEYWORD_FALLBACK, "model": None}
 
     async def decide(self, model, state, questions, hints) -> DecisionResult:
-        text = (state.get("content", "") if isinstance(state, dict) else str(state)).lower()
+        raw = state.get("content", "") if isinstance(state, dict) else str(state)
+        text = semantic_model.normalize(raw).lower()  # decoded base64 and collapsed letter-spacing too
         answers = {}
         for name, q in questions.items():
             if q["type"] == "noul":
                 hits = sum(1 for k in hints.get(name, []) if re.search(k, text))
                 p = {0: 0.03, 1: 0.9}.get(hits, 0.97)
-                answers[name] = Answer("noul", p, confidence=_noul_confidence(p))
+                answers[name] = Answer("noul", p, confidence=_noul_confidence(p), source="keyword")
             else:
                 options = list(q["criteria"])
                 chosen = options[0]
@@ -113,8 +137,88 @@ class HeuristicBackend:
                         chosen = opt
                         break
                 probs = {o: (0.9 if o == chosen else 0.1 / (len(options) - 1)) for o in options}
-                answers[name] = Answer("choice", 0.9, chosen, probs, 0.8)
-        return DecisionResult(answers, len(text) // 4)
+                answers[name] = Answer("choice", 0.9, chosen, probs, 0.8, source="keyword")
+        return DecisionResult(answers, len(raw) // 4)
+
+
+KEYWORD_FALLBACK = "keyword fallback (no model)"
+
+
+class ClassifierBackend:
+    """Local CPU prompt-injection classifier (protectai DeBERTa v3, ONNX) for the controls it covers;
+    every other question, and every question while the model is missing or loading, gets the keyword
+    fallback, labelled as such. Short inputs and the short strings of JSON tool results are not scored
+    (the model over-fires on them); they keep the keyword answer."""
+
+    name = "classifier"
+    escalates = False  # one model: re-asking it as the "deep" tier would return the same score
+
+    def __init__(self, settings: Any, scorer: Callable[[str], float] | None = None, download: bool = False):
+        self.cfg = settings
+        self.fallback = HeuristicBackend()
+        self.scorer = scorer
+        self.status = "ready" if scorer else "loading"
+        self.ready = threading.Event()
+        if scorer:
+            self.ready.set()
+        else:
+            threading.Thread(target=self._load, args=(download,), name="semantic-classifier", daemon=True).start()
+
+    def _load(self, download: bool) -> None:
+        c = self.cfg
+        try:
+            if not semantic_model.deps_installed():
+                raise RuntimeError("install the classifier extra: pip install -e '.[classifier]'")
+            if not semantic_model.files_present(c.model, c.dir):
+                if not download:
+                    raise RuntimeError("model not downloaded: python -m controllayer.semantic_model download")
+                self.status = "downloading"
+                semantic_model.download(c.model, c.dir)
+            self.status = "loading"
+            self.scorer = semantic_model.load(c.model, c.dir, c.threads).score
+            self.status = "ready"
+        except Exception as e:  # noqa: BLE001 - a missing model degrades to keywords, never a crash
+            self.status = f"unavailable: {e}"
+            log.warning("semantic classifier unavailable, using the keyword fallback: %s", e)
+        finally:
+            self.ready.set()
+
+    def describe(self, policy: Any = None) -> dict:
+        if self.status == "ready":
+            return {
+                "backend": "classifier",
+                "model": self.cfg.model,
+                "device": "cpu",
+                "threshold": self.cfg.threshold,
+                "controls": list(self.cfg.controls),
+            }
+        return {"backend": KEYWORD_FALLBACK, "model": None, "classifier": self.cfg.model, "status": self.status}
+
+    def segments(self, text: str) -> list[str]:
+        """What the classifier scores: the text, or the long string values of a JSON document."""
+        s = text.strip()
+        if semantic_model.is_structured(s):
+            return semantic_model.json_strings(s, self.cfg.min_chars)
+        return [s] if len(s) >= self.cfg.min_chars else []
+
+    def _score(self, segments: list[str]) -> float:
+        assert self.scorer is not None
+        return max(self.scorer(semantic_model.normalize(seg)) for seg in segments)
+
+    async def decide(self, model, state, questions, hints) -> DecisionResult:
+        result = await self.fallback.decide(model, state, questions, hints)
+        if self.scorer is None:
+            return result
+        ours = [n for n, q in questions.items() if n in self.cfg.controls and q["type"] == "noul"]
+        text = state.get("content", "") if isinstance(state, dict) else str(state)
+        segs = self.segments(text) if ours else []
+        if segs:
+            p = await asyncio.to_thread(self._score, segs)
+            for n in ours:
+                result.answers[n] = Answer(
+                    "noul", p, confidence=_noul_confidence(p), source="classifier", threshold=self.cfg.threshold
+                )
+        return result
 
 
 class ScriptedBackend:

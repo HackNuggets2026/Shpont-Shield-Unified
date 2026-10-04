@@ -156,7 +156,7 @@ def test_env_expansion(monkeypatch):
 
 
 def test_yaml_off_backend_is_accepted(policy_dir):
-    text = (policy_dir / "policy.yaml").read_text().replace("${ACL_SEMANTIC:-heuristic}", "off")
+    text = (policy_dir / "policy.yaml").read_text().replace("${ACL_SEMANTIC:-auto}", "off")
     assert parse_policy(text).semantic.backend == "off"
 
 

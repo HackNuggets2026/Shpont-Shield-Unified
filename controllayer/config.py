@@ -270,8 +270,22 @@ class PiiModelControl(ControlBase):
         return "off" if v is False else v
 
 
+class SemanticClassifier(_Strict):
+    """Local CPU classifier (`backend: classifier`, or `auto` when its files are present)."""
+
+    model: str = "protectai/deberta-v3-base-prompt-injection-v2"
+    dir: str | None = None  # model folder; default ~/.cache/controllayer/models/<repo> (or $ACL_MODEL_DIR)
+    controls: list[str] = Field(default_factory=lambda: ["prompt_injection"])
+    threshold: Probability = 0.9  # P(injection) at or above this triggers the control's mode
+    min_chars: int = Field(24, ge=0)  # shorter inputs (and shorter JSON strings) keep the keyword answer
+    threads: int = Field(2, ge=1)
+    download: bool = True  # `backend: classifier` fetches the model on first use; `auto` never downloads
+
+
 class SemanticEngine(_Strict):
-    backend: Literal["ollama", "heuristic", "off"] = "heuristic"
+    # auto: the classifier when it is installed and downloaded, else the keyword fallback (labelled)
+    backend: Literal["auto", "classifier", "ollama", "heuristic", "off"] = "heuristic"
+    classifier: SemanticClassifier = Field(default_factory=SemanticClassifier)
     url: str = "http://localhost:11434"
     fast_model: str = "tev1:0.8b"
     deep_model: str | None = "nimble"

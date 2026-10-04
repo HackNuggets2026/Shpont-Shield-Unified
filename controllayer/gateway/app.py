@@ -132,6 +132,8 @@ def create_app(
     store = PolicyStore(policy_path or os.environ.get("ACL_POLICY", "policy.yaml"), data_dir=data_dir)
     http = upstream_client or httpx.AsyncClient(timeout=120)
     layer = ControlLayer(store, backend=backend, http=http)
+    if store.policy.semantic.backend != "off":
+        layer.backend(store.policy)  # a local classifier starts loading now, not on the first request
 
     async def mcp_forward(target: str, r: dict) -> dict:
         if target == "builtin":
@@ -888,6 +890,19 @@ def create_app(
 
     # ---- reporting ------------------------------------------------------------
 
+    def _semantic_summary(p) -> dict:
+        """The backend that actually answers, not just the configured one ("keyword fallback" when no model)."""
+        e = p.semantic
+        out: dict = {"backend": "off", "model": None}
+        if e.backend != "off":
+            b = layer.backend(p)
+            describe = getattr(b, "describe", None)
+            out = describe(p) if describe else {"backend": getattr(b, "name", type(b).__name__), "model": None}
+        out.update(configured=e.backend, fail_mode=e.fail_mode)
+        if out["backend"] == "ollama":
+            out.update(fast_model=e.fast_model, deep_model=e.deep_model)
+        return out
+
     @app.get("/admin/summary")
     async def summary():
         a = layer.audit
@@ -902,12 +917,7 @@ def create_app(
                 "loaded_at": layer.feed.loaded_at,
                 "errors": layer.feed.errors,
             },
-            "semantic": {
-                "backend": p.semantic.backend,
-                "fast_model": p.semantic.fast_model,
-                "deep_model": p.semantic.deep_model,
-                "fail_mode": p.semantic.fail_mode,
-            },
+            "semantic": _semantic_summary(p),
             "totals": {"events": a.total, **a.actions},
             "controls": controls,
             "top_categories": a.categories.most_common(15),

@@ -59,6 +59,8 @@ def _hints(controls: dict[str, SemanticControl]) -> dict[str, list[str]]:
 
 
 def _proposed(c: SemanticControl, a: Answer) -> Action:
+    if c.type == "noul" and a.threshold is not None:  # classifier: one cut-off, the control's own mode
+        return c.mode if a.p >= a.threshold else Action.ALLOW
     if c.type == "noul":
         return c.thresholds.action_for(a.p)
     return c.actions.get(a.choice or "", Action.ALLOW)
@@ -114,7 +116,8 @@ class SemanticGuard:
                 if n != classify_as
                 and ((c.type == "noul" and lo <= answers[n].p < hi) or answers[n].confidence < eng.min_confidence)
             }
-            if unsure and eng.deep_model and eng.deep_model != eng.fast_model:
+            deep_ok = eng.deep_model and eng.deep_model != eng.fast_model and getattr(self.backend, "escalates", True)
+            if unsure and deep_ok:
                 t1 = time.perf_counter()
                 deep = await asyncio.wait_for(
                     self._ask(eng.deep_model, chunks, ctx, unsure, stats), eng.timeout_seconds
@@ -145,6 +148,10 @@ class SemanticGuard:
             if proposed is Action.ALLOW:
                 continue
             label = f"p={a.p:.2f}" if c.type == "noul" else f"{a.choice} p={a.p:.2f}"
+            if a.source == "classifier":
+                label = f"classifier {label} (threshold {a.threshold:.2f})"
+            elif a.source == "keyword":
+                label = f"keyword {label}"
             out.append(
                 finding(
                     name,
@@ -153,7 +160,7 @@ class SemanticGuard:
                     proposed,
                     score=a.p,
                     detail=f"{label} conf={a.confidence:.2f}",
-                    tier=tiers[name],
+                    tier={"classifier": "semantic", "keyword": "keyword"}.get(a.source or "", tiers[name]),
                 )
             )
         return out, stats

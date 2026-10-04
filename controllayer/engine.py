@@ -12,7 +12,7 @@ from typing import Any
 
 import httpx
 
-from . import servertiming
+from . import semantic_model, servertiming
 from .audit import AuditLog
 from .config import Policy, PolicyStore
 from .controls import access, decoys, pii_model, signatures, workflows
@@ -20,7 +20,7 @@ from .controls.budget import BudgetLedger
 from .controls.patterns import pii, redact, secrets
 from .controls.resources import LeaseTracker, check_grants
 from .controls.semantic import SemanticGuard
-from .decision import DecisionBackend, HeuristicBackend, OllamaSystemOne
+from .decision import ClassifierBackend, DecisionBackend, HeuristicBackend, OllamaSystemOne
 from .detections import RiskEngine as DetectionEngine
 from .events import Ingestor, verdict_event
 from .risk import RiskEngine
@@ -117,11 +117,17 @@ class ControlLayer:
         if self._fixed_backend:
             return self._fixed_backend
         e = policy.semantic
-        key = (e.backend, e.url, e.timeout_seconds, e.keep_alive)
+        key = (e.backend, e.url, e.timeout_seconds, e.keep_alive, e.classifier)
         if key != self._backend_key:
-            self._backend = (
-                OllamaSystemOne(e.url, e.timeout_seconds, e.keep_alive) if e.backend == "ollama" else HeuristicBackend()
-            )
+            c = e.classifier
+            if e.backend == "ollama":
+                self._backend = OllamaSystemOne(e.url, e.timeout_seconds, e.keep_alive)
+            elif e.backend == "classifier" or (
+                e.backend == "auto" and semantic_model.deps_installed() and semantic_model.files_present(c.model, c.dir)
+            ):
+                self._backend = ClassifierBackend(c, download=e.backend == "classifier" and c.download)
+            else:
+                self._backend = HeuristicBackend()
             self._backend_key = key
         assert self._backend is not None
         return self._backend

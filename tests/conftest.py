@@ -35,6 +35,8 @@ def _no_data_dir(monkeypatch, tmp_path):
     monkeypatch.delenv("ACL_DATA_DIR", raising=False)
     monkeypatch.setenv("ACL_WEB_DIST", str(tmp_path / "no-web"))  # tests see the API, not a local SPA build
     monkeypatch.setenv("ACL_ADMIN_CACHE_SECONDS", "0")  # reads see writes at once; tests of the cache set it
+    # The shipped policy says `auto`: keep tests on keywords even where the classifier is downloaded.
+    monkeypatch.setenv("ACL_SEMANTIC", os.environ.get("ACL_SEMANTIC", "heuristic"))
 
 
 # libyaml reads and writes the same documents as safe_load/safe_dump, 20x faster.
