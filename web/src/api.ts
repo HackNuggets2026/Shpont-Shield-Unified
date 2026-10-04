@@ -546,6 +546,52 @@ export async function tryAs(body: TryRequest): Promise<TryResult> {
   throw new ApiError(resp.status, errorMessage(data, `${resp.status} ${resp.statusText}`));
 }
 
+// ---- audit trail (Activity page): /api/admin/events, /audit/stats, /audit/export ----------------
+
+/** A decision as the audit trail stores it (GET /admin/events). */
+export interface ShieldEvent extends AuditEvent {
+  owner?: string | null;
+  role?: string | null;
+  src_ip?: string | null;
+  policy_version?: string;
+  latency_ms?: Record<string, number>;
+  text_sha256?: string;
+}
+
+/** Filters shared by /admin/events, /admin/audit/stats and /admin/audit/export. */
+export interface AuditFilters {
+  action?: string;
+  control?: string;
+  principal?: string;
+  channel?: string;
+  direction?: string;
+  q?: string;
+  /** Last N seconds. */
+  window?: number;
+}
+
+export interface AuditStats {
+  window_s: number;
+  bucket_s: number;
+  now: number;
+  total: number;
+  by_action: Record<string, number>;
+  blocked_rate: number | null;
+  redacted_rate: number | null;
+  top_reasons: { reason: string; count: number }[];
+  top_categories: { category: string; count: number }[];
+  /** control -> finding action -> count */
+  controls: Record<string, Record<string, number>>;
+  latency_ms: Record<string, { p50: number | null; p95: number | null; max: number; count: number }>;
+  timeline: ({ t: number } & Record<string, number>)[];
+}
+
+export const audit = {
+  events: (f: AuditFilters & { limit?: number; since?: number }) => get<ShieldEvent[]>(`${A}/events${qs({ ...f })}`),
+  stats: (f: AuditFilters & { bucket?: number }) => get<AuditStats>(`${A}/audit/stats${qs({ ...f })}`),
+  exportPath: (format: string, f: AuditFilters) => `${A}/audit/export${qs({ format, ...f })}`,
+};
+
 /** Downloads an admin export (needs the token header, so it cannot be a plain link). */
 export async function downloadExport(path: string, filename: string) {
   if (PREVIEW) throw new ApiError(403, "Exports need the gateway; run the project locally to download them.");
