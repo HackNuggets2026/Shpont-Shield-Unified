@@ -225,6 +225,7 @@ class SelfTest:
             "trigger": trigger,
             "policy_version": policy.version,
             "prev_version": prev_version,
+            "semantic_backend": _backend_name(self.layer, policy),
             "started_at": started,
             "duration_ms": round((time.perf_counter() - t0) * 1000, 1),
             "error": error,
@@ -277,6 +278,16 @@ class SelfTest:
             if self._timer is not None:
                 self._timer.cancel()
             self._timer, self.pending = None, None
+
+
+def _backend_name(layer: Any, policy: Policy) -> str:
+    """Which decision model judged the semantic steps: outcomes differ between them."""
+    if policy.semantic.backend == "off":
+        return "off"
+    try:
+        return type(layer.backend(policy)).__name__
+    except Exception:  # noqa: BLE001 - informational only
+        return policy.semantic.backend
 
 
 def _key(sc_id: str, i: int) -> str:

@@ -809,6 +809,7 @@ export interface SelfTestRun {
   trigger: "manual" | "auto" | string;
   policy_version: string;
   prev_version: string | null;
+  semantic_backend?: string;
   started_at: number;
   duration_ms: number;
   error: string | null;

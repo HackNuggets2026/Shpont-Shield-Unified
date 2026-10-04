@@ -9,6 +9,7 @@ import pytest
 import yaml
 
 from controllayer import selftest
+from controllayer.decision import HeuristicBackend
 from controllayer.selftest import load_scenarios
 
 from .conftest import ROOT, edit_policy
@@ -19,7 +20,8 @@ pytestmark = [pytest.mark.control("selftest")]
 @pytest.fixture
 def tests_client(make_client, monkeypatch):
     monkeypatch.setenv("ACL_SCENARIOS", str(ROOT / "scenarios.yaml"))
-    c = make_client()
+    # The offline heuristic: the same verdicts on every machine, whether or not the ONNX classifier is installed.
+    c = make_client(backend=HeuristicBackend())
     c.app.state.selftest.auto = True
     return c
 
@@ -48,6 +50,7 @@ def test_run_passes_on_the_shipped_policy(tests_client):
     res = r.json()
     assert res["error"] is None
     assert res["trigger"] == "manual"
+    assert res["semantic_backend"] == "HeuristicBackend"
     s = res["summary"]
     assert s["failed"] == 0, [
         (sc["id"], st["text"], st["actual"])
@@ -138,7 +141,7 @@ def test_bad_scenarios_file_is_reported_not_raised(make_client, tmp_path, monkey
     bad = tmp_path / "bad.yaml"
     bad.write_text(yaml.safe_dump({"scenarios": [{"id": "x", "steps": [{"direction": "sideways"}]}]}))
     monkeypatch.setenv("ACL_SCENARIOS", str(bad))
-    res = make_client().post("/admin/selftest/run").json()
+    res = make_client(backend=HeuristicBackend()).post("/admin/selftest/run").json()
     assert res["error"].startswith("scenarios not loaded")
     assert res["scenarios"] == []
 
@@ -163,14 +166,14 @@ def test_expected_control_must_be_among_the_findings(make_client, tmp_path, monk
         )
     )
     monkeypatch.setenv("ACL_SCENARIOS", str(f))
-    res = make_client().post("/admin/selftest/run").json()
+    res = make_client(backend=HeuristicBackend()).post("/admin/selftest/run").json()
     assert [sc["passed"] for sc in res["scenarios"]] == [True, False]
 
 
 def test_pytest_report_endpoint(make_client, tmp_path, monkeypatch):
     report = tmp_path / "reports" / "acl-report.json"
     monkeypatch.setenv("ACL_PYTEST_REPORT", str(report))
-    c = make_client()
+    c = make_client(backend=HeuristicBackend())
     assert c.get("/admin/selftest/pytest").json() == {"report": None, "path": str(report), "junit": False}
     assert c.get("/admin/selftest/junit.xml").status_code == 404
     report.parent.mkdir()
@@ -183,8 +186,8 @@ def test_pytest_report_endpoint(make_client, tmp_path, monkeypatch):
 
 def test_history_survives_a_restart(make_client, monkeypatch):
     monkeypatch.setenv("ACL_SCENARIOS", str(ROOT / "scenarios.yaml"))
-    run = make_client().post("/admin/selftest/run").json()
-    again = make_client()
+    run = make_client(backend=HeuristicBackend()).post("/admin/selftest/run").json()
+    again = make_client(backend=HeuristicBackend())
     assert again.get("/admin/selftest/latest").json()["result"]["run_id"] == run["run_id"]
     assert selftest.HISTORY == 20
 
@@ -192,9 +195,9 @@ def test_history_survives_a_restart(make_client, monkeypatch):
 def test_startup_runs_when_the_policy_changed_while_down(make_client, monkeypatch):
     monkeypatch.setenv("ACL_SCENARIOS", str(ROOT / "scenarios.yaml"))
     monkeypatch.setenv("ACL_SELFTEST_AUTO", "1")
-    with make_client() as c:
+    with make_client(backend=HeuristicBackend()) as c:
         _wait(lambda: c.app.state.selftest.latest() is not None)
         assert c.app.state.selftest.latest()["trigger"] == "startup"
-    with make_client() as c:  # same policy, history on disk: nothing to do
+    with make_client(backend=HeuristicBackend()) as c:  # same policy, history on disk: nothing to do
         assert not c.app.state.selftest.stale()
         assert len(c.app.state.selftest.history) == 1

@@ -110,7 +110,11 @@ function StatusStrip({ status, res }: { status: NonNullable<Awaited<ReturnType<t
           <Mono>{status.policy_version}</Mono>
           {res && res.policy_version !== status.policy_version && <span className="ml-2 text-xs text-warn">last run was on {short(res.policy_version)}</span>}
         </Fact>
-        <Fact label="Last run">{res ? `${ago(res.started_at)} · ${res.trigger === "auto" ? "after a policy change" : "by hand"} · ${Math.round(res.duration_ms)} ms` : "never"}</Fact>
+        <Fact label="Last run">
+          {res
+            ? `${ago(res.started_at)} · ${res.trigger === "auto" ? "after a policy change" : res.trigger === "startup" ? "at startup" : "by hand"} · ${Math.round(res.duration_ms)} ms${res.semantic_backend ? ` · ${res.semantic_backend.replace(/Backend$/, "")} semantic tier` : ""}`
+            : "never"}
+        </Fact>
         <Fact label="Auto-run">
           {status.running ? (
             <Pill tone="accent" dot>
